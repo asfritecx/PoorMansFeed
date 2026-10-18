@@ -4,12 +4,13 @@ Build your own IP threat feeds from freely available data.
 
 PoorMansFeed is a desktop app for Windows and macOS. It keeps a local copy of the free [IPinfo Lite](https://ipinfo.io/products/free-ip-database) dataset and uses it to turn an AS number, or the address ranges that Google Cloud, Azure and AWS publish, into a feed your firewall can load and use in its policies. Cloud ranges are checked against IPinfo before they are written, so a range that IPinfo places with another network is shown to you unticked instead of going into the feed unseen.
 
-Feeds are written for FortiGate today. Formats for nginx and other firewalls are planned.
+Feeds are written for FortiGate today. Formats for ModSecurity, nginx and other firewalls are planned (see [Roadmap](#roadmap)).
 
 | Firewall | Feed | Status |
 |---|---|---|
 | FortiGate (FortiOS) | IP address threat feed, loaded through an external connector | Supported |
-| nginx | | Planned |
+| ModSecurity (with nginx or Apache) | IP list for the `@ipMatchFromFile` operator | Planned (feature set 1) |
+| nginx | `deny` or `geo` include files | Planned |
 | Other firewalls | | Planned |
 
 ## Why this exists
@@ -220,9 +221,42 @@ The version number comes from `<Version>` in `Directory.Build.props`.
 
 ## Roadmap
 
-- Next: [AbuseIPDB](https://www.abuseipdb.com)'s free tier as another source, so addresses reported for abuse can go into a feed
-- Publishing feeds to Azure Blob Storage, so a feed can be created, updated and linked to a FortiGate external threat feed connector without copying files by hand
-- Feed formats for nginx and other firewalls, alongside the FortiGate feed
+### Feature set 1
+
+Planned next. The aim is to add AbuseIPDB as a source, and to keep feeds current on your firewalls without building and copying each one by hand.
+
+**AbuseIPDB**
+
+This needs a free [AbuseIPDB](https://www.abuseipdb.com) account. Its API key is kept by the operating system, like the IPinfo token.
+
+- **Rolling blacklist:** each download of the free blacklist (the 10,000 most reported addresses, up to 5 downloads a day) is merged into a list the app keeps, without duplicates. An address stays until it has been off the blacklist for the number of days you set, such as 30 or 60. The feed therefore holds more than a single download's 10,000 addresses, and drops the ones that have gone quiet.
+- **Offending networks:** the list is grouped by AS and country using the IPinfo data, so you can see which providers hold the most reported addresses, and export a whole AS from there.
+- **Abuse scores in lookups:** an address search also shows the address's AbuseIPDB confidence score and when it was last reported, from the free tier's 1,000 checks a day.
+
+AbuseIPDB's terms don't allow its data to be republished, so these feeds are for your own firewalls, and they are only uploaded to private storage.
+
+**ModSecurity**
+
+- **ModSecurity lists:** every feed can also be written as a list for ModSecurity's `@ipMatchFromFile` operator, with nginx or Apache, together with a sample rule that denies the matches or only logs them. ModSecurity can read the list from disk or from an HTTPS address, such as a feed published to Azure Blob Storage.
+
+**Keeping feeds current**
+
+- **Saved feeds:** the app remembers every feed you write, with the ranges you ticked. **Refresh all** rebuilds them from the latest data under the same rules as when you wrote them: confirmed ranges go in, and new mixed or large ranges stay out until you tick them.
+- **Publishing to Azure Blob Storage:** feeds are uploaded to a private container with a SAS URL that can only write to it, kept by the operating system. A feed is uploaded only when its ranges have changed. Each feed has a read-only URL to give to a FortiGate external connector or a ModSecurity rule, and the app warns before a SAS URL expires.
+- **Refreshing with the window closed:** a command-line option runs Refresh all and the uploads without opening the window, so Windows Task Scheduler or macOS launchd can keep feeds current on a schedule. While the app is open, it can also refresh on a timer.
+
+**Safer and smaller feeds**
+
+- **Exceptions:** a list of networks that must never be blocked, such as your offices, payment providers, uptime monitors and partners. They are cut out of every feed before it is written, and the app shows which feeds they changed.
+- **Merged feeds:** several sources combined into one feed, with overlapping and adjacent ranges joined, so a feed holds fewer entries and stays within FortiOS's limit of 131,072.
+
+**More free sources**
+
+- **Spamhaus DROP and Tor exits:** the [Spamhaus DROP](https://www.spamhaus.org/blocklists/do-not-route-or-peer/) list of netblocks hijacked or leased by criminal operations, and the Tor Project's list of Tor exit addresses, with each range's AS and country shown from the IPinfo data.
+
+### Later
+
+- nginx `deny` and `geo` files, and feed formats for other firewalls
 
 ## Project structure
 

@@ -1,0 +1,18 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:GraphiteUi"
+        x:Class="GraphiteUi.AboutDialog"
+        Title="{x:Static local:AppInfo.AboutTitle}"
+        Width="380"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <StackPanel Margin="24" Spacing="16">
+    <TextBlock Text="{x:Static local:AppInfo.Name}" Classes="subtitle" />
+    <TextBlock x:Name="VersionText" Text="{x:Static local:AppInfo.VersionText}" TextWrapping="Wrap" />
+    <TextBlock Text="{x:Static local:AppInfo.InternalUseNotice}" Classes="caption quaternary" TextWrapping="Wrap" />
+    <Button Content="Close" HorizontalAlignment="Right" MinWidth="88"
+            IsDefault="True" IsCancel="True" Click="CloseClicked" />
+  </StackPanel>
+</Window>

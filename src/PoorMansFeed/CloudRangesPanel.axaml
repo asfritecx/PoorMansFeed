@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:PoorMansFeed"
+             xmlns:ui="using:GraphiteUi"
+             x:Class="PoorMansFeed.CloudRangesPanel"
+             x:DataType="vm:CloudFeedPageViewModel">
+  <!-- The checked ranges, the Open folder and Write feed buttons, and the action line. All three cloud tool pages use it.
+       The card takes the height the page gives the panel; the header and the action line keep theirs. -->
+  <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
+      <StackPanel Spacing="2">
+        <TextBlock Text="{x:Static vm:AppText.CloudResultsHeader}" Classes="section-title" />
+        <TextBlock Text="{Binding SummaryText}" Classes="caption" TextTrimming="CharacterEllipsis"
+                   AutomationProperties.LiveSetting="Polite" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+        <Button x:Name="OpenFeedFolderButton" Command="{Binding OpenFeedFolderCommand}"
+                ToolTip.Tip="{x:Static vm:AppText.OpenFolderName}"
+                AutomationProperties.Name="{x:Static vm:AppText.OpenFolderName}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <ui:LineIcon Data="{StaticResource IconFolder}" />
+            <TextBlock Text="{x:Static vm:AppText.OpenFolder}" />
+          </StackPanel>
+        </Button>
+        <Button x:Name="WriteFeedButton" Command="{Binding WriteFeedCommand}"
+                ToolTip.Tip="{x:Static vm:AppText.WriteFeedTooltip}"
+                AutomationProperties.Name="{x:Static vm:AppText.WriteFeed}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <ui:LineIcon Data="{StaticResource IconDownload}" />
+            <TextBlock Text="{x:Static vm:AppText.WriteFeed}" />
+          </StackPanel>
+        </Button>
+      </StackPanel>
+    </Grid>
+
+    <Border x:Name="CloudRangesCard" Grid.Row="1" Classes="card" Padding="0" ClipToBounds="True">
+      <Grid RowDefinitions="36,*">
+        <Grid Margin="16,0" ColumnDefinitions="32,2.2*,1.3*,1.2*,1.8*,1.3*,96" ColumnSpacing="12">
+          <TextBlock Grid.Column="1" Text="{x:Static vm:AppText.ColumnNetwork}" Classes="caption" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Text="{x:Static vm:AppText.ColumnRegion}" Classes="caption" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="3" Text="{x:Static vm:AppText.ColumnCountry}" Classes="caption" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="4" Text="{x:Static vm:AppText.ColumnAs}" Classes="caption" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="5" Text="{x:Static vm:AppText.ColumnStatus}" Classes="caption" VerticalAlignment="Center" />
+        </Grid>
+        <Panel Grid.Row="1">
+          <TextBlock x:Name="CloudEmpty" Text="{Binding EmptyText}" Classes="caption" Margin="16,12"
+                     TextWrapping="Wrap" IsVisible="{Binding !HasRows}" />
+          <ScrollViewer IsVisible="{Binding HasRows}">
+            <ItemsControl x:Name="CloudRangeList" ItemsSource="{Binding Rows}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CloudRangeRow">
+                  <Border Classes="row" AutomationProperties.Name="{Binding AccessibleText}">
+                    <Grid ColumnDefinitions="32,2.2*,1.3*,1.2*,1.8*,1.3*,96" ColumnSpacing="12">
+                      <CheckBox IsChecked="{Binding IsIncluded}" AutomationProperties.Name="{Binding AccessibleText}"
+                                VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding NetworkText}" Classes="mono" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" ToolTip.Tip="{Binding NetworkText}" />
+                      <TextBlock Grid.Column="2" Text="{Binding RegionText}" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" ToolTip.Tip="{Binding RegionText}" />
+                      <TextBlock Grid.Column="3" Text="{Binding CountryText}" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" ToolTip.Tip="{Binding CountryText}" />
+                      <TextBlock Grid.Column="4" Text="{Binding AsText}" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" ToolTip.Tip="{Binding AsText}" />
+                      <TextBlock Grid.Column="5" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" Classes.success="{Binding IsConfirmed}"
+                                 Classes.caution="{Binding IsMixed}" />
+                      <Border Grid.Column="6" Classes="badge caution" IsVisible="{Binding IsLargeRange}"
+                              HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <TextBlock Text="{x:Static vm:AppText.LargeRangeBadge}" />
+                      </Border>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Panel>
+      </Grid>
+    </Border>
+
+    <TextBlock x:Name="CloudAction" Grid.Row="2" Text="{Binding ActionText}" Classes="caption" Height="18"
+               Classes.placeholder="{Binding !HasActionText}" TextTrimming="CharacterEllipsis"
+               AutomationProperties.LiveSetting="Polite" />
+  </Grid>
+</UserControl>

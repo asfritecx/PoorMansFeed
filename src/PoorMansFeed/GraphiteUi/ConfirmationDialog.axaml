@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GraphiteUi.ConfirmationDialog"
+        Width="440"
+        SizeToContent="Height"
+        MinHeight="190"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="24" RowSpacing="16">
+    <TextBlock x:Name="TitleText" Classes="subtitle" />
+    <TextBlock x:Name="MessageText" Grid.Row="1" TextWrapping="Wrap" LineHeight="22" />
+    <!-- Esc cancels. There is deliberately no default button, so pressing Enter on its own never confirms. -->
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button x:Name="CancelButton" Content="Cancel" MinWidth="88" IsCancel="True" Click="CancelClicked" />
+      <Button x:Name="ConfirmButton" MinWidth="88" Click="ConfirmClicked" />
+    </StackPanel>
+  </Grid>
+</Window>

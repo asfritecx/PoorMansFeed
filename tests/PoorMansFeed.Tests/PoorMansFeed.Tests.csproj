@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- xUnit v3 test projects are executables -->
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- xUnit1051 (pass TestContext.Current.CancellationToken) fires across the tests copied from the xUnit v2 console suite;
+         the operations under test finish in milliseconds, so a cancellable test token adds nothing -->
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <!-- Avalonia.Headless.XUnit 12.1.4 is built on xunit.v3.extensibility.core 3.2.2. With xunit.v3 4.x every [AvaloniaFact] fails at discovery (MissingMethodException, AvaloniaUI/Avalonia#22510), so stay on 3.x until it supports 4.x. -->
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/PoorMansFeed.Core/PoorMansFeed.Core.csproj" />
+    <ProjectReference Include="../../src/PoorMansFeed/PoorMansFeed.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

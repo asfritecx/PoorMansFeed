@@ -1,0 +1,38 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="using:GraphiteUi"
+        xmlns:vm="using:PoorMansFeed"
+        x:Class="PoorMansFeed.HelpDialog"
+        Title="{x:Static ui:AppInfo.HelpTitle}"
+        Width="460"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <StackPanel Margin="24" Spacing="16">
+    <TextBlock x:Name="TitleText" Text="{x:Static ui:AppInfo.HelpTitle}" Classes="subtitle" TextWrapping="Wrap" />
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="{x:Static vm:AppText.HelpTokenHeading}" Classes="card-title" />
+      <TextBlock Text="{x:Static vm:AppText.HelpTokenText}" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="{x:Static vm:AppText.HelpDatasetHeading}" Classes="card-title" />
+      <TextBlock x:Name="DatasetText" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="{x:Static vm:AppText.HelpSearchHeading}" Classes="card-title" />
+      <TextBlock x:Name="SearchText" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="{x:Static vm:AppText.HelpExportHeading}" Classes="card-title" />
+      <TextBlock Text="{x:Static vm:AppText.HelpExportText}" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <Button Content="{x:Static vm:AppText.Close}" HorizontalAlignment="Right" MinWidth="88"
+            IsDefault="True" IsCancel="True" Click="CloseClicked" />
+  </StackPanel>
+</Window>

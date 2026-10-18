@@ -1,0 +1,614 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:GraphiteUi">
+  <!-- Graphite design system: cool graphite neutrals, one blue, Geist type, 36px controls, 4px control and 8px overlay
+       corners. The Graphite* brushes are its colour tokens, one per token, and views read them directly.
+
+       The light dictionaries are keyed "Default", not "Light". Fluent reads SystemAccentColor and its shades through
+       DynamicResources declared inside its own "Default" dictionary, and those lookups ask for the Default variant only,
+       so an override keyed "Light" is skipped (verified on 12.1.3). A control in the Light variant still finds "Default",
+       because a lookup falls back to it. Every themed key therefore appears in both dictionaries below. -->
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+          <!-- Surfaces: window (behind the app bar and the nav pane), solid (the content layer and dialogs), layer
+               (insets), card -->
+          <SolidColorBrush x:Key="GraphiteBgWindowBrush" Color="#E9ECF0" />
+          <SolidColorBrush x:Key="GraphiteBgSolidBrush" Color="#F3F4F6" />
+          <SolidColorBrush x:Key="GraphiteBgLayerBrush" Color="#F7F8FA" />
+          <SolidColorBrush x:Key="GraphiteBgCardBrush" Color="#FFFFFF" />
+          <!-- Controls and strokes -->
+          <SolidColorBrush x:Key="GraphiteControlFillBrush" Color="#FBFBFC" />
+          <SolidColorBrush x:Key="GraphiteControlFillHoverBrush" Color="#F3F4F6" />
+          <SolidColorBrush x:Key="GraphiteControlFillPressedBrush" Color="#EEF0F3" />
+          <SolidColorBrush x:Key="GraphiteControlStrokeBrush" Color="#D5D9E0" />
+          <SolidColorBrush x:Key="GraphiteStrokeDividerBrush" Color="#E1E4E9" />
+          <!-- Text -->
+          <SolidColorBrush x:Key="GraphiteTextPrimaryBrush" Color="#16191E" />
+          <SolidColorBrush x:Key="GraphiteTextSecondaryBrush" Color="#5A626E" />
+          <SolidColorBrush x:Key="GraphiteTextDisabledBrush" Color="#8A929E" />
+          <!-- Accent -->
+          <SolidColorBrush x:Key="GraphiteAccentFillBrush" Color="#1767D0" />
+          <SolidColorBrush x:Key="GraphiteAccentFillHoverBrush" Color="#1A5FBF" />
+          <SolidColorBrush x:Key="GraphiteAccentFillPressedBrush" Color="#0F4FA6" />
+          <SolidColorBrush x:Key="GraphiteAccentOnFillBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="GraphiteAccentTextBrush" Color="#1767D0" />
+          <SolidColorBrush x:Key="GraphiteSelectionRowBrush" Color="#141767D0" />
+          <SolidColorBrush x:Key="GraphiteSelectionNavBrush" Color="#0F16191E" />
+          <!-- Status: foreground and tinted background. Each pair passes 4.5:1. -->
+          <SolidColorBrush x:Key="GraphiteInfoBrush" Color="#1767D0" />
+          <SolidColorBrush x:Key="GraphiteInfoBackgroundBrush" Color="#E6EFFB" />
+          <SolidColorBrush x:Key="GraphiteSuccessBrush" Color="#146C3C" />
+          <SolidColorBrush x:Key="GraphiteSuccessBackgroundBrush" Color="#E3F4EA" />
+          <SolidColorBrush x:Key="GraphiteCautionBrush" Color="#8A5A00" />
+          <SolidColorBrush x:Key="GraphiteCautionBackgroundBrush" Color="#FBF0D9" />
+          <SolidColorBrush x:Key="GraphiteCriticalBrush" Color="#B42323" />
+          <SolidColorBrush x:Key="GraphiteCriticalBackgroundBrush" Color="#FBE5E5" />
+          <SolidColorBrush x:Key="GraphiteNeutralBrush" Color="#3D444F" />
+          <SolidColorBrush x:Key="GraphiteNeutralBackgroundBrush" Color="#EEF0F3" />
+
+          <!-- Fluent's accent and its shades, pinned: Avalonia derives a paler ramp from one colour. Hover (Light1) and
+               pressed (Dark1) are Graphite's accent hover and pressed, so checked boxes follow the accent button. -->
+          <Color x:Key="SystemAccentColor">#1767D0</Color>
+          <Color x:Key="SystemAccentColorLight1">#1A5FBF</Color>
+          <Color x:Key="SystemAccentColorLight2">#7AB4FF</Color>
+          <Color x:Key="SystemAccentColorLight3">#A9CFFF</Color>
+          <Color x:Key="SystemAccentColorDark1">#0F4FA6</Color>
+          <Color x:Key="SystemAccentColorDark2">#0F4FA6</Color>
+          <Color x:Key="SystemAccentColorDark3">#0A3878</Color>
+          <!-- Text and glyphs on an accent fill: Fluent resolves these to white when it loads, so each is set here -->
+          <StaticResource x:Key="AccentButtonForeground" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="AccentButtonForegroundPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="AccentButtonForegroundPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundChecked" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminate" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="RadioButtonCheckGlyphFill" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="RadioButtonCheckGlyphFillPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="RadioButtonCheckGlyphFillPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleSwitchKnobFillOn" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleSwitchKnobFillOnPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleSwitchKnobFillOnPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <!-- Buttons, text boxes and combo boxes on Graphite's control fills; disabled is text-disabled on the pressed fill -->
+          <StaticResource x:Key="ButtonBackground" ResourceKey="GraphiteControlFillBrush" />
+          <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="GraphiteControlFillHoverBrush" />
+          <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="ButtonBackgroundDisabled" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="ButtonBorderBrush" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ButtonBorderBrushDisabled" ResourceKey="GraphiteStrokeDividerBrush" />
+          <StaticResource x:Key="ButtonForegroundDisabled" ResourceKey="GraphiteTextDisabledBrush" />
+          <StaticResource x:Key="AccentButtonBackgroundDisabled" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="AccentButtonBorderBrushDisabled" ResourceKey="GraphiteStrokeDividerBrush" />
+          <StaticResource x:Key="AccentButtonForegroundDisabled" ResourceKey="GraphiteTextDisabledBrush" />
+          <StaticResource x:Key="TextControlBackground" ResourceKey="GraphiteControlFillBrush" />
+          <StaticResource x:Key="TextControlBackgroundPointerOver" ResourceKey="GraphiteControlFillHoverBrush" />
+          <StaticResource x:Key="TextControlBackgroundFocused" ResourceKey="GraphiteBgSolidBrush" />
+          <StaticResource x:Key="TextControlBorderBrush" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="TextControlBorderBrushPointerOver" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="TextControlBorderBrushFocused" ResourceKey="GraphiteAccentFillBrush" />
+          <StaticResource x:Key="TextControlPlaceholderForeground" ResourceKey="GraphiteTextSecondaryBrush" />
+          <StaticResource x:Key="TextControlPlaceholderForegroundPointerOver" ResourceKey="GraphiteTextSecondaryBrush" />
+          <StaticResource x:Key="TextControlPlaceholderForegroundFocused" ResourceKey="GraphiteTextSecondaryBrush" />
+          <StaticResource x:Key="ComboBoxBackground" ResourceKey="GraphiteControlFillBrush" />
+          <StaticResource x:Key="ComboBoxBackgroundPointerOver" ResourceKey="GraphiteControlFillHoverBrush" />
+          <StaticResource x:Key="ComboBoxBackgroundPressed" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="ComboBoxBorderBrush" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ComboBoxBorderBrushPointerOver" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ComboBoxBorderBrushPressed" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ComboBoxItemBackgroundSelected" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="ComboBoxItemBackgroundSelectedPointerOver" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="ComboBoxItemBackgroundSelectedPressed" ResourceKey="GraphiteSelectionRowBrush" />
+          <!-- A selected list row: ListBoxItem reads these base brushes directly -->
+          <StaticResource x:Key="SystemControlHighlightListAccentLowBrush" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="SystemControlHighlightListAccentMediumBrush" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="SystemControlHighlightListAccentHighBrush" ResourceKey="GraphiteSelectionRowBrush" />
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="GraphiteBgWindowBrush" Color="#0A0B0D" />
+          <SolidColorBrush x:Key="GraphiteBgSolidBrush" Color="#111317" />
+          <SolidColorBrush x:Key="GraphiteBgLayerBrush" Color="#16191E" />
+          <SolidColorBrush x:Key="GraphiteBgCardBrush" Color="#1C2027" />
+          <SolidColorBrush x:Key="GraphiteControlFillBrush" Color="#232830" />
+          <SolidColorBrush x:Key="GraphiteControlFillHoverBrush" Color="#2B313A" />
+          <SolidColorBrush x:Key="GraphiteControlFillPressedBrush" Color="#1C2027" />
+          <SolidColorBrush x:Key="GraphiteControlStrokeBrush" Color="#353C47" />
+          <SolidColorBrush x:Key="GraphiteStrokeDividerBrush" Color="#2B313A" />
+          <SolidColorBrush x:Key="GraphiteTextPrimaryBrush" Color="#F2F4F7" />
+          <SolidColorBrush x:Key="GraphiteTextSecondaryBrush" Color="#9AA3B0" />
+          <SolidColorBrush x:Key="GraphiteTextDisabledBrush" Color="#6B7482" />
+          <!-- In dark the accent fill is Light 2 with near-black text: white on a mid blue fails contrast -->
+          <SolidColorBrush x:Key="GraphiteAccentFillBrush" Color="#7AB4FF" />
+          <SolidColorBrush x:Key="GraphiteAccentFillHoverBrush" Color="#70A4E8" />
+          <SolidColorBrush x:Key="GraphiteAccentFillPressedBrush" Color="#6391CC" />
+          <SolidColorBrush x:Key="GraphiteAccentOnFillBrush" Color="#0A0B0D" />
+          <SolidColorBrush x:Key="GraphiteAccentTextBrush" Color="#7AB4FF" />
+          <SolidColorBrush x:Key="GraphiteSelectionRowBrush" Color="#1A7AB4FF" />
+          <SolidColorBrush x:Key="GraphiteSelectionNavBrush" Color="#1C2027" />
+          <SolidColorBrush x:Key="GraphiteInfoBrush" Color="#7AB4FF" />
+          <SolidColorBrush x:Key="GraphiteInfoBackgroundBrush" Color="#10223A" />
+          <SolidColorBrush x:Key="GraphiteSuccessBrush" Color="#4CC38A" />
+          <SolidColorBrush x:Key="GraphiteSuccessBackgroundBrush" Color="#12291F" />
+          <SolidColorBrush x:Key="GraphiteCautionBrush" Color="#F2B33D" />
+          <SolidColorBrush x:Key="GraphiteCautionBackgroundBrush" Color="#2E2412" />
+          <SolidColorBrush x:Key="GraphiteCriticalBrush" Color="#FF6B6B" />
+          <SolidColorBrush x:Key="GraphiteCriticalBackgroundBrush" Color="#33171A" />
+          <SolidColorBrush x:Key="GraphiteNeutralBrush" Color="#C9CFD8" />
+          <SolidColorBrush x:Key="GraphiteNeutralBackgroundBrush" Color="#232830" />
+
+          <Color x:Key="SystemAccentColor">#7AB4FF</Color>
+          <Color x:Key="SystemAccentColorLight1">#70A4E8</Color>
+          <Color x:Key="SystemAccentColorLight2">#7AB4FF</Color>
+          <Color x:Key="SystemAccentColorLight3">#A9CFFF</Color>
+          <Color x:Key="SystemAccentColorDark1">#6391CC</Color>
+          <Color x:Key="SystemAccentColorDark2">#0F4FA6</Color>
+          <Color x:Key="SystemAccentColorDark3">#0A3878</Color>
+          <StaticResource x:Key="AccentButtonForeground" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="AccentButtonForegroundPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="AccentButtonForegroundPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundChecked" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminate" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="CheckBoxCheckGlyphForegroundIndeterminatePressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="RadioButtonCheckGlyphFill" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="RadioButtonCheckGlyphFillPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="RadioButtonCheckGlyphFillPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleSwitchKnobFillOn" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleSwitchKnobFillOnPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleSwitchKnobFillOnPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="GraphiteAccentOnFillBrush" />
+          <StaticResource x:Key="ButtonBackground" ResourceKey="GraphiteControlFillBrush" />
+          <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="GraphiteControlFillHoverBrush" />
+          <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="ButtonBackgroundDisabled" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="ButtonBorderBrush" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ButtonBorderBrushDisabled" ResourceKey="GraphiteStrokeDividerBrush" />
+          <StaticResource x:Key="ButtonForegroundDisabled" ResourceKey="GraphiteTextDisabledBrush" />
+          <StaticResource x:Key="AccentButtonBackgroundDisabled" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="AccentButtonBorderBrushDisabled" ResourceKey="GraphiteStrokeDividerBrush" />
+          <StaticResource x:Key="AccentButtonForegroundDisabled" ResourceKey="GraphiteTextDisabledBrush" />
+          <StaticResource x:Key="TextControlBackground" ResourceKey="GraphiteControlFillBrush" />
+          <StaticResource x:Key="TextControlBackgroundPointerOver" ResourceKey="GraphiteControlFillHoverBrush" />
+          <StaticResource x:Key="TextControlBackgroundFocused" ResourceKey="GraphiteBgSolidBrush" />
+          <StaticResource x:Key="TextControlBorderBrush" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="TextControlBorderBrushPointerOver" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="TextControlBorderBrushFocused" ResourceKey="GraphiteAccentFillBrush" />
+          <StaticResource x:Key="TextControlPlaceholderForeground" ResourceKey="GraphiteTextSecondaryBrush" />
+          <StaticResource x:Key="TextControlPlaceholderForegroundPointerOver" ResourceKey="GraphiteTextSecondaryBrush" />
+          <StaticResource x:Key="TextControlPlaceholderForegroundFocused" ResourceKey="GraphiteTextSecondaryBrush" />
+          <StaticResource x:Key="ComboBoxBackground" ResourceKey="GraphiteControlFillBrush" />
+          <StaticResource x:Key="ComboBoxBackgroundPointerOver" ResourceKey="GraphiteControlFillHoverBrush" />
+          <StaticResource x:Key="ComboBoxBackgroundPressed" ResourceKey="GraphiteControlFillPressedBrush" />
+          <StaticResource x:Key="ComboBoxBorderBrush" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ComboBoxBorderBrushPointerOver" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ComboBoxBorderBrushPressed" ResourceKey="GraphiteControlStrokeBrush" />
+          <StaticResource x:Key="ComboBoxItemBackgroundSelected" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="ComboBoxItemBackgroundSelectedPointerOver" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="ComboBoxItemBackgroundSelectedPressed" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="SystemControlHighlightListAccentLowBrush" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="SystemControlHighlightListAccentMediumBrush" ResourceKey="GraphiteSelectionRowBrush" />
+          <StaticResource x:Key="SystemControlHighlightListAccentHighBrush" ResourceKey="GraphiteSelectionRowBrush" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <!-- Type: Geist for everything (Fluent's windows and popups read this key), Geist Mono for addresses and IDs.
+           Both need .WithGeistFonts() in Program.cs; without it the $Default fallback is the system font. -->
+      <FontFamily x:Key="ContentControlThemeFontFamily">fonts:Geist#Geist, $Default</FontFamily>
+      <FontFamily x:Key="GraphiteMonoFontFamily">fonts:Geist#Geist Mono, $Default</FontFamily>
+
+      <!-- Shape and size: 4 for controls, 8 for overlays (Fluent's are 3 and 5), 36 for every single-line control -->
+      <CornerRadius x:Key="ControlCornerRadius">4</CornerRadius>
+      <CornerRadius x:Key="OverlayCornerRadius">8</CornerRadius>
+      <x:Double x:Key="TextControlThemeMinHeight">36</x:Double>
+      <x:Double x:Key="ComboBoxMinHeight">36</x:Double>
+
+      <!-- Lucide 0.460.0 icons (ISC licence), 24-unit viewbox, drawn by LineIcon -->
+      <StreamGeometry x:Key="IconArrowLeftRight">M8 3 4 7l4 4 M4 7h16 M16 21l4-4-4-4 M20 17H4</StreamGeometry>
+      <StreamGeometry x:Key="IconChevronRight">M9 18l6-6-6-6</StreamGeometry>
+      <StreamGeometry x:Key="IconCircleCheck">M2 12A10 10 0 1 0 22 12A10 10 0 1 0 2 12Z M9 12l2 2 4-4</StreamGeometry>
+      <StreamGeometry x:Key="IconCircleHelp">M2 12A10 10 0 1 0 22 12A10 10 0 1 0 2 12Z M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3 M12 17h.01</StreamGeometry>
+      <StreamGeometry x:Key="IconCircleX">M2 12A10 10 0 1 0 22 12A10 10 0 1 0 2 12Z M15 9l-6 6 M9 9l6 6</StreamGeometry>
+      <StreamGeometry x:Key="IconClock">M2 12A10 10 0 1 0 22 12A10 10 0 1 0 2 12Z M12 6L12 12L16 14</StreamGeometry>
+      <StreamGeometry x:Key="IconCloud">M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z</StreamGeometry>
+      <StreamGeometry x:Key="IconCloudDownload">M12 13v8l-4-4 M12 21l4-4 M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284</StreamGeometry>
+      <StreamGeometry x:Key="IconCloudUpload">M12 13v8 M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242 M8 17l4-4 4 4</StreamGeometry>
+      <StreamGeometry x:Key="IconCopy">M10 8H20A2 2 0 0 1 22 10V20A2 2 0 0 1 20 22H10A2 2 0 0 1 8 20V10A2 2 0 0 1 10 8Z M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2</StreamGeometry>
+      <StreamGeometry x:Key="IconDownload">M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10L12 15L17 10 M12 15L12 3</StreamGeometry>
+      <StreamGeometry x:Key="IconExternalLink">M15 3h6v6 M10 14 21 3 M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6</StreamGeometry>
+      <StreamGeometry x:Key="IconFileText">M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v4a2 2 0 0 0 2 2h4 M10 9H8 M16 13H8 M16 17H8</StreamGeometry>
+      <StreamGeometry x:Key="IconFile">M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v4a2 2 0 0 0 2 2h4</StreamGeometry>
+      <StreamGeometry x:Key="IconFolder">M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z</StreamGeometry>
+      <StreamGeometry x:Key="IconGlobe">M2 12A10 10 0 1 0 22 12A10 10 0 1 0 2 12Z M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20 M2 12h20</StreamGeometry>
+      <StreamGeometry x:Key="IconInfo">M2 12A10 10 0 1 0 22 12A10 10 0 1 0 2 12Z M12 16v-4 M12 8h.01</StreamGeometry>
+      <StreamGeometry x:Key="IconKeyRound">M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z M16 7.5A.5 .5 0 1 0 17 7.5A.5 .5 0 1 0 16 7.5Z</StreamGeometry>
+      <StreamGeometry x:Key="IconLogIn">M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4 M10 17L15 12L10 7 M15 12L3 12</StreamGeometry>
+      <StreamGeometry x:Key="IconSearch">M3 11A8 8 0 1 0 19 11A8 8 0 1 0 3 11Z M21 21l-4.3-4.3</StreamGeometry>
+      <StreamGeometry x:Key="IconSettings">M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z M9 12A3 3 0 1 0 15 12A3 3 0 1 0 9 12Z</StreamGeometry>
+      <StreamGeometry x:Key="IconTrash2">M3 6h18 M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6 M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2 M10 11L10 17 M14 11L14 17</StreamGeometry>
+      <StreamGeometry x:Key="IconTriangleAlert">M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3 M12 9v4 M12 17h.01</StreamGeometry>
+      <StreamGeometry x:Key="IconUpload">M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8L12 3L7 8 M12 3L12 15</StreamGeometry>
+      <StreamGeometry x:Key="IconX">M18 6 6 18 M6 6l12 12</StreamGeometry>
+
+      <!-- Graphite's NavItem: 40 high, 12 inset, 4 corners. Hover and selected take selection-nav; selected also turns
+           SemiBold and shows a 3x16 accent-fill pill on the left edge. A ControlTheme rather than styles, because the
+           pill is a template part: Fluent's ListBoxItem template is a bare ContentPresenter. ListBox.nav applies it. -->
+      <ControlTheme x:Key="GraphiteNavItemTheme" TargetType="ListBoxItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource GraphiteTextPrimaryBrush}" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+          <ControlTemplate>
+            <Panel>
+              <ContentPresenter Name="PART_ContentPresenter"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Padding="{TemplateBinding Padding}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+              <Border Name="PART_Indicator" Width="3" Height="16" Margin="0,12,0,0" CornerRadius="2"
+                      HorizontalAlignment="Left" VerticalAlignment="Top" IsVisible="False"
+                      Background="{DynamicResource GraphiteAccentFillBrush}" />
+            </Panel>
+          </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+          <Setter Property="Background" Value="{DynamicResource GraphiteSelectionNavBrush}" />
+        </Style>
+        <Style Selector="^:selected">
+          <Setter Property="Background" Value="{DynamicResource GraphiteSelectionNavBrush}" />
+          <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="^:selected /template/ Border#PART_Indicator">
+          <Setter Property="IsVisible" Value="True" />
+        </Style>
+      </ControlTheme>
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <Style Selector="Window">
+    <Setter Property="Background" Value="{DynamicResource GraphiteBgSolidBrush}" />
+  </Style>
+
+  <!-- The main window's shell (Graphite's layout): a 48px app bar and a 248px nav pane on bg-window, and the content on a
+       bg-solid layer with a 1px stroke-divider edge and an 8px top-left corner. The app bar has no rule of its own; the
+       content layer's edge is the line. Each part is matched by name, not by a class: a Border class selector is
+       checked against every Border, including each list row. The 20 inset lines the product icon up with the nav icons
+       (the nav's 8 padding plus an item's 12). -->
+  <Style Selector="Grid#Shell">
+    <Setter Property="Background" Value="{DynamicResource GraphiteBgWindowBrush}" />
+  </Style>
+  <Style Selector="Border#AppBar">
+    <Setter Property="Height" Value="48" />
+    <Setter Property="Padding" Value="20,0,12,0" />
+  </Style>
+  <Style Selector="Grid#NavPane">
+    <Setter Property="Width" Value="248" />
+  </Style>
+  <Style Selector="Border#ContentLayer">
+    <Setter Property="Background" Value="{DynamicResource GraphiteBgSolidBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteStrokeDividerBrush}" />
+    <Setter Property="BorderThickness" Value="1,1,0,0" />
+    <Setter Property="CornerRadius" Value="8,0,0,0" />
+  </Style>
+  <!-- The nav list: transparent on bg-window, 8 padding, items 2 apart, each item in GraphiteNavItemTheme -->
+  <Style Selector="ListBox.nav">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="8" />
+    <Setter Property="ItemContainerTheme" Value="{StaticResource GraphiteNavItemTheme}" />
+    <Setter Property="ItemsPanel">
+      <ItemsPanelTemplate>
+        <StackPanel Spacing="2" />
+      </ItemsPanelTemplate>
+    </Setter>
+  </Style>
+
+  <!-- Type ramp: Graphite's Title 28/36, Subtitle 20/28, Body Strong 14, Body 14 (Fluent's default), Caption 12. The
+       kit adds card-title, 16 SemiBold, for the headline inside a card. -->
+  <Style Selector="TextBlock.title">
+    <Setter Property="FontSize" Value="28" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LineHeight" Value="36" />
+  </Style>
+  <Style Selector="TextBlock.subtitle">
+    <Setter Property="FontSize" Value="20" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="LineHeight" Value="28" />
+  </Style>
+  <Style Selector="TextBlock.card-title">
+    <Setter Property="FontSize" Value="16" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="TextBlock.section-title">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="TextBlock.body-strong">
+    <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+  <Style Selector="TextBlock.caption">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteTextSecondaryBrush}" />
+  </Style>
+  <!-- Size only, so it combines with a colour class: Classes="small caution" -->
+  <Style Selector="TextBlock.small">
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <!-- Graphite has two text levels, so secondary and quaternary both take text-secondary (text-disabled is too
+       faint for reading text). quaternary stays a class so the quietest text is marked if the ramp grows. -->
+  <Style Selector="TextBlock.secondary">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteTextSecondaryBrush}" />
+  </Style>
+  <Style Selector="TextBlock.quaternary">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteTextSecondaryBrush}" />
+  </Style>
+  <!-- The same two classes for a Run, so part of a line can be smaller and quieter than the rest -->
+  <Style Selector="Run.small">
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="Run.quaternary">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteTextSecondaryBrush}" />
+  </Style>
+  <!-- Machine values (addresses, networks, IDs, hashes) in Geist Mono 13, so similar strings are easy to compare.
+       A type selector does not match a derived type, so SelectableTextBlock needs its own. -->
+  <Style Selector="TextBlock.mono">
+    <Setter Property="FontFamily" Value="{DynamicResource GraphiteMonoFontFamily}" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+  <Style Selector="SelectableTextBlock.mono">
+    <Setter Property="FontFamily" Value="{DynamicResource GraphiteMonoFontFamily}" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+  <Style Selector="Run.mono">
+    <Setter Property="FontFamily" Value="{DynamicResource GraphiteMonoFontFamily}" />
+  </Style>
+  <Style Selector="TextBox.mono">
+    <Setter Property="FontFamily" Value="{DynamicResource GraphiteMonoFontFamily}" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+  <!-- Accent text, for a link-like label. Blue marks action, selection and focus only, never decoration. -->
+  <Style Selector="TextBlock.accent">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteAccentTextBrush}" />
+  </Style>
+  <!-- Status colours. caption and quaternary are declared above, so a later class here wins on Foreground -->
+  <Style Selector="TextBlock.success">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteSuccessBrush}" />
+  </Style>
+  <Style Selector="TextBlock.caution">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+  <Style Selector="TextBlock.critical">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCriticalBrush}" />
+  </Style>
+
+  <!-- Layers. A card has Graphite's card shadow; BoxShadow costs a render pass per element, so it stays on cards and
+       never goes on rows. -->
+  <Style Selector="Border.card">
+    <Setter Property="Background" Value="{DynamicResource GraphiteBgCardBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteStrokeDividerBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="24" />
+    <Setter Property="BoxShadow" Value="0 2 4 0 #47000000" />
+  </Style>
+  <Style Selector="Border.card.compact">
+    <Setter Property="Padding" Value="16,8,8,8" />
+  </Style>
+  <Style Selector="Border.inset">
+    <Setter Property="Background" Value="{DynamicResource GraphiteBgLayerBrush}" />
+    <Setter Property="CornerRadius" Value="4" />
+    <Setter Property="Padding" Value="12,8" />
+  </Style>
+  <!-- Status pill: 24 high, fully round, 12 SemiBold, a dot and a word. The dot takes the pill's tone. -->
+  <Style Selector="Border.pill">
+    <Setter Property="Background" Value="{DynamicResource GraphiteNeutralBackgroundBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource GraphiteNeutralBrush}" />
+    <Setter Property="TextElement.FontSize" Value="12" />
+    <Setter Property="TextElement.FontWeight" Value="SemiBold" />
+    <Setter Property="CornerRadius" Value="12" />
+    <Setter Property="Height" Value="24" />
+    <Setter Property="Padding" Value="10,0" />
+  </Style>
+  <Style Selector="Border.pill.warning">
+    <Setter Property="Background" Value="{DynamicResource GraphiteCautionBackgroundBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+  <Style Selector="Border.pill Ellipse.dot">
+    <Setter Property="Width" Value="6" />
+    <Setter Property="Height" Value="6" />
+    <Setter Property="Fill" Value="{DynamicResource GraphiteNeutralBrush}" />
+  </Style>
+  <Style Selector="Border.pill.warning Ellipse.dot">
+    <Setter Property="Fill" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+
+  <!-- The signed-in user's initials in an accent circle. Matched by name, not by a class: a Border class selector is
+       checked against every Border, which cost about 470 bytes per list row in a soak test; a name costs nothing.
+       The text colour and weight are inherited from the border, as in pill. -->
+  <Style Selector="Border#Avatar">
+    <Setter Property="Background" Value="{DynamicResource GraphiteAccentFillBrush}" />
+    <Setter Property="TextElement.Foreground" Value="{DynamicResource GraphiteAccentOnFillBrush}" />
+    <Setter Property="TextElement.FontWeight" Value="SemiBold" />
+    <Setter Property="Width" Value="44" />
+    <Setter Property="Height" Value="44" />
+    <Setter Property="CornerRadius" Value="22" />
+  </Style>
+
+  <!-- Status badges: a small pill in a list row, the word in its tone on the tone's tint -->
+  <Style Selector="Border.badge">
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="Padding" Value="8,2" />
+    <Setter Property="Background" Value="{DynamicResource GraphiteNeutralBackgroundBrush}" />
+  </Style>
+  <Style Selector="Border.badge > TextBlock">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteNeutralBrush}" />
+  </Style>
+  <Style Selector="Border.badge.critical">
+    <Setter Property="Background" Value="{DynamicResource GraphiteCriticalBackgroundBrush}" />
+  </Style>
+  <Style Selector="Border.badge.critical > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCriticalBrush}" />
+  </Style>
+  <Style Selector="Border.badge.caution">
+    <Setter Property="Background" Value="{DynamicResource GraphiteCautionBackgroundBrush}" />
+  </Style>
+  <Style Selector="Border.badge.caution > TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+
+  <!-- InfoBar: 8 radius, a 1px border in the tone's colour over its tinted fill -->
+  <Style Selector="Border.infobar">
+    <Setter Property="Background" Value="{DynamicResource GraphiteInfoBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteInfoBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="16,12" />
+  </Style>
+  <Style Selector="Border.infobar local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconInfo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteInfoBrush}" />
+  </Style>
+  <Style Selector="Border.infobar.success">
+    <Setter Property="Background" Value="{DynamicResource GraphiteSuccessBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteSuccessBrush}" />
+  </Style>
+  <Style Selector="Border.infobar.success local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconCircleCheck}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteSuccessBrush}" />
+  </Style>
+  <Style Selector="Border.infobar.warning">
+    <Setter Property="Background" Value="{DynamicResource GraphiteCautionBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+  <Style Selector="Border.infobar.warning local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconTriangleAlert}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+  <Style Selector="Border.infobar.error">
+    <Setter Property="Background" Value="{DynamicResource GraphiteCriticalBackgroundBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteCriticalBrush}" />
+  </Style>
+  <Style Selector="Border.infobar.error local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconCircleX}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCriticalBrush}" />
+  </Style>
+
+  <!-- Buttons: Fluent standard/accent on Graphite's fills, 36 high with a Medium label, plus subtle icon buttons -->
+  <!-- Fluent leaves a button's content stretched, which draws the label at the left of any button wider than its
+       text (a dialog button with MinWidth). Centre it here, on the bare selector, so a control template still wins. -->
+  <Style Selector="Button">
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.subtle">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteTextSecondaryBrush}" />
+    <Setter Property="Width" Value="36" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+  <!-- An icon is text-secondary at rest and text-primary under the pointer -->
+  <Style Selector="Button.subtle:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource GraphiteControlFillHoverBrush}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteTextPrimaryBrush}" />
+  </Style>
+  <Style Selector="Button.subtle:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource GraphiteControlFillPressedBrush}" />
+  </Style>
+  <!-- Fluent fills a disabled button's presenter; a subtle icon button stays bare and only its icon dims -->
+  <Style Selector="Button.subtle:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <!-- After subtle, so a "subtle small" button is 28 -->
+  <Style Selector="Button.small">
+    <Setter Property="Width" Value="28" />
+    <Setter Property="Height" Value="28" />
+    <Setter Property="MinHeight" Value="28" />
+  </Style>
+
+  <!-- A destructive action's icon turns critical red, but stays the normal disabled colour while the button is disabled -->
+  <Style Selector="Button:not(:disabled) local|LineIcon.danger">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCriticalBrush}" />
+  </Style>
+
+  <!-- Hides content but keeps its space, so a card never changes height. Use it only on content that is not
+       interactive, and stop any indeterminate ProgressBar under it first: opacity 0 still animates. -->
+  <Style Selector=":is(Control).placeholder">
+    <Setter Property="Opacity" Value="0" />
+    <Setter Property="IsHitTestVisible" Value="False" />
+  </Style>
+
+  <!-- Rows of a virtualized list: a fixed height keeps the list's extent exact. The 16 inset is Graphite's table cell. -->
+  <Style Selector="Border.row">
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteStrokeDividerBrush}" />
+    <Setter Property="BorderThickness" Value="0,1,0,0" />
+    <Setter Property="Height" Value="36" />
+    <Setter Property="Padding" Value="16,0" />
+  </Style>
+  <!-- A notice row holds two lines of text and is still a fixed height -->
+  <Style Selector="Border.row.notice">
+    <Setter Property="Height" Value="56" />
+  </Style>
+  <Style Selector="Border.notice local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconInfo}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteInfoBrush}" />
+  </Style>
+  <Style Selector="Border.notice.success local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconCircleCheck}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteSuccessBrush}" />
+  </Style>
+  <Style Selector="Border.notice.warning local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconTriangleAlert}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+  <Style Selector="Border.notice.error local|LineIcon.severity">
+    <Setter Property="Data" Value="{StaticResource IconCircleX}" />
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCriticalBrush}" />
+  </Style>
+
+  <!-- Thin progress bars in the accent -->
+  <Style Selector="ProgressBar">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteAccentFillBrush}" />
+    <Setter Property="Background" Value="{DynamicResource GraphiteStrokeDividerBrush}" />
+    <Setter Property="MinHeight" Value="2" />
+    <Setter Property="Height" Value="4" />
+    <Setter Property="CornerRadius" Value="2" />
+  </Style>
+  <!-- Waiting for the network: the bar stops moving and turns to the caution colour -->
+  <Style Selector="ProgressBar.waiting">
+    <Setter Property="Foreground" Value="{DynamicResource GraphiteCautionBrush}" />
+  </Style>
+  <Style Selector="ProgressBar.thin">
+    <Setter Property="Height" Value="2" />
+    <Setter Property="CornerRadius" Value="1" />
+  </Style>
+</Styles>

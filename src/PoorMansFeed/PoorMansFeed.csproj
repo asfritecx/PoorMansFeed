@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>PoorMansFeed</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Windows takes the exe icon from here. Window.Icon is deliberately NOT set: Avalonia ignores it on macOS, where
+         the bundle's Contents/Resources/PoorMansFeed.icns is used. -->
+    <ApplicationIcon>Assets/PoorMansFeed.ico</ApplicationIcon>
+    <!-- macOS .app bundles need the native app host next to the managed dll -->
+    <UseAppHost>true</UseAppHost>
+    <!-- Released self-contained, untrimmed and without AOT -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The .png and .icns are only read by the publish script (bundle icon), so they are not embedded. -->
+    <AvaloniaResource Include="Assets/**" Exclude="Assets/PoorMansFeed.png;Assets/PoorMansFeed.icns" Condition="Exists('Assets')" />
+    <!-- The kit's Geist fonts and their licence (GeistFonts.cs loads them from here) -->
+    <AvaloniaResource Include="GraphiteUi/Fonts/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PoorMansFeed.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../PoorMansFeed.Core/PoorMansFeed.Core.csproj" />
+  </ItemGroup>
+
+</Project>

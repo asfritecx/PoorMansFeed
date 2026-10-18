@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:PoorMansFeed"
+        x:Class="PoorMansFeed.LargeRangesDialog"
+        Width="540"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="16">
+    <TextBlock x:Name="TitleText" Classes="subtitle" />
+    <TextBlock x:Name="MessageText" Grid.Row="1" TextWrapping="Wrap" LineHeight="22" />
+
+    <!-- A fixed-height list: the card clips it and the scroll viewer scrolls it. Rows are one height, so virtualization holds. -->
+    <Border Grid.Row="2" Classes="card" Padding="0" ClipToBounds="True" Height="216">
+      <ScrollViewer>
+        <ItemsControl x:Name="RangeList">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="local:LargeRangeChoice">
+              <Border Classes="row">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                  <CheckBox IsChecked="{Binding IsIncluded}" AutomationProperties.Name="{Binding AccessibleText}"
+                            VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding Network}" Classes="mono" TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center" ToolTip.Tip="{Binding Network}" />
+                  <TextBlock Grid.Column="2" Text="{Binding SizeText}" Classes="caption" VerticalAlignment="Center" />
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <TextBlock x:Name="CountText" Grid.Row="3" Classes="caption" AutomationProperties.LiveSetting="Polite" />
+
+    <!-- Neither button is the default: Enter alone must never export -->
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button x:Name="CancelButton" Content="{x:Static local:AppText.Cancel}" MinWidth="88" IsCancel="True" Click="CancelClicked" />
+      <Button x:Name="ExportButton" Content="{x:Static local:AppText.Export}" MinWidth="88" Click="ExportClicked" />
+    </StackPanel>
+  </Grid>
+</Window>

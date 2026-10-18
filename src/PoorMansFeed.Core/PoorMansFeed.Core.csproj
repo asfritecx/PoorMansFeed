@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PoorMansFeed.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PoorMansFeed.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
+    <!-- Deliberately overrides the native SQLite package that Microsoft.Data.Sqlite brings in transitively (2.1.13 with 10.0.13). Up to 2.1.11 that package carries the vulnerable SQLite of advisory GHSA-2m69-gcr7-jv3q, and 2.1.13 does not say which SQLite it carries; this one is SQLite 3.53.3, the version in its name. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+
+</Project>

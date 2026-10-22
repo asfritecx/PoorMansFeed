@@ -189,6 +189,37 @@ public sealed class TokenStoreTests
     }
 
     [Fact]
+    public void Failures_trace_the_name_of_the_secret_they_are_about()
+    {
+        // The AbuseIPDB key uses the same rules, so its traces must say which secret couldn't be read or saved
+        const string key = "abuseipdb-sentinel-3M8RV";
+        var listener = new RecordingTraceListener();
+        Trace.Listeners.Add(listener);
+        try
+        {
+            var store = new InMemorySecretStore();
+            var keys = new TokenStore(store, "AbuseIPDB key");
+            Assert.True(keys.Save(key));
+            store.ReadFailure = new SecretStoreException("The Keychain couldn't read the secret.");
+            Assert.Null(keys.TryLoad());
+            store.ReadFailure = null;
+            store.WriteFailure = new IOException();
+            Assert.False(keys.Save(key));
+            store.DeleteFailure = new UnauthorizedAccessException();
+            Assert.False(keys.Clear());
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+
+        Assert.Contains("The AbuseIPDB key couldn't be read (SecretStoreException", listener.Text, StringComparison.Ordinal);
+        Assert.Contains("The AbuseIPDB key couldn't be saved (IOException", listener.Text, StringComparison.Ordinal);
+        Assert.Contains("The AbuseIPDB key couldn't be removed (UnauthorizedAccessException", listener.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(key, listener.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Text_conversion_failures_never_trace_the_bytes_or_characters()
     {
         // The fallback exceptions' own messages quote what they couldn't convert: "bytes [FE][FD]", "character \uD800"

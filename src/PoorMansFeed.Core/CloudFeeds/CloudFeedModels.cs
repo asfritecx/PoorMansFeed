@@ -174,11 +174,22 @@ public sealed class CloudFeedPlan
     public IReadOnlyList<LargeRange> LargeRanges { get; }
 }
 
-public enum CloudFeedWriteFailure { None, NothingToWrite, FolderUnavailable, WriteFailed, SettingsChanged }
+public enum CloudFeedWriteFailure { None, NothingToWrite, FolderUnavailable, WriteFailed, SettingsChanged, ExceptionsUnreadable }
 
 /// <summary>
-/// Outcome of a write. UnconfirmedWritten counts Mixed and NotInDatabase ranges the operator ticked and the file
-/// still contains.
+/// Outcome of a write. RangesWritten counts the lines in the files, so a range an exception cut counts once for each
+/// piece. UnconfirmedWritten counts the lines from Mixed and NotInDatabase ranges the operator ticked. ExceptionCuts
+/// counts ranges an exception cut into smaller ones, ExceptionRemovals the ranges it removed whole. OldFilesLeft (null
+/// for none) lists the feed files from an earlier write left in place, which FortiGate still reads: those whose family
+/// exceptions emptied, then on WriteFailed the failed file when its earlier copy is still there, whole, because each
+/// file is replaced by a move, then each family after it that was never tried and has an earlier copy. FailedFile is
+/// set only on WriteFailed when one file's write failed, and Files then lists the files written before it. It is null
+/// for an unexpected failure, or for a folder that couldn't be made before any file.
 /// </summary>
 public sealed record CloudFeedWriteResult(CloudFeedWriteFailure Failure, IReadOnlyList<string> Files, int RangesWritten,
-                                          int UnconfirmedWritten, int LargeRangesLeftOut);
+                                          int UnconfirmedWritten, int LargeRangesLeftOut,
+                                          int ExceptionCuts = 0, int ExceptionRemovals = 0,
+                                          IReadOnlyList<string>? OldFilesLeft = null, string? FailedFile = null);
+
+/// <summary>One line of a cloud feed: a ticked range, or a piece of one an exception cut, with the range's status.</summary>
+internal readonly record struct FeedLine(string Text, bool IsIpv6, bool Confirmed);

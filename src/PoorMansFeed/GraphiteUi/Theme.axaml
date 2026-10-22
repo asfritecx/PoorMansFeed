@@ -246,7 +246,10 @@
 
       <!-- Graphite's NavItem: 40 high, 12 inset, 4 corners. Hover and selected take selection-nav; selected also turns
            SemiBold and shows a 3x16 accent-fill pill on the left edge. A ControlTheme rather than styles, because the
-           pill is a template part: Fluent's ListBoxItem template is a bare ContentPresenter. ListBox.nav applies it. -->
+           pill is a template part: Fluent's ListBoxItem template is a bare ContentPresenter. ListBox.nav applies it.
+           Disabled (the whole nav, while a start-up stop shows), the text and the icon, which inherits the item's
+           foreground, take text-disabled; a selected item keeps its neutral fill and weight, so the place stays
+           marked, but drops the accent pill, because blue marks only a live selection. -->
       <ControlTheme x:Key="GraphiteNavItemTheme" TargetType="ListBoxItem">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource GraphiteTextPrimaryBrush}" />
@@ -281,6 +284,12 @@
         </Style>
         <Style Selector="^:selected /template/ Border#PART_Indicator">
           <Setter Property="IsVisible" Value="True" />
+        </Style>
+        <Style Selector="^:disabled">
+          <Setter Property="Foreground" Value="{DynamicResource GraphiteTextDisabledBrush}" />
+        </Style>
+        <Style Selector="^:disabled /template/ Border#PART_Indicator">
+          <Setter Property="IsVisible" Value="False" />
         </Style>
       </ControlTheme>
     </ResourceDictionary>

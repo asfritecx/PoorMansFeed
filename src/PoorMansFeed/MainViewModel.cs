@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.AbuseIpDb;
+using PoorMansFeed.Core.FeedExceptions;
 using GraphiteUi;
 
 namespace PoorMansFeed;
@@ -23,19 +25,31 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private readonly IIpInfoService _service;
     private readonly IUiServices _ui;
+    private readonly IAbuseIpDbService? _abuse;
+    private readonly WorkGate _gate;
+    private readonly AbuseKeyPrompt? _abuseKeys;
+    // The Settings page's unsaved edits, read just before an export writes; null when there is no page
+    private readonly IUnsavedSettings? _unsaved;
     private readonly string _defaultExportFolder;
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _operationCts;
     private TaskCompletionSource? _operationCompletion;
     private CancellationTokenSource? _checkCts;
+    private CancellationTokenSource? _abuseCheckCts;
     private SearchQuery? _lastQuery;
     private int _totalCount;
     private int _searchVersion;
+    // The input of the newest search started; while it is out, a settings save runs it again rather than the last shown
+    private string? _newestSearchInput;
+    // Whether the newest search started may keep an AbuseIPDB check (a settings rerun); a user's own search may not
+    private bool _newestSearchKeepsCheck;
+    // Whether the AbuseIPDB check wrote the results line; a kept settings rerun keeps the line only while it is the check's
+    private bool _checkOwnsLine;
     private bool _started;
-    private bool _interactionLocked;
     private bool _disposed;
     private bool _isBusy;
     private bool _isSearching;
+    private bool _isCheckingAbuse;
     private string _pillBeforeUpdate = "";
     private bool _pillWarningBeforeUpdate;
 
@@ -46,8 +60,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _datasetFactsText = AppText.NoDatasetFacts;
     private int _progressValue;
     private bool _isProgressIndeterminate;
-    private bool _showStartupError;
-    private string _startupErrorText = "";
+    private bool _isStopped;
+    private bool _canStartFresh;
+    private bool _canStartWithoutOldExceptions;
+    private string _stopTitle = "";
+    private string _stopText = "";
+    private string _stopActionText = "";
+    private bool _hasStopAction;
+    private bool _isStopActionError;
+    private StartupFailure _stoppedBy;
+    private bool _stopWorking;
+    // True while a stop button's question is open, so neither button asks a second time meanwhile
+    private bool _stopAsking;
+    // The start-up step out now (a launch or a way on from the stop), completed when the service call has returned
+    private TaskCompletionSource? _startStep;
+    // Set by a close during a start-up step: nothing the step returns is applied
+    private bool _closingAfterStartStep;
+    // The dataset the last refresh of the facts showed, null before the first
+    private DatasetInfo? _datasetShown;
     private string _searchText = "";
     private bool _hasResults;
     private string _resultsSummaryText = AppText.SummaryInitial;
@@ -56,10 +86,29 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _hasResultsAction;
     private string _exportFolder = "";
 
-    public MainViewModel(IIpInfoService service, IUiServices ui, string? defaultExportFolder = null)
+    public MainViewModel(IIpInfoService service, IUiServices ui, string? defaultExportFolder = null, IAbuseIpDbService? abuse = null)
+        : this(service, ui, defaultExportFolder, abuse, gate: null)
+    {
+    }
+
+    /// <summary>
+    /// The window's composition: the gate is shared with the other pages, so a dialog or an update on one holds them all.
+    /// </summary>
+    internal MainViewModel(IIpInfoService service, IUiServices ui, string? defaultExportFolder, IAbuseIpDbService? abuse,
+        WorkGate? gate, AbuseKeyPrompt? abuseKeys = null, IUnsavedSettings? unsaved = null)
     {
         _service = service;
         _ui = ui;
+        _abuse = abuse;
+        _unsaved = unsaved;
+        _gate = gate ?? new WorkGate();
+        if (abuseKeys is not null && !ReferenceEquals(abuseKeys.Gate, _gate))
+        {
+            throw new ArgumentException("The key prompt must hold the view model's own gate.", nameof(abuseKeys));
+        }
+
+        _gate.Changed += GateChanged;
+        _abuseKeys = abuseKeys ?? (abuse is null ? null : new AbuseKeyPrompt(ui, abuse, _gate));
         _defaultExportFolder = defaultExportFolder ?? Path.Combine(service.DataFolder, "exports");
         _exportFolder = ResolveExportFolder();
         _datasetFactsText = FactsFor(service.Dataset);
@@ -70,9 +119,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SearchCommand = new AsyncRelayCommand(SearchFromBoxAsync, CanSearch);
         ExportCommand = new AsyncRelayCommand(ExportAsync, CanExport);
         CopyResultsCommand = new AsyncRelayCommand(CopyResultsAsync, CanCopy);
-        OpenExportFolderCommand = new AsyncRelayCommand(OpenExportFolderAsync, () => !_disposed);
-        OpenSettingsCommand = new AsyncRelayCommand(OpenSettingsAsync, CanStart);
-        ResetTokenCommand = new AsyncRelayCommand(ResetTokenAsync, CanStart);
+        // Outside CanStart, so it works while an update runs, but off once a close is held
+        OpenExportFolderCommand = new AsyncRelayCommand(OpenExportFolderAsync, () => !_disposed && !_closingAfterStartStep);
+        CheckAbuseCommand = new AsyncRelayCommand(CheckAbuseAsync, CanCheckAbuse);
+        // Outside the work gate too: a browser is not work, and a modal dialog already blocks the results menu
+        OpenInIpinfoCommand = new AsyncRelayCommand(OpenInIpinfoAsync, () => CanOpenWebPage(IpinfoPage()));
+        OpenInAbuseIpDbCommand = new AsyncRelayCommand(OpenInAbuseIpDbAsync, () => CanOpenWebPage(AbuseIpDbPage()));
+        StartFreshCommand = new AsyncRelayCommand(StartFreshAsync, () => CanLeaveStop() && _canStartFresh);
+        StartWithoutOldExceptionsCommand = new AsyncRelayCommand(StartWithoutOldExceptionsAsync,
+            () => CanLeaveStop() && _canStartWithoutOldExceptions);
     }
 
     public IAsyncRelayCommand UpdateDatasetCommand { get; }
@@ -81,14 +136,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public IAsyncRelayCommand ExportCommand { get; }
     public IAsyncRelayCommand CopyResultsCommand { get; }
     public IAsyncRelayCommand OpenExportFolderCommand { get; }
-    public IAsyncRelayCommand OpenSettingsCommand { get; }
-    public IAsyncRelayCommand ResetTokenCommand { get; }
+    public IAsyncRelayCommand CheckAbuseCommand { get; }
+
+    /// <summary>Opens the searched ASN or public address on ipinfo.io, from the results menu.</summary>
+    public IAsyncRelayCommand OpenInIpinfoCommand { get; }
+
+    /// <summary>Opens the searched public address on AbuseIPDB's website, from the results menu.</summary>
+    public IAsyncRelayCommand OpenInAbuseIpDbCommand { get; }
+
+    /// <summary>Asks, then makes a new settings file; offered only for a settings file that can't be used.</summary>
+    public IAsyncRelayCommand StartFreshCommand { get; }
+
+    /// <summary>Asks, then starts with no exceptions; offered only when the old exceptions file can't be read.</summary>
+    public IAsyncRelayCommand StartWithoutOldExceptionsCommand { get; }
 
     /// <summary>Where the dataset card is. Read by the tests.</summary>
     internal DatasetState State { get; private set; }
 
     /// <summary>The start-up dataset check, or null before one has started. Tests await it.</summary>
     internal Task? PendingCheck { get; private set; }
+
+    /// <summary>The update a token reset started without awaiting it, or null before one has. Tests await it.</summary>
+    internal Task? PendingUpdate { get; private set; }
 
     /// <summary>Builds the progress sink for an update. The default posts to the captured context; tests inject a synchronous one.</summary>
     internal Func<Action<UpdateProgress>, IProgress<UpdateProgress>> ProgressFactory { get; set; } =
@@ -120,14 +189,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _isBusy, value))
             {
+                _gate.SetBusy(value);
                 RefreshCommandStates();
             }
         }
     }
 
-    public bool ShowStartupError { get => _showStartupError; private set => SetProperty(ref _showStartupError, value); }
+    /// <summary>True while start-up has stopped: the window shows the stop in place of the pages.</summary>
+    public bool IsStopped { get => _isStopped; private set => SetProperty(ref _isStopped, value); }
 
-    public string StartupErrorText { get => _startupErrorText; private set => SetProperty(ref _startupErrorText, value); }
+    public bool CanStartFresh { get => _canStartFresh; private set => SetProperty(ref _canStartFresh, value); }
+
+    public bool CanStartWithoutOldExceptions
+    {
+        get => _canStartWithoutOldExceptions;
+        private set => SetProperty(ref _canStartWithoutOldExceptions, value);
+    }
+
+    public string StopTitle { get => _stopTitle; private set => SetProperty(ref _stopTitle, value); }
+
+    public string StopText { get => _stopText; private set => SetProperty(ref _stopText, value); }
+
+    public string StopActionText { get => _stopActionText; private set => SetProperty(ref _stopActionText, value); }
+
+    public bool HasStopAction { get => _hasStopAction; private set => SetProperty(ref _hasStopAction, value); }
+
+    public bool IsStopActionError { get => _isStopActionError; private set => SetProperty(ref _isStopActionError, value); }
 
     public string SearchText
     {
@@ -155,8 +242,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public string ExportFolder { get => _exportFolder; private set => SetProperty(ref _exportFolder, value); }
 
-    // One predicate gates every action, so a new command cannot forget a case
-    private bool CanStart() => _started && !IsBusy && !_interactionLocked && !_disposed;
+    // One predicate gates every action, so a new command cannot forget a case. A held close turns every action off.
+    private bool CanStart() => _gate.CanStart && !_disposed && !_closingAfterStartStep;
+
+    // The stop's buttons are outside the gate, which stays closed while start-up has stopped
+    private bool CanLeaveStop() => !_disposed && !_closingAfterStartStep && _isStopped && !_stopWorking && !_stopAsking;
+
+    /// <summary>True while a start-up step runs: the service call of a launch, a Start fresh or a Start without exceptions.</summary>
+    internal bool IsStartStepRunning => _startStep is not null;
+
+    /// <summary>
+    /// The window's close during a start-up step. The step can't be cut short, so it is left to return, and nothing it
+    /// returns is applied: no stop, no start, no notice and no prompt. Completes once the step has returned.
+    /// The pill says the close is waiting, and every command is off from here on.
+    /// </summary>
+    internal async Task CloseAfterStartStepAsync()
+    {
+        _closingAfterStartStep = true;
+        PillText = AppText.ClosingAfterStartUp;
+        IsPillWarning = false;
+        RefreshCommandStates();
+        _lifetime.Cancel();
+        if (_startStep is { } step)
+        {
+            await step.Task;
+        }
+    }
+
+    // A step's service call, marked as running from the call until it has returned or thrown
+    private async Task<StartupResult> RunStartStepAsync(Func<CancellationToken, Task<StartupResult>> step)
+    {
+        var running = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _startStep = running;
+        try
+        {
+            return await step(_lifetime.Token);
+        }
+        finally
+        {
+            _startStep = null;
+            running.SetResult();
+        }
+    }
 
     private bool HasDataset => _service.Dataset is not null;
 
@@ -166,13 +293,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private bool CanCopy() => CanStart() && _lastQuery is not null && _totalCount > 0;
 
+    // Any address search counts, found or not: the score is about the address, not about a network in the dataset
+    private bool CanCheckAbuse() =>
+        CanStart() && _abuse is not null && !_isSearching && !_isCheckingAbuse && _lastQuery is { Kind: SearchKind.IpAddress };
+
     /// <summary>
     /// Runs the start-up sequence once: the service opens, a first run asks for a token and downloads, and a
     /// database that exists is checked for updates in the background (search stays available meanwhile).
     /// </summary>
     public async Task InitializeAsync()
     {
-        if (_started || _disposed)
+        if (_started || _disposed || _closingAfterStartStep)
         {
             return;
         }
@@ -180,18 +311,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StartupResult startup;
         try
         {
-            startup = await _service.InitializeAsync(_lifetime.Token);
+            startup = await RunStartStepAsync(_service.InitializeAsync);
         }
         catch (Exception)
         {
             startup = new StartupResult(StartupFailure.StorageUnavailable, null, false);
         }
 
-        if (_disposed)
+        if (_disposed || _closingAfterStartStep)
         {
             return;
         }
 
+        await ApplyStartupAsync(startup);
+    }
+
+    // What a start-up result does: a closing notice, the stop, or the start. A way on from the stop comes back here.
+    private async Task ApplyStartupAsync(StartupResult startup)
+    {
         switch (startup.Failure)
         {
             case StartupFailure.Privileged:
@@ -200,16 +337,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             case StartupFailure.AlreadyRunning:
                 await ShowClosingNoticeAndCloseAsync(AppText.AlreadyOpenTitle, AppText.AlreadyOpenBody);
                 return;
-            case StartupFailure.StorageUnavailable:
-                ShowStartupFailure(AppText.StorageUnavailable);
-                return;
-            case StartupFailure.DatabaseNewer:
-                ShowStartupFailure(AppText.DatabaseNewer);
+            case StartupFailure.None:
+                break;
+            default:
+                Stop(startup.Failure);
                 return;
         }
 
+        // As a first launch shows it, until the check, the update or the no-dataset line sets it
+        PillText = AppText.Starting;
+        IsPillWarning = false;
+        IsStopped = false;
+        CanStartFresh = false;
+        CanStartWithoutOldExceptions = false;
+        SetStopAction("", false);
         _started = true;
+        _gate.SetStarted(true);
+        // The settings are the saved ones only once the service has opened, so the folder is resolved again
+        ExportFolder = ResolveExportFolder();
         RefreshDatasetFacts();
+        Started?.Invoke(this, EventArgs.Empty);
 
         if (!HasDataset)
         {
@@ -242,6 +389,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>Raised once, when the start-up has opened the service and the app's commands can run.</summary>
+    internal event EventHandler? Started;
+
+    /// <summary>Raised when the dataset in use changes by value (a new one, or one removed), after the dataset facts are
+    /// shown. Not raised when a refresh finds the same dataset.</summary>
+    internal event EventHandler? DatasetChanged;
+
     private async Task ShowClosingNoticeAndCloseAsync(string title, string body)
     {
         try
@@ -256,11 +410,122 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _ui.CloseApplication();
     }
 
-    private void ShowStartupFailure(string text)
+    private void Stop(StartupFailure failure)
     {
-        ShowStartupError = true;
-        StartupErrorText = text;
+        _stoppedBy = failure;
+        PillText = AppText.NotStarted;
+        IsPillWarning = true;
+        IsStopped = true;
+        StopTitle = AppText.StopTitle(failure);
+        StopText = AppText.StopText(failure);
+        CanStartFresh = failure is StartupFailure.ConfigNewer or StartupFailure.ConfigUnreadable
+            or StartupFailure.ConfigKeyMismatch or StartupFailure.ConfigMissing;
+        CanStartWithoutOldExceptions = failure == StartupFailure.ExceptionsImportUnreadable;
+        SetStopAction("", false);
         SetProgress(0, false);
+        RefreshStopCommands();
+    }
+
+    private Task StartFreshAsync() => LeaveStopAsync(
+        _canStartFresh,
+        AppText.StartFreshTitle,
+        _stoppedBy == StartupFailure.ConfigMissing ? AppText.StartFreshMissingBody : AppText.StartFreshBody,
+        AppText.StartFreshButton,
+        AppText.StartingFresh,
+        AppText.StartFreshFailed,
+        _service.StartFreshAsync);
+
+    private Task StartWithoutOldExceptionsAsync() => LeaveStopAsync(
+        _canStartWithoutOldExceptions,
+        AppText.StartWithoutOldExceptionsTitle,
+        AppText.StartWithoutOldExceptionsBody,
+        AppText.StartWithoutOldExceptionsButton,
+        AppText.StartingWithoutOldExceptions,
+        AppText.StartWithoutOldExceptionsFailed,
+        _service.StartWithoutOldExceptionsAsync);
+
+    // Asks first. The same failure back says it couldn't be done and keeps the button; any other result is applied
+    // as a launch's would be, so a different failure shows its own stop and None starts the app in place.
+    // offered is the button's own offer; the check uses this class's state, not the running command's.
+    private async Task LeaveStopAsync(bool offered, string title, string body, string confirmText,
+        string working, string failed, Func<CancellationToken, Task<StartupResult>> leave)
+    {
+        if (!offered || !CanLeaveStop())
+        {
+            return;
+        }
+
+        bool confirmed;
+        _stopAsking = true;
+        RefreshStopCommands();
+        try
+        {
+            confirmed = await _ui.ConfirmAsync(title, body, confirmText);
+        }
+        catch (Exception)
+        {
+            SetStopAction(AppText.Generic, true);
+            return;
+        }
+        finally
+        {
+            _stopAsking = false;
+            RefreshStopCommands();
+        }
+
+        if (!confirmed || _disposed || _closingAfterStartStep)
+        {
+            return;
+        }
+
+        StartupFailure stoppedBy = _stoppedBy;
+        StartupResult result;
+        _stopWorking = true;
+        SetStopAction(working, false);
+        RefreshStopCommands();
+        try
+        {
+            result = await RunStartStepAsync(leave);
+        }
+        catch (OperationCanceledException) when (_lifetime.Token.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception)
+        {
+            result = new StartupResult(stoppedBy, null, false);
+        }
+        finally
+        {
+            _stopWorking = false;
+            RefreshStopCommands();
+        }
+
+        if (_disposed || _closingAfterStartStep)
+        {
+            return;
+        }
+
+        if (result.Failure == stoppedBy)
+        {
+            SetStopAction(failed, true);
+            return;
+        }
+
+        await ApplyStartupAsync(result);
+    }
+
+    private void SetStopAction(string text, bool error)
+    {
+        StopActionText = text;
+        HasStopAction = text.Length > 0;
+        IsStopActionError = error;
+    }
+
+    private void RefreshStopCommands()
+    {
+        StartFreshCommand.NotifyCanExecuteChanged();
+        StartWithoutOldExceptionsCommand.NotifyCanExecuteChanged();
     }
 
     private async Task UpdateDatasetAsync()
@@ -278,7 +543,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await RunUpdateAsync();
     }
 
-    /// <summary>Returns true when a token is saved. Asks for one only when none is saved.</summary>
+    /// <summary>
+    /// Returns true when a token is saved. Asks for one only when none is saved, and holds the gate from the prompt
+    /// until the save has returned.
+    /// </summary>
     private async Task<bool> EnsureTokenAsync(TokenPromptReason reason)
     {
         if (_service.HasToken)
@@ -286,18 +554,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return true;
         }
 
-        string? token = await ShowDialogAsync(() => _ui.PromptForTokenAsync(reason));
-        if (string.IsNullOrWhiteSpace(token) || _disposed)
+        using (_gate.Hold())
         {
-            return false;
+            string? token = await ShowDialogAsync(() => _ui.PromptForTokenAsync(reason));
+            if (string.IsNullOrWhiteSpace(token) || _disposed)
+            {
+                return false;
+            }
+
+            if (await SaveTokenAsync(token))
+            {
+                return true;
+            }
         }
 
-        if (await SaveTokenAsync(token))
-        {
-            return true;
-        }
-
-        ResultsActionText = AppText.TokenSaveFailed;
+        SetResultsAction(AppText.TokenSaveFailed);
         return false;
     }
 
@@ -313,9 +584,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // One update at a time: IsBusy is set before the first await, so the guard leaves no gap
     private async Task RunUpdateAsync()
     {
-        if (_disposed)
+        if (_disposed || IsBusy)
         {
             return;
         }
@@ -568,7 +840,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RunSearchAsync(string input)
+    /// <summary>Searches for <paramref name="text"/> from another page: sets the box and runs the search, superseding
+    /// one still running. Returns false, with a fixed results line, when no search can start now or the text is blank;
+    /// the box is then left as it was.</summary>
+    internal async Task<bool> SearchForAsync(string text)
+    {
+        // CanStart covers start-up, a gate holder (an update, a dialog), the held close and dispose
+        if (string.IsNullOrWhiteSpace(text) || !CanStart())
+        {
+            SetResultsAction(AppText.SearchCantStart);
+            return false;
+        }
+
+        if (!HasDataset)
+        {
+            SetResultsAction(AppText.ResultsNoDataset);
+            return false;
+        }
+
+        SearchText = text;
+        await RunSearchAsync(text);
+        return true;
+    }
+
+    private async Task RunSearchAsync(string input, bool keepCheckIfSameQuery = false)
     {
         if (_disposed)
         {
@@ -576,6 +871,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         int version = ++_searchVersion;
+        _newestSearchInput = input;
+        _newestSearchKeepsCheck = keepCheckIfSameQuery;
+        // This search owns the results line now, so an AbuseIPDB check still out for the last one is called off. A
+        // settings rerun waits for its result instead: the same address keeps the check and its line
+        if (!keepCheckIfSameQuery)
+        {
+            _abuseCheckCts?.Cancel();
+        }
+
         _isSearching = true;
         RefreshCommandStates();
         ResultsSummaryText = AppText.Searching;
@@ -600,15 +904,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // The commands are refreshed after the result is applied, because their gates read the query and the count it sets
         _isSearching = false;
-        RefreshCommandStates();
         if (result is not null && !_disposed)
         {
-            ApplySearch(result);
+            // A settings rerun that shows the same address again keeps the check, and keeps the line only while it is the
+            // check's (a copy or a failed action is replaced by the address note); anything else replaces them both
+            bool keep = keepCheckIfSameQuery
+                && result.Outcome is SearchOutcome.Found or SearchOutcome.NoResults
+                && result.Query is { Kind: SearchKind.IpAddress }
+                && _lastQuery is { Kind: SearchKind.IpAddress } shown
+                && string.Equals(shown.Text, result.Query.Text, StringComparison.Ordinal);
+            if (keep)
+            {
+                ApplySearch(result, keepActionLine: _checkOwnsLine);
+            }
+            else
+            {
+                _abuseCheckCts?.Cancel();
+                ApplySearch(result);
+            }
         }
+
+        RefreshCommandStates();
     }
 
-    private void ApplySearch(SearchResult result)
+    private void ApplySearch(SearchResult result, bool keepActionLine = false)
     {
         if (result.Outcome == SearchOutcome.Found && result.Query is { } found)
         {
@@ -627,7 +948,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             else
             {
                 ResultsSummaryText = AppText.IpContained(result.TotalCount, found.Text);
-                SetResultsAction(AppText.ExportIpNote);
+                if (!keepActionLine)
+                {
+                    SetResultsAction(AppText.ExportIpNote);
+                }
             }
 
             return;
@@ -635,7 +959,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         ReplaceResults([]);
         ResultsSummaryText = "";
-        SetResultsAction("");
+        if (!keepActionLine)
+        {
+            SetResultsAction("");
+        }
+
         _totalCount = 0;
         switch (result.Outcome)
         {
@@ -724,6 +1052,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
         }
 
+        // Read once, just before the write, so the note says what the export read; a save during it doesn't change it
+        bool unsaved = _unsaved?.HasUnsavedChanges == true;
         ExportResult result;
         try
         {
@@ -735,19 +1065,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        SetResultsAction(ExportMessage(result));
+        SetResultsAction(ExportMessage(result, unsaved));
     }
 
-    private static string ExportMessage(ExportResult result)
+    private static string ExportMessage(ExportResult result, bool unsaved)
     {
         switch (result.Failure)
         {
             case ExportFailure.FolderUnavailable:
                 return AppText.ExportFolderUnavailable;
             case ExportFailure.WriteFailed:
-                return AppText.ExportWriteFailed;
+                return result.FailedFile is { } failed
+                    ? AppText.ExportFileFailed(failed, result.Files, result.OldFilesLeft, unsaved)
+                    : AppText.ExportWriteFailed;
             case ExportFailure.NothingToExport:
                 return AppText.NothingExported;
+            case ExportFailure.ExceptionsUnreadable:
+                return AppText.ExceptionsUnreadable;
         }
 
         if (result.NetworksWritten == 0)
@@ -756,7 +1090,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         string text = AppText.Exported(result.NetworksWritten, result.Files.Count);
-        return result.LargeRangesLeftOut > 0 ? text + AppText.LargeRangesLeftOut(result.LargeRangesLeftOut) : text;
+        if (result.LargeRangesLeftOut > 0)
+        {
+            text += AppText.LargeRangesLeftOut(result.LargeRangesLeftOut);
+        }
+
+        return text + AppText.ExceptionsApplied(result.ExceptionCuts, result.ExceptionRemovals, "network", "networks")
+            + AppText.OldFeedFilesLeft(result.OldFilesLeft) + (unsaved ? AppText.UnsavedSettingsNote : "");
     }
 
     private Task CopyResultsAsync()
@@ -782,33 +1122,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await _ui.OpenFolderAsync(folder);
     }, AppText.FolderOpenFailed);
 
-    private async Task OpenSettingsAsync()
+    // Off while a search is out: the rows shown are the earlier search's, and the page would be the newer one's
+    private bool CanOpenWebPage(WebPage? page) =>
+        !_disposed && !_closingAfterStartStep && !_isSearching && _totalCount > 0 && page is not null;
+
+    // The pages come from the search shown, never from a row: every row of a search shares its ASN or address. An
+    // address goes out only once PublicAddress has judged it, so a private or documentation address opens nothing.
+    private WebPage? IpinfoPage() => _lastQuery switch
     {
-        if (!CanStart())
+        { Kind: SearchKind.Asn } query => WebPage.IpInfoAsn(query.Asn),
+        _ => SearchedPublicAddress() is { } address ? WebPage.IpInfoAddress(address) : null,
+    };
+
+    private WebPage? AbuseIpDbPage() => SearchedPublicAddress() is { } address ? WebPage.AbuseIpDbCheck(address) : null;
+
+    private PublicAddress? SearchedPublicAddress() =>
+        _lastQuery is { Kind: SearchKind.IpAddress, IpBytes: { } bytes } && PublicAddress.TryCreate(bytes, out PublicAddress? address)
+            ? address
+            : null;
+
+    // No success line: the launcher's yes means only that the browser was asked
+    private Task OpenInIpinfoAsync() => OpenWebPageAsync(IpinfoPage());
+
+    private Task OpenInAbuseIpDbAsync() => OpenWebPageAsync(AbuseIpDbPage());
+
+    private Task OpenWebPageAsync(WebPage? page)
+    {
+        if (!CanOpenWebPage(page) || page is null)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        UserSettings? edited = await ShowDialogAsync(() => _ui.EditSettingsAsync(_service.Settings, _defaultExportFolder));
-        if (edited is null || !CanStart())
-        {
-            return;
-        }
+        return SafeUiActionAsync(() => _ui.OpenWebPageAsync(page), AppText.WebPageOpenFailed);
+    }
 
-        bool ipv6Changed = edited.IPv6Enabled != _service.Settings.IPv6Enabled;
-        bool saved;
-        try
+    /// <summary>
+    /// Follows a settings save made anywhere: the export folder is resolved again, the update check runs again when
+    /// IPv6 was turned on or off, and the open search runs again.
+    /// </summary>
+    internal async Task ApplySavedSettingsAsync(bool ipv6Changed)
+    {
+        if (_disposed || !_started)
         {
-            saved = await _service.SaveSettingsAsync(edited);
-        }
-        catch (Exception)
-        {
-            saved = false;
-        }
-
-        if (!saved)
-        {
-            SetResultsAction(AppText.SettingsSaveFailed);
             return;
         }
 
@@ -820,24 +1175,197 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             StartCheck();
         }
 
-        // The badges of the open results depend on the settings, so the search runs again
-        if (_lastQuery is { } query)
+        // The badges of the open results depend on the settings, so the search runs again: the newest one started
+        // when it is still out (its answer used the old settings), else the one shown. A rerun of the same address keeps
+        // an AbuseIPDB check, and its line only while the check wrote it; a user's search still out has already called
+        // its check off, so it keeps none
+        if (_isSearching && _newestSearchInput is { } newest)
         {
-            await RunSearchAsync(query.Text);
+            await RunSearchAsync(newest, _newestSearchKeepsCheck);
+        }
+        else if (_lastQuery is { } query)
+        {
+            await RunSearchAsync(query.Text, keepCheckIfSameQuery: true);
         }
     }
 
-    private async Task ResetTokenAsync()
+    /// <summary>
+    /// Sends the searched address to AbuseIPDB and writes the answer to the results line. A missing or refused key
+    /// asks for one once, saves it and checks once more. A search the user starts, or a settings rerun that doesn't show
+    /// the same address again, calls the check off and owns the line. The key passes straight from the dialog to the
+    /// service and is kept nowhere here.
+    /// </summary>
+    private async Task CheckAbuseAsync()
     {
-        if (!CanStart())
+        if (!CanCheckAbuse() || _abuse is not { } abuse || _lastQuery is not { } query)
         {
             return;
         }
 
-        bool confirmed = await ConfirmAsync(AppText.ResetTokenTitle, AppText.ResetTokenBody, AppText.ResetTokenButton);
-        if (!confirmed || !CanStart())
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _abuseCheckCts = cts;
+        _isCheckingAbuse = true;
+        RefreshCommandStates();
+        SetResultsAction(AppText.CheckingAbuse, fromCheck: true);
+        try
         {
-            return;
+            AbuseCheckResult result = await abuse.CheckAsync(query, cts.Token);
+            if (IsStaleCheck(cts))
+            {
+                return;
+            }
+
+            if (result.Failure is AbuseIpDbFailure.NoKey or AbuseIpDbFailure.KeyRejected)
+            {
+                bool replacing = result.Failure == AbuseIpDbFailure.KeyRejected;
+
+                // The prompt asks only while nothing else holds the gate (another dialog, an update, the Settings
+                // page's own key prompt); otherwise it is Busy and the line says nothing was checked
+                AbuseKeyOutcome asked = _abuseKeys is null
+                    ? AbuseKeyOutcome.Busy
+                    : await _abuseKeys.AskAndSaveAsync(replacing ? AbuseKeyAsk.Rejected : AbuseKeyAsk.Missing);
+                if (IsStaleCheck(cts))
+                {
+                    return;
+                }
+
+                switch (asked)
+                {
+                    case AbuseKeyOutcome.Saved:
+                        // One more check with the saved key; whatever it says goes to the line, and nothing asks again
+                        result = await abuse.CheckAsync(query, cts.Token);
+                        if (IsStaleCheck(cts))
+                        {
+                            return;
+                        }
+
+                        break;
+                    case AbuseKeyOutcome.DialogFailed:
+                        SetResultsAction(AppText.Generic, fromCheck: true);
+                        return;
+                    case AbuseKeyOutcome.NotAKey:
+                        SetResultsAction(AppText.AbuseKeyNotAKey, fromCheck: true);
+                        return;
+                    case AbuseKeyOutcome.SaveFailed:
+                        SetResultsAction(AppText.AbuseKeySaveFailed, fromCheck: true);
+                        return;
+                    default:
+                        // Busy or Cancelled
+                        SetResultsAction(replacing ? AppText.AbuseKeyReplaceCancelled : AppText.AbuseKeyCancelled, fromCheck: true);
+                        return;
+                }
+            }
+
+            SetResultsAction(AbuseLineFor(result), fromCheck: true);
+        }
+        catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+        {
+            // The check was called off by a search that owns the line, or the window is closing: nothing to report
+        }
+        catch (Exception)
+        {
+            if (!IsStaleCheck(cts))
+            {
+                SetResultsAction(AppText.AbuseCheckFailed, fromCheck: true);
+            }
+        }
+        finally
+        {
+            if (_abuseCheckCts == cts)
+            {
+                _abuseCheckCts = null;
+            }
+
+            _isCheckingAbuse = false;
+            RefreshCommandStates();
+        }
+    }
+
+    // The check was called off (a search the user started, or a rerun that doesn't keep it), or the window has closed
+    private bool IsStaleCheck(CancellationTokenSource cts) => _disposed || cts.IsCancellationRequested;
+
+    // The final answer of a check. NoKey and KeyRejected reach here only after a saved key, so they are not asked about again
+    private static string AbuseLineFor(AbuseCheckResult result) => result.Failure switch
+    {
+        AbuseIpDbFailure.None when result.Check is { } check => AppText.AbuseScore(check),
+        AbuseIpDbFailure.NotPublic => AppText.AbuseNotSent,
+        AbuseIpDbFailure.KeyUnavailable => AppText.AbuseKeyUnavailable,
+        AbuseIpDbFailure.NoKey => AppText.AbuseKeyUnreadable,
+        AbuseIpDbFailure.KeyRejected => AppText.AbuseKeyRejected,
+        AbuseIpDbFailure.RateLimited => AppText.AbuseRateLimited(result.RetryAt),
+        AbuseIpDbFailure.Offline => AppText.AbuseOffline,
+        AbuseIpDbFailure.ServiceError => AppText.AbuseCheckFailed,
+        AbuseIpDbFailure.BadResponse => AppText.AbuseAnswerUnreadable,
+        _ => AppText.AbuseCheckFailed,
+    };
+
+    /// <summary>
+    /// Asks to confirm, removes the saved token and asks for a new one. Writes no results line: the outcome says what
+    /// happened. A saved token starts the update when there is no dataset and the check otherwise, and returns once
+    /// either has started: the update holds the gate itself (IsBusy) until it ends, and its task is
+    /// <see cref="PendingUpdate"/>.
+    /// </summary>
+    internal async Task<TokenResetOutcome> ResetTokenAsync()
+    {
+        if (!CanStart())
+        {
+            return TokenResetOutcome.Busy;
+        }
+
+        TokenResetOutcome outcome;
+        // One hold from the confirmation to the save, so nothing else starts while the token is half replaced
+        using (_gate.Hold())
+        {
+            outcome = await ConfirmClearAndAskAsync();
+        }
+
+        if (outcome != TokenResetOutcome.Saved)
+        {
+            return outcome;
+        }
+
+        // The window closed while the token was saved: the token stays saved, and nothing more starts
+        if (_disposed)
+        {
+            return TokenResetOutcome.Saved;
+        }
+
+        // Nothing is awaited between the release and the update setting IsBusy, which it does before its first await,
+        // so the gate is busy by the time this returns
+        if (!HasDataset)
+        {
+            // Without a dataset, a new token goes straight to the download, as on the first run. It isn't awaited, so
+            // the page that asked has its outcome now rather than after the download. RunUpdateAsync catches the
+            // service's failures itself. The task is kept only so the tests can await it; keeping it doesn't observe it.
+            PendingUpdate = RunUpdateAsync();
+            return TokenResetOutcome.Saved;
+        }
+
+        StartCheck();
+        return TokenResetOutcome.Saved;
+    }
+
+    // The held part of the reset. Saved means the new token is saved; the caller then starts the update or the check.
+    private async Task<TokenResetOutcome> ConfirmClearAndAskAsync()
+    {
+        bool confirmed;
+        try
+        {
+            confirmed = await _ui.ConfirmAsync(AppText.ResetTokenTitle, AppText.ResetTokenBody, AppText.ResetTokenButton);
+        }
+        catch (Exception)
+        {
+            return TokenResetOutcome.DialogFailed;
+        }
+
+        if (!confirmed)
+        {
+            return TokenResetOutcome.Declined;
+        }
+
+        if (_disposed)
+        {
+            return TokenResetOutcome.Busy;
         }
 
         bool cleared;
@@ -852,37 +1380,41 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         if (!cleared)
         {
-            SetResultsAction(AppText.Generic);
-            return;
+            return TokenResetOutcome.ClearFailed;
         }
 
-        string? token = await ShowDialogAsync(() => _ui.PromptForTokenAsync(TokenPromptReason.Reset));
+        // The window closed while the token was removed: no prompt opens over a closed window
         if (_disposed)
         {
-            return;
+            return TokenResetOutcome.NoNewToken;
+        }
+
+        bool failedToOpen = false;
+        string? token = await ShowDialogAsync(() => _ui.PromptForTokenAsync(TokenPromptReason.Reset), () => failedToOpen = true);
+        if (_disposed)
+        {
+            return TokenResetOutcome.NoNewToken;
+        }
+
+        if (failedToOpen)
+        {
+            ShowNoTokenAfterReset();
+            return TokenResetOutcome.DialogFailed;
         }
 
         if (string.IsNullOrWhiteSpace(token))
         {
             ShowNoTokenAfterReset();
-            return;
+            return TokenResetOutcome.NoNewToken;
         }
 
         if (!await SaveTokenAsync(token))
         {
-            SetResultsAction(AppText.TokenSaveFailed);
             ShowNoTokenAfterReset();
-            return;
+            return TokenResetOutcome.SaveFailed;
         }
 
-        if (!HasDataset)
-        {
-            // Without a dataset, a new token goes straight to the download, as on the first run
-            await RunUpdateAsync();
-            return;
-        }
-
-        StartCheck();
+        return TokenResetOutcome.Saved;
     }
 
     private void ShowNoTokenAfterReset()
@@ -932,44 +1464,41 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    // The dialog can fail to show; the lock stops a second click opening a second dialog meanwhile
+    // The dialog can fail to show; the hold stops a second click opening a second dialog meanwhile
     private async Task<bool> ConfirmAsync(string title, string message, string confirmText)
     {
-        _interactionLocked = true;
-        RefreshCommandStates();
+        using IDisposable hold = _gate.Hold();
         try
         {
             return await _ui.ConfirmAsync(title, message, confirmText);
         }
         catch (Exception)
         {
-            ResultsActionText = AppText.Generic;
+            SetResultsAction(AppText.Generic);
             return false;
-        }
-        finally
-        {
-            _interactionLocked = false;
-            RefreshCommandStates();
         }
     }
 
-    private async Task<T?> ShowDialogAsync<T>(Func<Task<T?>> show) where T : class
+    // A dialog that fails to show writes the generic line to the results line, or calls failed instead when given
+    private async Task<T?> ShowDialogAsync<T>(Func<Task<T?>> show, Action? failed = null) where T : class
     {
-        _interactionLocked = true;
-        RefreshCommandStates();
+        using IDisposable hold = _gate.Hold();
         try
         {
             return await show();
         }
         catch (Exception)
         {
-            ResultsActionText = AppText.Generic;
+            if (failed is null)
+            {
+                SetResultsAction(AppText.Generic);
+            }
+            else
+            {
+                failed();
+            }
+
             return null;
-        }
-        finally
-        {
-            _interactionLocked = false;
-            RefreshCommandStates();
         }
     }
 
@@ -1003,20 +1532,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IsProgressIndeterminate = indeterminate;
     }
 
-    private void SetResultsAction(string text)
+    private void SetResultsAction(string text, bool fromCheck = false)
     {
+        _checkOwnsLine = fromCheck;
         ResultsActionText = text;
         HasResultsAction = text.Length > 0;
     }
 
     private void RefreshDatasetFacts()
     {
-        DatasetFactsText = FactsFor(_service.Dataset);
+        DatasetInfo? dataset = _service.Dataset;
+        DatasetFactsText = FactsFor(dataset);
         RefreshCommandStates();
+        // DatasetInfo is a record, so a refresh that reads the same dataset again compares equal and raises nothing
+        if (dataset != _datasetShown)
+        {
+            _datasetShown = dataset;
+            DatasetChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private static string FactsFor(DatasetInfo? dataset) =>
         dataset is null ? AppText.NoDatasetFacts : AppText.DatasetFacts(dataset.DownloadedOn, dataset.RangeCount, dataset.IncludesIPv6);
+
+    private void GateChanged(object? sender, EventArgs e) => RefreshCommandStates();
 
     private void RefreshCommandStates()
     {
@@ -1026,8 +1565,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ExportCommand.NotifyCanExecuteChanged();
         CopyResultsCommand.NotifyCanExecuteChanged();
         OpenExportFolderCommand.NotifyCanExecuteChanged();
-        OpenSettingsCommand.NotifyCanExecuteChanged();
-        ResetTokenCommand.NotifyCanExecuteChanged();
+        CheckAbuseCommand.NotifyCanExecuteChanged();
+        OpenInIpinfoCommand.NotifyCanExecuteChanged();
+        OpenInAbuseIpDbCommand.NotifyCanExecuteChanged();
+        RefreshStopCommands();
     }
 
     public void Dispose()
@@ -1038,6 +1579,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         _disposed = true;
+        _gate.Changed -= GateChanged;
         CancelCheck();
         _lifetime.Cancel();
         CancelUpdate();

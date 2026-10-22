@@ -62,6 +62,27 @@ public sealed class GoogleCloudFeedOutputTests : IDisposable
     }
 
     [Fact]
+    public async Task Exceptions_That_Overlap_No_Range_Leave_The_Bytes_As_They_Were()
+    {
+        (CheckResult check, GoogleCloudFeedService service, FakeIpInfoService ipinfo) = await CheckAsync("us-central1", includeGlobal: false);
+        // Next to each range but inside none, and an IPv6 block whose numbers equal 34.80.1.0/24
+        ipinfo.Exceptions = RangeSubtractionTests.List(
+            "34.80.0.255", "34.80.2.0/24", "35.191.0.0/24", "35.191.2.0", "2600:1900:10::/44", "2600:18ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "::2250:100/120");
+
+        CloudFeedWriteResult written = await WriteAllAsync(service, check.Check!);
+
+        Assert.Equal(0, written.ExceptionCuts);
+        Assert.Equal(0, written.ExceptionRemovals);
+        Assert.Equal(
+            Bytes(Header("us-central1", "IPv4", entries: 2, confirmed: 2) + "34.80.1.0/24\n35.191.1.0/24\n"),
+            File.ReadAllBytes(written.Files[0]));
+        Assert.Equal(
+            Bytes(Header("us-central1", "IPv6", entries: 2, confirmed: 2) + "2600:1900::/44\n2600:1900:4000::/44\n"),
+            File.ReadAllBytes(written.Files[1]));
+    }
+
+    [Fact]
     public async Task Region_And_Global_Lists_The_Region_First_Then_Global_And_Names_Both_Files_With_Global()
     {
         (CheckResult check, GoogleCloudFeedService service, _) = await CheckAsync("us-central1", includeGlobal: true);

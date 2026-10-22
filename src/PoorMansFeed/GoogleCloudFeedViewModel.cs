@@ -20,8 +20,9 @@ public sealed class GoogleCloudFeedViewModel : CloudFeedPageViewModel
     private RegionOption? _selectedRegion;
     private IReadOnlyList<RegionOption> _regions = [];
 
-    public GoogleCloudFeedViewModel(IGoogleCloudFeedService feeds, IIpInfoService ipinfo, IUiServices ui, string? defaultExportFolder = null)
-        : base(feeds, ipinfo, ui, defaultExportFolder, AppText.GoogleCloudEmptyInitial)
+    public GoogleCloudFeedViewModel(IGoogleCloudFeedService feeds, IIpInfoService ipinfo, IUiServices ui, IWorkGate gate,
+                                    string? defaultExportFolder = null, IUnsavedSettings? unsaved = null)
+        : base(feeds, ipinfo, ui, defaultExportFolder, AppText.GoogleCloudEmptyInitial, gate, unsaved)
     {
         _google = feeds;
         _ipinfo = ipinfo;

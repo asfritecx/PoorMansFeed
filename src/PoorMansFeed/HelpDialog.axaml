@@ -9,30 +9,40 @@
         CanResize="False"
         ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner">
-  <StackPanel Margin="24" Spacing="16">
-    <TextBlock x:Name="TitleText" Text="{x:Static ui:AppInfo.HelpTitle}" Classes="subtitle" TextWrapping="Wrap" />
+  <!-- The sections scroll inside a capped height, so the dialog is at most 640px of content and Close stays in view -->
+  <Grid Margin="24" RowDefinitions="Auto,Auto" RowSpacing="16">
+    <ScrollViewer x:Name="HelpScroll" MaxHeight="540">
+      <StackPanel Spacing="16">
+        <TextBlock x:Name="TitleText" Text="{x:Static ui:AppInfo.HelpTitle}" Classes="subtitle" TextWrapping="Wrap" />
 
-    <StackPanel Spacing="4">
-      <TextBlock Text="{x:Static vm:AppText.HelpTokenHeading}" Classes="card-title" />
-      <TextBlock Text="{x:Static vm:AppText.HelpTokenText}" TextWrapping="Wrap" />
-    </StackPanel>
+        <StackPanel Spacing="4">
+          <TextBlock Text="{x:Static vm:AppText.HelpTokenHeading}" Classes="card-title" />
+          <TextBlock Text="{x:Static vm:AppText.HelpTokenText}" TextWrapping="Wrap" />
+        </StackPanel>
 
-    <StackPanel Spacing="4">
-      <TextBlock Text="{x:Static vm:AppText.HelpDatasetHeading}" Classes="card-title" />
-      <TextBlock x:Name="DatasetText" TextWrapping="Wrap" />
-    </StackPanel>
+        <StackPanel Spacing="4">
+          <TextBlock Text="{x:Static vm:AppText.HelpDatasetHeading}" Classes="card-title" />
+          <TextBlock x:Name="DatasetText" TextWrapping="Wrap" />
+        </StackPanel>
 
-    <StackPanel Spacing="4">
-      <TextBlock Text="{x:Static vm:AppText.HelpSearchHeading}" Classes="card-title" />
-      <TextBlock x:Name="SearchText" TextWrapping="Wrap" />
-    </StackPanel>
+        <StackPanel Spacing="4">
+          <TextBlock Text="{x:Static vm:AppText.HelpSearchHeading}" Classes="card-title" />
+          <TextBlock x:Name="SearchText" TextWrapping="Wrap" />
+        </StackPanel>
 
-    <StackPanel Spacing="4">
-      <TextBlock Text="{x:Static vm:AppText.HelpExportHeading}" Classes="card-title" />
-      <TextBlock Text="{x:Static vm:AppText.HelpExportText}" TextWrapping="Wrap" />
-    </StackPanel>
+        <StackPanel Spacing="4">
+          <TextBlock Text="{x:Static vm:AppText.HelpExportHeading}" Classes="card-title" />
+          <TextBlock Text="{x:Static vm:AppText.HelpExportText}" TextWrapping="Wrap" />
+        </StackPanel>
 
-    <Button Content="{x:Static vm:AppText.Close}" HorizontalAlignment="Right" MinWidth="88"
+        <StackPanel Spacing="4">
+          <TextBlock Text="{x:Static vm:AppText.HelpAbuseHeading}" Classes="card-title" />
+          <TextBlock x:Name="AbuseText" TextWrapping="Wrap" />
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+
+    <Button Grid.Row="1" Content="{x:Static vm:AppText.Close}" HorizontalAlignment="Right" MinWidth="88"
             IsDefault="True" IsCancel="True" Click="CloseClicked" />
-  </StackPanel>
+  </Grid>
 </Window>

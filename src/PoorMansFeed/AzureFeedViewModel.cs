@@ -33,8 +33,8 @@ public sealed class AzureFeedViewModel : CloudFeedPageViewModel
     private IReadOnlyList<AzureTagOption> _regions = [];
 
     public AzureFeedViewModel(IAzureFeedService feeds, IIpInfoService ipinfo, IUiServices ui, TimeProvider time,
-                              string? defaultExportFolder = null)
-        : base(feeds, ipinfo, ui, defaultExportFolder, AppText.AzureLoading)
+                              IWorkGate gate, string? defaultExportFolder = null, IUnsavedSettings? unsaved = null)
+        : base(feeds, ipinfo, ui, defaultExportFolder, AppText.AzureLoading, gate, unsaved)
     {
         _azure = feeds;
         _ipinfo = ipinfo;

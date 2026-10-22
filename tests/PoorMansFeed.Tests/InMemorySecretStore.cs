@@ -29,10 +29,14 @@ internal sealed class InMemorySecretStore : ISecretStore
     /// <summary>A delete that fails keeps the secret and the marker, as both real stores do.</summary>
     public Exception? DeleteFailure { get; set; }
 
+    /// <summary>Runs at the start of every read, so a test can hold a caller inside one.</summary>
+    public Action? BeforeRead { get; set; }
+
     public bool Exists => Marker;
 
     public byte[]? Read()
     {
+        BeforeRead?.Invoke();
         Reads++;
         if (ReadFailure is not null)
             throw ReadFailure;

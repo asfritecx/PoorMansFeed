@@ -21,6 +21,54 @@ public sealed class KeychainSecretStoreTests
     private static string ThrowawayService() => "PoorMansFeed.Tests." + Guid.NewGuid().ToString("N");
 
     [Fact]
+    public void The_service_and_account_names_stay_fixed_and_apart()
+    {
+        // Makes no store, so it runs on every macOS test run without the variable; the guard is only for CA1416.
+        // Changing a name loses every saved secret, because the item is found by these names alone; equal account
+        // names would make one secret replace the other.
+        if (!OperatingSystem.IsMacOS())
+        {
+            Assert.Skip("The Keychain names are used only on macOS.");
+            return;
+        }
+
+        Assert.Equal("PoorMansFeed", KeychainSecretStore.ServiceName);
+        Assert.Equal("ipinfo-api-token", KeychainSecretStore.AccountName);
+        Assert.Equal("abuseipdb-api-key", KeychainSecretStore.AbuseIpDbAccountName);
+        Assert.NotEqual(KeychainSecretStore.AccountName, KeychainSecretStore.AbuseIpDbAccountName);
+        Assert.Equal("config-key", KeychainSecretStore.ConfigKeyAccountName);
+        Assert.NotEqual(KeychainSecretStore.AccountName, KeychainSecretStore.ConfigKeyAccountName);
+        Assert.NotEqual(KeychainSecretStore.AbuseIpDbAccountName, KeychainSecretStore.ConfigKeyAccountName);
+    }
+
+    [Fact]
+    public void Raw_key_bytes_round_trip()
+    {
+        // The config key is 32 raw bytes, not text, so zero and 0xFF bytes must come back as they were saved
+        if (!OperatingSystem.IsMacOS() || !Enabled)
+        {
+            Assert.Skip(SkipReason);
+            return;
+        }
+
+        byte[] key = [0x00, 0xFF, .. Enumerable.Range(1, 28).Select(i => (byte)i), 0xFF, 0x00];
+        using var temp = new TempFolder();
+        var store = new KeychainSecretStore(temp.File("config_key"), ThrowawayService(), "test");
+        try
+        {
+            store.Write(key);
+            Assert.Equal(key, store.Read());
+
+            store.Delete();
+            Assert.False(store.Exists);
+        }
+        finally
+        {
+            store.Delete();
+        }
+    }
+
+    [Fact]
     public void Write_Read_overwrite_and_Delete_round_trip()
     {
         if (!OperatingSystem.IsMacOS() || !Enabled)
@@ -80,6 +128,47 @@ public sealed class KeychainSecretStoreTests
         finally
         {
             writer.Delete();
+        }
+    }
+
+    [Fact]
+    public void Two_accounts_under_one_service_keep_their_own_secrets()
+    {
+        // The IPinfo token and the AbuseIPDB key share the service name and differ by account and marker
+        if (!OperatingSystem.IsMacOS() || !Enabled)
+        {
+            Assert.Skip(SkipReason);
+            return;
+        }
+
+        using var temp = new TempFolder();
+        string service = ThrowawayService();
+        var a = new KeychainSecretStore(temp.File("ipinfo_token"), service, "test-a");
+        var b = new KeychainSecretStore(temp.File("abuseipdb_key"), service, "test-b");
+        try
+        {
+            a.Write(First);
+            b.Write(Second);
+            Assert.Equal(First, a.Read());
+            Assert.Equal(Second, b.Read());
+
+            a.Delete();
+            Assert.False(a.Exists);
+            Assert.Null(a.Read());
+            Assert.True(b.Exists);
+            Assert.Equal(Second, b.Read());
+        }
+        finally
+        {
+            // b is removed even when removing a throws, so no throwaway item is left in the login Keychain
+            try
+            {
+                a.Delete();
+            }
+            finally
+            {
+                b.Delete();
+            }
         }
     }
 

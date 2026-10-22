@@ -16,6 +16,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
     private readonly ICloudFeedService _feeds;
     private readonly IIpInfoService _ipinfo;
     private readonly IUiServices _ui;
+    private readonly IWorkGate _gate;
+    private readonly IUnsavedSettings? _unsaved;
     private readonly string _defaultExportFolder;
     private readonly CancellationTokenSource _lifetime = new();
 
@@ -30,11 +32,14 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
     private string _actionText = "";
 
     protected CloudFeedPageViewModel(ICloudFeedService feeds, IIpInfoService ipinfo, IUiServices ui,
-                                     string? defaultExportFolder, string initialEmptyText)
+                                     string? defaultExportFolder, string initialEmptyText, IWorkGate gate,
+                                     IUnsavedSettings? unsaved)
     {
         _feeds = feeds ?? throw new ArgumentNullException(nameof(feeds));
         _ipinfo = ipinfo ?? throw new ArgumentNullException(nameof(ipinfo));
         _ui = ui ?? throw new ArgumentNullException(nameof(ui));
+        _gate = gate ?? throw new ArgumentNullException(nameof(gate));
+        _unsaved = unsaved;
         _defaultExportFolder = defaultExportFolder ?? Path.Combine(ipinfo.DataFolder, "exports");
         _emptyText = initialEmptyText ?? throw new ArgumentNullException(nameof(initialEmptyText));
         Rows = [];
@@ -223,41 +228,46 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         }
 
         CloudFeedPlan plan = _feeds.PlanWrite(_check, ticked);
-        IReadOnlyCollection<CidrBlock> large = [];
-        if (plan.LargeRanges.Count > 0)
-        {
-            var choices = plan.LargeRanges.Select(LargeRangeChoice.From).ToList();
-            var prompt = new LargeRangePrompt(
-                AppText.CloudLargeRangesTitle,
-                AppText.CloudLargeRangesMessage(choices.Count, _ipinfo.Settings.IPv4MinPrefix, _ipinfo.Settings.IPv6MinPrefix),
-                choices);
-            IReadOnlyList<string>? chosen = await _ui.ChooseLargeRangesAsync(prompt);
-            if (chosen is null || _disposed || _check is null)
-                return;
-
-            if (!_check.MatchesWriteSettings(_ipinfo.Settings))
-            {
-                ActionText = AppText.CloudSettingsChanged;
-                return;
-            }
-
-            var chosenText = new HashSet<string>(chosen, StringComparer.Ordinal);
-            var includedLarge = new List<CidrBlock>();
-            foreach (CheckedRange range in plan.Included)
-            {
-                if (chosenText.Contains(range.Prefix.Block.Text))
-                    includedLarge.Add(range.Prefix.Block);
-            }
-
-            large = includedLarge;
-        }
-
+        // Working from the press to the end, the large-range question included
         IsWorking = true;
         try
         {
+            IReadOnlyCollection<CidrBlock> large = [];
+            if (plan.LargeRanges.Count > 0)
+            {
+                var choices = plan.LargeRanges.Select(LargeRangeChoice.From).ToList();
+                var prompt = new LargeRangePrompt(
+                    AppText.CloudLargeRangesTitle,
+                    AppText.CloudLargeRangesMessage(choices.Count, _ipinfo.Settings.IPv4MinPrefix, _ipinfo.Settings.IPv6MinPrefix),
+                    choices);
+                IReadOnlyList<string>? chosen = await ChooseLargeRangesAsync(prompt);
+                if (chosen is null || _disposed || _check is null)
+                    return;
+
+                if (!_check.MatchesWriteSettings(_ipinfo.Settings))
+                {
+                    ActionText = AppText.CloudSettingsChanged;
+                    return;
+                }
+
+                var chosenText = new HashSet<string>(chosen, StringComparer.Ordinal);
+                var includedLarge = new List<CidrBlock>();
+                foreach (CheckedRange range in plan.Included)
+                {
+                    if (chosenText.Contains(range.Prefix.Block.Text))
+                        includedLarge.Add(range.Prefix.Block);
+                }
+
+                large = includedLarge;
+            }
+
+            // Read once, just before the write, so the note says what the write read; a save during it doesn't change it
+            bool unsaved = _unsaved?.HasUnsavedChanges == true;
             CloudFeedWriteResult written = await _feeds.WriteAsync(plan, large, _lifetime.Token);
             if (!_disposed)
-                ActionText = WriteMessage(written);
+            {
+                ActionText = WriteMessage(written, unsaved);
+            }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -271,6 +281,31 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         {
             if (!_disposed)
                 IsWorking = false;
+        }
+    }
+
+    // The question holds the shared gate like every other dialog, so nothing on another page (the macOS menu's Reset
+    // API token) opens over it. Write feed itself doesn't wait on the gate: holding is enough, as dialogs are modal.
+    // It isn't asked while something else holds the gate, because that holder may show its own dialog later (Reset token
+    // holds it while the token is removed, then asks for a new one)
+    private async Task<IReadOnlyList<string>?> ChooseLargeRangesAsync(LargeRangePrompt prompt)
+    {
+        if (_gate.IsHeld)
+        {
+            ActionText = AppText.CloudLargeRangesBusy;
+            return null;
+        }
+
+        using IDisposable hold = _gate.Hold();
+        try
+        {
+            return await _ui.ChooseLargeRangesAsync(prompt);
+        }
+        catch (Exception)
+        {
+            if (!_disposed)
+                ActionText = AppText.Generic;
+            return null;
         }
     }
 
@@ -320,18 +355,28 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         RefreshCommands();
     }
 
-    private static string WriteMessage(CloudFeedWriteResult result)
+    private static string WriteMessage(CloudFeedWriteResult result, bool unsaved)
     {
         switch (result.Failure)
         {
             case CloudFeedWriteFailure.FolderUnavailable:
                 return AppText.ExportFolderUnavailable;
             case CloudFeedWriteFailure.WriteFailed:
-                return AppText.CloudWriteFailed;
+                return AppText.CloudWriteFailedLine(result.FailedFile, result.Files, result.OldFilesLeft, unsaved);
             case CloudFeedWriteFailure.SettingsChanged:
                 return AppText.CloudSettingsChanged;
+            case CloudFeedWriteFailure.ExceptionsUnreadable:
+                return AppText.ExceptionsUnreadable;
             case CloudFeedWriteFailure.NothingToWrite:
-                return result.LargeRangesLeftOut > 0 ? AppText.CloudAllLeftOut : AppText.CloudNothingTicked;
+                // The exceptions decided this line, so it names the unsaved changes as a written feed's line does
+                return (result.LargeRangesLeftOut > 0, result.ExceptionRemovals > 0) switch
+                {
+                    (true, true) => AppText.CloudAllLeftOutOrExcepted,
+                    (true, false) => AppText.CloudAllLeftOut,
+                    (false, true) => AppText.CloudAllExcepted,
+                    _ => AppText.CloudNothingTicked,
+                } + AppText.OldFeedFilesLeft(result.OldFilesLeft)
+                    + (unsaved && result.ExceptionRemovals > 0 ? AppText.UnsavedSettingsNote : "");
         }
 
         string text = AppText.CloudFeedWritten(result.RangesWritten, result.Files.Count);
@@ -341,6 +386,7 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         if (result.UnconfirmedWritten > 0)
             text += AppText.CloudUnconfirmed(result.UnconfirmedWritten);
 
-        return text;
+        return text + AppText.ExceptionsApplied(result.ExceptionCuts, result.ExceptionRemovals, "range", "ranges")
+            + AppText.OldFeedFilesLeft(result.OldFilesLeft) + (unsaved ? AppText.UnsavedSettingsNote : "");
     }
 }

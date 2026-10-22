@@ -385,7 +385,7 @@ public sealed class AzureFeedViewModelTests : IDisposable
         using var http = new HttpClient(handler);
         var first = new AzureFeedViewModel(
             new AzureFeedService(_ipinfo, http, new CoreOptions(), _time, _temp.Paths, _temp.ExportFolder),
-            _ipinfo, _ui, _time, _temp.ExportFolder);
+            _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
 
         await first.ActivateAsync();
 
@@ -399,7 +399,7 @@ public sealed class AzureFeedViewModelTests : IDisposable
         online = false;
         var second = new AzureFeedViewModel(
             new AzureFeedService(_ipinfo, http, new CoreOptions(), _time, _temp.Paths, _temp.ExportFolder),
-            _ipinfo, _ui, _time, _temp.ExportFolder);
+            _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
         await second.ActivateAsync();
 
         Assert.Equal(4, second.Services.Count);
@@ -410,7 +410,7 @@ public sealed class AzureFeedViewModelTests : IDisposable
     }
 
     private AzureFeedViewModel Vm(FakeAzureFeedService feeds) =>
-        new(feeds, _ipinfo, _ui, _time, _temp.ExportFolder);
+        new(feeds, _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
 
     /// <summary>A fake whose cache holds the catalogue and whose update check reports "up to date".</summary>
     private FakeAzureFeedService Feeds(AzureTagCatalogue? cached)

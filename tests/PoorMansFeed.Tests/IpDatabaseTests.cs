@@ -450,6 +450,45 @@ public sealed class IpDatabaseTests : IDisposable
     }
 
     [Fact]
+    public void QueryOverlaps_Names_The_Dataset_That_Answered()
+    {
+        var db = new IpDatabase(_temp.FilePath("ipinfo.db"));
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next.db"), "abc123", Entry("10.0.0.0/8", "ancestor.example"));
+
+        List<NetworkOverlap> overlaps = db.QueryOverlaps([Block("10.1.2.0/24")], includeIPv6: true, out DatasetInfo? answeredBy);
+
+        Assert.Single(overlaps);
+        Assert.NotNull(answeredBy);
+        Assert.Equal(db.ReadInfo(), answeredBy);
+    }
+
+    [Fact]
+    public void QueryOverlaps_Names_The_Promoted_Dataset_Without_Reading_The_Info_First()
+    {
+        var db = new IpDatabase(_temp.FilePath("ipinfo.db"));
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next1.db"), "first", Entry("10.0.0.0/8", "first.example"));
+        db.QueryOverlaps([Block("10.1.2.0/24")], includeIPv6: true, out DatasetInfo? before);
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next2.db"), "second", Entry("10.0.0.0/8", "second.example"));
+
+        List<NetworkOverlap> overlaps = db.QueryOverlaps([Block("10.1.2.0/24")], includeIPv6: true, out DatasetInfo? after);
+
+        Assert.Equal("first", before?.Checksum);
+        Assert.Equal("second", after?.Checksum);
+        Assert.Equal("second.example", Assert.Single(Assert.Single(overlaps).Groups).AsDomain);
+    }
+
+    [Fact]
+    public void QueryOverlaps_On_A_Missing_File_Names_No_Dataset()
+    {
+        var db = new IpDatabase(_temp.FilePath("ipinfo.db"));
+
+        List<NetworkOverlap> overlaps = db.QueryOverlaps([Block("10.1.2.0/24")], includeIPv6: true, out DatasetInfo? answeredBy);
+
+        Assert.Empty(overlaps);
+        Assert.Null(answeredBy);
+    }
+
+    [Fact]
     public void QueryOverlaps_Returns_A_More_Specific_Network_Inside_The_Block()
     {
         var db = new IpDatabase(_temp.FilePath("ipinfo.db"));

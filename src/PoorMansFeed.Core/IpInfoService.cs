@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
+using PoorMansFeed.Core.AbuseIpDb;
+using PoorMansFeed.Core.Config;
+using PoorMansFeed.Core.FeedExceptions;
 using PoorMansFeed.Core.Secrets;
 
 namespace PoorMansFeed.Core;
@@ -15,40 +18,58 @@ public sealed class IpInfoService : IIpInfoService
     private readonly TimeProvider _time;
     private readonly Func<bool> _isPrivileged;
     private readonly IpInfoClient _client;
-    private readonly SettingsStore _settingsStore;
     private readonly TokenStore _tokenStore;
+    private readonly ConfigKeyStore _configKeys;
     private readonly IpDatabase _database;
     private readonly SemaphoreSlim _updateGate = new(1, 1);
+    // Two saves could commit in one order and swap the fields in the other, leaving in use what config.db doesn't hold
+    private readonly Lock _saveGate = new();
+    // Start-up, Start fresh and Start without the old exceptions run one at a time
+    private readonly Lock _startGate = new();
     private volatile UserSettings _settings = new();
+    // Unreadable until a launch has opened config.db, so no feed can be written before then
+    private volatile ExceptionList _exceptions = ExceptionList.Unreadable;
     private volatile DatasetInfo? _dataset;
+    private volatile ConfigStore? _config;
+    private ConfigOpenState _lastConfigState;
+    private StartupResult? _lastStartup;
     private InstanceLock? _lock;
 
     /// <summary>The service the app uses: the token is kept in the operating system's store for the current user.</summary>
     public static IpInfoService ForCurrentUser(AppPaths paths, HttpClient http, CoreOptions options, TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(paths);
-        return new IpInfoService(paths, http, options, time, SecretStores.ForCurrentUser(paths.TokenPath));
+        return new IpInfoService(paths, http, options, time, SecretStores.ForCurrentUser(paths.TokenPath),
+                                 SecretStores.ConfigKeyForCurrentUser(paths));
     }
 
-    // Tests pass an in-memory store here, so they never reach the real Keychain item, which is one per user account
+    // Tests pass in-memory stores here, so they never reach the real Keychain items, which are one per user account
     internal IpInfoService(AppPaths paths, HttpClient http, CoreOptions options, TimeProvider time, ISecretStore secretStore,
-                           Func<bool>? isPrivileged = null,
+                           ISecretStore configKeyStore, Func<bool>? isPrivileged = null,
                            Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(time);
         ArgumentNullException.ThrowIfNull(secretStore);
+        ArgumentNullException.ThrowIfNull(configKeyStore);
 
         _paths = paths;
         _options = options;
         _time = time;
         _isPrivileged = isPrivileged ?? new Func<bool>(IsPrivilegedProcess);
         _client = new IpInfoClient(http, options, delay);
-        _settingsStore = new SettingsStore(paths.SettingsPath);
         _tokenStore = new TokenStore(secretStore);
+        _configKeys = new ConfigKeyStore(configKeyStore);
         _database = new IpDatabase(paths.DatabasePath);
+        AbuseAccounting = new ConfigAccounting(this);
     }
+
+    /// <summary>The AbuseIPDB download accounting in config.db. Before a launch succeeds, Current is Empty and every write fails.</summary>
+    internal IAbuseAccounting AbuseAccounting { get; }
+
+    /// <summary>The open config store, for tests that make a save fail through its BeforeCommit.</summary>
+    internal ConfigStore? Config => _config;
 
     public string DataFolder => _paths.DataFolder;
 
@@ -57,6 +78,8 @@ public sealed class IpInfoService : IIpInfoService
     public bool HasToken => _tokenStore.HasToken;
 
     public DatasetInfo? Dataset => _dataset;
+
+    public ExceptionList Exceptions => _exceptions;
 
     public string ExportFolder => ExportFolders.Resolve(Settings, _paths.DefaultExportFolder);
 
@@ -68,9 +91,31 @@ public sealed class IpInfoService : IIpInfoService
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
-            TraceUnexpected(nameof(InitializeAsync), ex);
-            ReleaseLock();
-            return new StartupResult(StartupFailure.StorageUnavailable, null, HasToken);
+            return StartupFailed(nameof(InitializeAsync), ex);
+        }
+    }
+
+    public async Task<StartupResult> StartFreshAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await Task.Run(() => StartFresh(ct));
+        }
+        catch (Exception ex) when (!IsCallerCancellation(ex, ct))
+        {
+            return StartupFailed(nameof(StartFreshAsync), ex);
+        }
+    }
+
+    public async Task<StartupResult> StartWithoutOldExceptionsAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await Task.Run(() => StartWithoutOldExceptions(ct));
+        }
+        catch (Exception ex) when (!IsCallerCancellation(ex, ct))
+        {
+            return StartupFailed(nameof(StartWithoutOldExceptionsAsync), ex);
         }
     }
 
@@ -168,42 +213,134 @@ public sealed class IpInfoService : IIpInfoService
         ArgumentNullException.ThrowIfNull(settings);
         return Task.Run(() =>
         {
-            try
+            lock (_saveGate)
             {
-                UserSettings normalised = settings with
+                try
                 {
-                    ExportFolder = settings.ExportFolder ?? "",
-                    IPv4MinPrefix = Math.Clamp(settings.IPv4MinPrefix, 1, 32),
-                    IPv6MinPrefix = Math.Clamp(settings.IPv6MinPrefix, 1, 128),
-                };
+                    UserSettings normalised = SettingsStore.Normalise(settings);
 
-                if (!_settingsStore.Save(normalised))
+                    ConfigStore? config = _config;
+                    if (config is null || !config.SaveSettings(normalised))
+                        return false;
+
+                    _settings = normalised;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    TraceUnexpected(nameof(SaveSettingsAsync), ex);
                     return false;
-
-                _settings = normalised;
-                return true;
+                }
             }
-            catch (Exception ex)
+        });
+    }
+
+    public Task<ExceptionsSaveOutcome> SaveExceptionsAsync(IReadOnlyList<ExceptionEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return Task.Run(() =>
+        {
+            lock (_saveGate)
             {
-                TraceUnexpected(nameof(SaveSettingsAsync), ex);
-                return false;
+                try
+                {
+                    ExceptionList list = ExceptionList.Create(entries);
+
+                    // Before a launch has opened config.db there is nowhere to save to
+                    ConfigStore? config = _config;
+                    if (config is null || !config.SaveExceptions(list))
+                        return ExceptionsSaveOutcome.Failed;
+
+                    _exceptions = list;
+                    return ExceptionsSaveOutcome.Saved;
+                }
+                catch (Exception ex)
+                {
+                    TraceUnexpected(nameof(SaveExceptionsAsync), ex);
+                    return ExceptionsSaveOutcome.Failed;
+                }
             }
         });
     }
 
     public void Dispose()
     {
-        ReleaseLock();
+        // After any start-up step still running, so the instance lock never goes while config.db is being opened.
+        // config.db's lock goes first, then the instance lock.
+        lock (_startGate)
+        {
+            CloseConfig();
+            ReleaseLock();
+        }
     }
 
     // ----- Startup -----
 
     private StartupResult Initialize(CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
+        lock (_startGate)
+        {
+            ct.ThrowIfCancellationRequested();
 
+            // This instance has already launched (or stopped on config.db): the answer is the same, and nothing runs again
+            if (_lock is not null)
+                return _lastStartup!;
+
+            StartupFailure preflight = Preflight();
+            if (preflight != StartupFailure.None)
+                return Remember(new StartupResult(preflight, null, HasToken));
+
+            // config.db is opened before anything else is touched, so a launch that stops on it changes nothing more
+            StartupResult? stopped = OpenConfig(ConfigStore.TryOpen(_paths, _configKeys, _time, withoutOldExceptions: false,
+                                                                    out ConfigStore? store), store);
+            return stopped ?? FinishStartup();
+        }
+    }
+
+    private StartupResult StartFresh(CancellationToken ct)
+    {
+        lock (_startGate)
+        {
+            // Observed once, before acting: the steps below are never cut short
+            ct.ThrowIfCancellationRequested();
+
+            if (_lock is null || _config is not null
+                || _lastConfigState is not (ConfigOpenState.Newer or ConfigOpenState.Unreadable or ConfigOpenState.KeyMismatch
+                                            or ConfigOpenState.Missing))
+                return NothingToStart();
+
+            // config.db is opened again first, so whatever comes back, Opened or another failure, is the state from here
+            StartupResult? stopped = OpenConfig(ConfigStore.StartFresh(_paths, _configKeys, _time, _lastConfigState,
+                                                                       out ConfigStore? store), store);
+            return stopped ?? FinishStartup();
+        }
+    }
+
+    private StartupResult StartWithoutOldExceptions(CancellationToken ct)
+    {
+        lock (_startGate)
+        {
+            // Observed once, before acting: the steps below are never cut short
+            ct.ThrowIfCancellationRequested();
+
+            if (_lock is null || _config is not null || _lastConfigState != ConfigOpenState.ExceptionsImportUnreadable)
+                return NothingToStart();
+
+            StartupResult? stopped = OpenConfig(ConfigStore.TryOpen(_paths, _configKeys, _time, withoutOldExceptions: true,
+                                                                    out ConfigStore? store), store);
+            return stopped ?? FinishStartup();
+        }
+    }
+
+    /// <summary>What a start-up step in the wrong state answers: the last result, and nothing is changed.</summary>
+    private StartupResult NothingToStart() =>
+        _lastStartup ?? new StartupResult(StartupFailure.StorageUnavailable, null, HasToken);
+
+    /// <summary>Privileged, then the data folder, then the instance lock, which is held from here on.</summary>
+    private StartupFailure Preflight()
+    {
         if (_isPrivileged())
-            return new StartupResult(StartupFailure.Privileged, null, HasToken);
+            return StartupFailure.Privileged;
 
         // The lock file lives in the data folder, so the folder must exist before the lock is taken.
         try
@@ -213,7 +350,7 @@ public sealed class IpInfoService : IIpInfoService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Trace.TraceError($"The data folder could not be prepared: {ex.Message}");
-            return new StartupResult(StartupFailure.StorageUnavailable, null, HasToken);
+            return StartupFailure.StorageUnavailable;
         }
 
         InstanceLock? instanceLock;
@@ -224,16 +361,59 @@ public sealed class IpInfoService : IIpInfoService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Trace.TraceError($"The instance lock could not be opened: {ex.Message}");
-            return new StartupResult(StartupFailure.StorageUnavailable, null, HasToken);
+            return StartupFailure.StorageUnavailable;
         }
 
         if (instanceLock is null)
-            return new StartupResult(StartupFailure.AlreadyRunning, null, HasToken);
+            return StartupFailure.AlreadyRunning;
 
         _lock = instanceLock;
+        return StartupFailure.None;
+    }
 
-        _settings = _settingsStore.Load();
+    /// <summary>
+    /// Takes what opening config.db gave. Opened puts the store and its values in use and gives null, so start-up goes
+    /// on; any other state gives its failure, with the instance lock still held, no store, the default settings and an
+    /// unreadable exceptions list.
+    /// </summary>
+    private StartupResult? OpenConfig(ConfigOpenState state, ConfigStore? store)
+    {
+        _lastConfigState = state;
+        if (state != ConfigOpenState.Opened || store is null)
+        {
+            store?.Dispose();
+            return Remember(new StartupResult(StartupFailureOf(state), null, HasToken));
+        }
 
+        lock (_saveGate)
+        {
+            ConfigSnapshot snapshot = store.Snapshot;
+            _settings = snapshot.Settings;
+            _exceptions = snapshot.Exceptions;
+            _config = store;
+        }
+
+        return null;
+    }
+
+    /// <summary>The start-up failure for a config.db that didn't open. Opened has none, so it throws.</summary>
+    internal static StartupFailure StartupFailureOf(ConfigOpenState state) => state switch
+    {
+        ConfigOpenState.Newer => StartupFailure.ConfigNewer,
+        ConfigOpenState.Unreadable => StartupFailure.ConfigUnreadable,
+        ConfigOpenState.KeyMismatch => StartupFailure.ConfigKeyMismatch,
+        ConfigOpenState.Locked => StartupFailure.ConfigLocked,
+        ConfigOpenState.StorageError => StartupFailure.ConfigStorageError,
+        ConfigOpenState.KeyUnavailable => StartupFailure.ConfigKeyUnavailable,
+        ConfigOpenState.NoKeyStore => StartupFailure.ConfigKeyStoreMissing,
+        ConfigOpenState.ExceptionsImportUnreadable => StartupFailure.ExceptionsImportUnreadable,
+        ConfigOpenState.Missing => StartupFailure.ConfigMissing,
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, "Opened has no start-up failure."),
+    };
+
+    /// <summary>The rest of start-up, once config.db is open: the leftovers, the legacy token and the database.</summary>
+    private StartupResult FinishStartup()
+    {
         // Leftovers from an interrupted update. The live database is never touched here.
         DeleteDatabaseFilesQuietly(_paths.NextDatabasePath);
         DeleteFileQuietly(_paths.DownloadPath);
@@ -246,7 +426,7 @@ public sealed class IpInfoService : IIpInfoService
         {
             case DatabaseStatus.Newer:
                 _dataset = null;
-                return new StartupResult(StartupFailure.DatabaseNewer, null, HasToken);
+                return Remember(new StartupResult(StartupFailure.DatabaseNewer, null, HasToken));
             case DatabaseStatus.Usable:
                 _dataset = _database.ReadInfo();
                 break;
@@ -255,7 +435,26 @@ public sealed class IpInfoService : IIpInfoService
                 break;
         }
 
-        return new StartupResult(StartupFailure.None, _dataset, HasToken);
+        return Remember(new StartupResult(StartupFailure.None, _dataset, HasToken));
+    }
+
+    private StartupResult Remember(StartupResult result)
+    {
+        _lastStartup = result;
+        return result;
+    }
+
+    /// <summary>The catch-all of the three start-up methods: nothing stays open or in use, and the instance lock goes.</summary>
+    private StartupResult StartupFailed(string operation, Exception ex)
+    {
+        TraceUnexpected(operation, ex);
+        lock (_startGate)
+        {
+            CloseConfig();
+            _exceptions = ExceptionList.Unreadable;
+            ReleaseLock();
+            return Remember(new StartupResult(StartupFailure.StorageUnavailable, null, HasToken));
+        }
     }
 
     // ----- Update check -----
@@ -380,9 +579,11 @@ public sealed class IpInfoService : IIpInfoService
 
         try
         {
-            List<NetworkOverlap> overlaps = _database.QueryOverlaps(blocks, _settings.IPv6Enabled);
+            List<NetworkOverlap> overlaps = _database.QueryOverlaps(blocks, _settings.IPv6Enabled, out DatasetInfo? answeredBy);
             ct.ThrowIfCancellationRequested();
-            return new OverlapResult(OverlapOutcome.Found, overlaps, _dataset);
+            // The label comes from the connection that answered: _dataset is set again only after Promote has released
+            // the database, so a query on the new file can run while it still names the old one
+            return new OverlapResult(OverlapOutcome.Found, overlaps, answeredBy ?? _dataset);
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
@@ -466,6 +667,12 @@ public sealed class IpInfoService : IIpInfoService
         {
             ct.ThrowIfCancellationRequested();
             UserSettings settings = _settings;
+
+            // Exceptions change only the feeds, but a feed must never be written as if there were none
+            ExceptionList exceptions = _exceptions;
+            if (settings.FortigateEnabled && !exceptions.IsReadable)
+                return new ExportResult(ExportFailure.ExceptionsUnreadable, [], 0, 0);
+
             List<NetworkRecord> rows = _database.QueryAsn(query.Asn, null, settings.IPv6Enabled);
             ct.ThrowIfCancellationRequested();
 
@@ -500,10 +707,24 @@ public sealed class IpInfoService : IIpInfoService
             string asName = AsNameOf(rows);
             DateTimeOffset nowUtc = _time.GetUtcNow();
             var files = new List<string>();
+            FortigateFeedWrite feeds;
             try
             {
                 files.Add(ExportWriter.WriteAsnReport(folder, query.Text, asName, toWrite, nowUtc));
-                files.AddRange(ExportWriter.WriteFortigateFeeds(folder, query.Text, asName, toWrite, settings, nowUtc));
+                feeds = ExportWriter.WriteFortigateFeeds(folder, query.Text, asName, toWrite, settings, nowUtc, exceptions);
+                files.AddRange(feeds.Files);
+            }
+            catch (ExportFileException ex)
+            {
+                Trace.TraceError($"The export could not be written: {ex.Message}");
+                // The report failed when nothing was written before the feeds, so no feed was tried: every earlier feed
+                // this export would have written or noted is still there, and FortiGate keeps reading it
+                IReadOnlyList<string> oldFilesLeft = files.Count == 0
+                    ? [.. ex.OldFilesLeft, .. ExportWriter.ExistingFeedFiles(folder, query.Text, toWrite, settings)]
+                    : ex.OldFilesLeft;
+                files.AddRange(ex.WrittenBefore);
+                return new ExportResult(ExportFailure.WriteFailed, files, 0, leftOut.Count,
+                                        OldFilesLeft: oldFilesLeft.Count > 0 ? oldFilesLeft : null, FailedFile: ex.FilePath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -511,7 +732,8 @@ public sealed class IpInfoService : IIpInfoService
                 return new ExportResult(ExportFailure.WriteFailed, [], 0, leftOut.Count);
             }
 
-            return new ExportResult(ExportFailure.None, files, toWrite.Count, leftOut.Count);
+            return new ExportResult(ExportFailure.None, files, toWrite.Count, leftOut.Count, feeds.ExceptionCuts, feeds.ExceptionRemovals,
+                                    feeds.OldFilesLeft);
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
@@ -575,6 +797,16 @@ public sealed class IpInfoService : IIpInfoService
         }
     }
 
+    private void CloseConfig()
+    {
+        lock (_saveGate)
+        {
+            ConfigStore? held = _config;
+            _config = null;
+            held?.Dispose();
+        }
+    }
+
     private void ReleaseLock()
     {
         InstanceLock? held = _lock;
@@ -601,6 +833,25 @@ public sealed class IpInfoService : IIpInfoService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Trace.TraceWarning($"A temporary file could not be deleted: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The download accounting over whichever config store is open. It is made with the service, before start-up, so it
+    /// never throws for a missing store: it reads Empty, is not available, and every write fails until a launch has
+    /// opened config.db.
+    /// </summary>
+    private sealed class ConfigAccounting(IpInfoService owner) : IAbuseAccounting
+    {
+        public PoorMansFeed.Core.AbuseIpDb.AbuseAccounting Current =>
+            owner._config?.Current ?? PoorMansFeed.Core.AbuseIpDb.AbuseAccounting.Empty;
+
+        public bool IsAvailable => owner._config?.IsAvailable ?? false;
+
+        public bool TryRecordAnswer(AbuseRateLimit rateLimit, DateTimeOffset answeredAt, bool countDownload)
+        {
+            ArgumentNullException.ThrowIfNull(rateLimit);
+            return owner._config?.TryRecordAnswer(rateLimit, answeredAt, countDownload) ?? false;
         }
     }
 }

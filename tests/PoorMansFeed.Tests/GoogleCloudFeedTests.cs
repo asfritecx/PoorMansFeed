@@ -99,7 +99,7 @@ public sealed class GoogleCloudFeedTests : IDisposable
     public async Task Unusable_Database_Returns_NoDataset_And_Writes_No_File()
     {
         using var http = new HttpClient(new StubHttpHandler((_, _) => JsonResponse("{}")));
-        using var ipinfo = new IpInfoService(_temp.Paths, http, new CoreOptions(), _time, new InMemorySecretStore(), () => false);
+        using var ipinfo = new IpInfoService(_temp.Paths, http, new CoreOptions(), _time, new InMemorySecretStore(), new InMemorySecretStore(), () => false);
         Assert.True(CidrBlock.TryParse("10.1.2.0/24", out CidrBlock? block));
         OverlapResult overlaps = await ipinfo.LookUpOverlapsAsync([block], CancellationToken.None);
         Assert.Equal(OverlapOutcome.NoDataset, overlaps.Outcome);

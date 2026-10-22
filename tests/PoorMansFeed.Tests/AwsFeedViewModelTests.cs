@@ -418,7 +418,7 @@ public sealed class AwsFeedViewModelTests : IDisposable
 
         var first = new AwsFeedViewModel(
             new AwsFeedService(_ipinfo, http, new CoreOptions(), _time, _temp.Paths, _temp.ExportFolder),
-            _ipinfo, _ui, _time, _temp.ExportFolder);
+            _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
         await first.ActivateAsync();
         Assert.Equal(4, first.Services.Count);
         Assert.Equal(FileText + "\u00A0\u00B7\u00A0updated, checked 16:05", first.StatusText);
@@ -428,7 +428,7 @@ public sealed class AwsFeedViewModelTests : IDisposable
         mode = "304";
         var second = new AwsFeedViewModel(
             new AwsFeedService(_ipinfo, http, new CoreOptions(), _time, _temp.Paths, _temp.ExportFolder),
-            _ipinfo, _ui, _time, _temp.ExportFolder);
+            _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
         await second.ActivateAsync();
         Assert.Equal(4, second.Services.Count);
         Assert.Equal(UpToDateText, second.StatusText);
@@ -437,7 +437,7 @@ public sealed class AwsFeedViewModelTests : IDisposable
         mode = "offline";
         var third = new AwsFeedViewModel(
             new AwsFeedService(_ipinfo, http, new CoreOptions(), _time, _temp.Paths, _temp.ExportFolder),
-            _ipinfo, _ui, _time, _temp.ExportFolder);
+            _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
         await third.ActivateAsync();
         Assert.Equal(4, third.Services.Count);
         Assert.Equal(FileText + "\u00A0\u00B7\u00A0couldn't check for a newer file", third.StatusText);
@@ -445,7 +445,7 @@ public sealed class AwsFeedViewModelTests : IDisposable
     }
 
     private AwsFeedViewModel Vm(FakeAwsFeedService feeds) =>
-        new(feeds, _ipinfo, _ui, _time, _temp.ExportFolder);
+        new(feeds, _ipinfo, _ui, _time, new WorkGate(), _temp.ExportFolder);
 
     /// <summary>A fake whose cache holds the catalogue and whose update check reports "up to date".</summary>
     private FakeAwsFeedService Feeds(AwsRangeCatalogue? cached)

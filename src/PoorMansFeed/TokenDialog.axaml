@@ -11,16 +11,14 @@
     <TextBlock x:Name="TitleText" Classes="subtitle" />
     <TextBlock x:Name="BodyText" Grid.Row="1" TextWrapping="Wrap" LineHeight="22" />
     <StackPanel Grid.Row="2" Spacing="8">
-      <!-- Masked by default -->
-      <TextBox x:Name="TokenBox" PasswordChar="&#x2022;" PlaceholderText="{x:Static local:AppText.TokenBoxName}"
-               AutomationProperties.Name="{x:Static local:AppText.TokenBoxName}" />
-      <CheckBox x:Name="ShowToken" Content="{x:Static local:AppText.ShowToken}" IsCheckedChanged="ShowTokenChanged" />
+      <!-- Masked by default. The placeholder, the accessible name and both labels come from the prompt -->
+      <TextBox x:Name="TokenBox" PasswordChar="&#x2022;" />
+      <CheckBox x:Name="ShowToken" IsCheckedChanged="ShowTokenChanged" />
     </StackPanel>
     <!-- Enter saves only when the box holds text: the save button is disabled while it is blank -->
     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
       <Button x:Name="CancelButton" Content="{x:Static local:AppText.Cancel}" MinWidth="88" IsCancel="True" Click="CancelClicked" />
-      <Button x:Name="SaveButton" Content="{x:Static local:AppText.SaveToken}" MinWidth="88" IsDefault="True" IsEnabled="False"
-              Click="SaveClicked" />
+      <Button x:Name="SaveButton" MinWidth="88" IsDefault="True" IsEnabled="False" Click="SaveClicked" />
     </StackPanel>
   </Grid>
 </Window>

@@ -3,6 +3,10 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.AbuseIpDb;
+using PoorMansFeed.Core.Config;
+using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.Secrets;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Time.Testing;
 
@@ -31,6 +35,8 @@ public sealed class IpInfoServiceTests : IDisposable
     private readonly List<IpInfoService> _services = [];
     // One store for every instance a test makes, as the OS store is one per user account
     private readonly InMemorySecretStore _secrets = new();
+    // One store for every instance a test makes, as the OS store is one per user account
+    private readonly InMemorySecretStore _configKeys = new();
 
     public IpInfoServiceTests()
     {
@@ -91,9 +97,9 @@ public sealed class IpInfoServiceTests : IDisposable
 
     private int DownloadRequests => _handler.RequestedUris.Count(u => !u.AbsolutePath.EndsWith("/checksums", StringComparison.Ordinal));
 
-    private IpInfoService NewService(Func<bool>? isPrivileged = null)
+    private IpInfoService NewService(Func<bool>? isPrivileged = null, ISecretStore? configKeys = null)
     {
-        var service = new IpInfoService(Paths, _http, new CoreOptions(), _time, _secrets,
+        var service = new IpInfoService(Paths, _http, new CoreOptions(), _time, _secrets, configKeys ?? _configKeys,
             isPrivileged ?? (() => false),
             (duration, token) => Task.CompletedTask);
         _services.Add(service);
@@ -113,6 +119,52 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.NotNull(service.Dataset);
         return service;
     }
+
+    /// <summary>
+    /// A service whose launch stopped on config.db with the given failure: nothing past the preflight ran (a stale
+    /// build file written first is still there), no store is open, and neither save can be made.
+    /// </summary>
+    private async Task<IpInfoService> StoppedServiceAsync(StartupFailure expected, ISecretStore? configKeys = null)
+    {
+        File.WriteAllText(Paths.NextDatabasePath, "stale build");
+        IpInfoService service = NewService(configKeys: configKeys);
+
+        StartupResult result = await service.InitializeAsync(Ct);
+
+        Assert.Equal(expected, result.Failure);
+        Assert.Null(service.Config);
+        Assert.False(service.Exceptions.IsReadable);
+        Assert.False(await service.SaveSettingsAsync(service.Settings with { IPv4MinPrefix = 12 }));
+        Assert.Equal(new UserSettings(), service.Settings);
+        Assert.Equal(ExceptionsSaveOutcome.Failed, await service.SaveExceptionsAsync([ExceptionEntryTests.Entry("192.0.2.0/24", null)]));
+        Assert.False(service.Exceptions.IsReadable);
+        Assert.True(File.Exists(Paths.NextDatabasePath));
+        return service;
+    }
+
+    /// <summary>Launches once and disposes, so config.db exists, closed, with its key in <see cref="_configKeys"/>.</summary>
+    private async Task LaunchOnceAsync()
+    {
+        IpInfoService first = NewService();
+        Assert.Equal(StartupFailure.None, (await first.InitializeAsync(Ct)).Failure);
+        first.Dispose();
+    }
+
+    /// <summary>Runs SQL on config.db through a connection of its own. Only while no service holds the file.</summary>
+    private void ExecuteOnConfig(string sql)
+    {
+        string connection = new SqliteConnectionStringBuilder
+        {
+            DataSource = Paths.ConfigPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ConnectionString;
+        using var conn = new SqliteConnection(connection);
+        conn.Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static readonly byte[] NotADatabase = Encoding.UTF8.GetBytes("this is not a database, only some text");
 
     private void AssertNoLeftovers()
     {
@@ -167,6 +219,28 @@ public sealed class IpInfoServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task No_Feed_Can_Be_Written_Until_A_Successful_Start_Up_Has_Read_The_Exceptions()
+    {
+        // A successful start-up with no file gives a readable empty list (Saved_Exceptions_Are_Seen_By_A_New_Instance)
+        IpInfoService first = NewService();
+        Assert.False(first.Exceptions.IsReadable);
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        ExportResult refused = await first.ExportAsync(query, [], Ct);
+        Assert.Equal(ExportFailure.ExceptionsUnreadable, refused.Failure);
+        Assert.Empty(refused.Files);
+        Assert.False(Directory.Exists(first.ExportFolder));
+
+        Assert.Equal(StartupFailure.None, (await first.InitializeAsync(Ct)).Failure);
+        Assert.True(first.Exceptions.IsReadable);
+
+        IpInfoService second = NewService();
+        Assert.False(second.Exceptions.IsReadable);
+        Assert.Equal(StartupFailure.AlreadyRunning, (await second.InitializeAsync(Ct)).Failure);
+        Assert.False(second.Exceptions.IsReadable);
+        first.Dispose();
+    }
+
+    [Fact]
     public async Task Second_Instance_Is_Refused_Until_First_Is_Disposed()
     {
         IpInfoService first = NewService();
@@ -177,6 +251,7 @@ public sealed class IpInfoServiceTests : IDisposable
 
         first.Dispose();
 
+        // Dispose released config.db's lock as well: a held file would give ConfigLocked here
         IpInfoService third = NewService();
         Assert.Equal(StartupFailure.None, (await third.InitializeAsync(Ct)).Failure);
     }
@@ -415,6 +490,31 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.Equal(0, unknown.TotalCount);
     }
 
+    [Fact]
+    public async Task An_Overlap_Lookup_Names_The_File_That_Answered_Not_The_Dataset_Read_Before()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        DatasetInfo installed = service.Dataset!;
+
+        // A Promote without the dataset being read again: the file is replaced behind the service
+        string next = Paths.NextDatabasePath;
+        using (IpDatabase.Builder builder = IpDatabase.CreateBuilder(next, 10))
+        {
+            var (start, end) = Cidr.Parse("8.8.8.0/24");
+            builder.Add(new IpInfoEntry { Network = "8.8.8.0/24", Asn = "AS15169", AsName = "Google LLC", StartIp = start, EndIp = end });
+            builder.Complete("replacement-checksum", new DateOnly(2026, 10, 8), new DateTimeOffset(2026, 10, 8, 16, 5, 0, TimeSpan.Zero));
+        }
+        File.Move(next, Paths.DatabasePath, overwrite: true);
+        Assert.True(CidrBlock.TryParse("8.8.8.8/32", out CidrBlock? block));
+
+        OverlapResult result = await service.LookUpOverlapsAsync([block], Ct);
+
+        Assert.Equal(OverlapOutcome.Found, result.Outcome);
+        Assert.Equal("replacement-checksum", result.Dataset?.Checksum);
+        Assert.NotEqual("replacement-checksum", installed.Checksum);
+        Assert.Equal(installed, service.Dataset);
+    }
+
     // ----- Export and copy -----
 
     [Fact]
@@ -451,6 +551,164 @@ public sealed class IpInfoServiceTests : IDisposable
         ExportResult reportOnly = await service.ExportAsync(query, ["8.0.0.0/8"], Ct);
         Assert.Equal(ExportFailure.None, reportOnly.Failure);
         Assert.Single(reportOnly.Files);
+    }
+
+    [Fact]
+    public async Task Export_Cuts_Exceptions_From_The_Feeds_And_The_Report_Still_Lists_Every_Network()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder }));
+        Assert.Equal(ExceptionsSaveOutcome.Saved, await service.SaveExceptionsAsync(
+            [ExceptionEntryTests.Entry("8.8.8.0/25", "Resolver"), ExceptionEntryTests.Entry("2001:4860::/32", null)]));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        Assert.Equal(3, result.NetworksWritten);
+        Assert.Equal(1, result.ExceptionCuts);
+        Assert.Equal(1, result.ExceptionRemovals);
+        Assert.Empty(result.OldFilesLeft!);
+        string report = File.ReadAllText(result.Files.Single(f => f.EndsWith("AS15169.txt", StringComparison.Ordinal)));
+        Assert.Contains("8.8.8.0/24", report);
+        Assert.Contains("2001:4860::/32", report);
+        // Every IPv6 network was removed, so there is a report and an IPv4 feed only
+        string feed = File.ReadAllText(Assert.Single(result.Files, f => f.EndsWith("AS15169_ipv4.txt", StringComparison.Ordinal)));
+        Assert.Equal(2, result.Files.Count);
+        Assert.Contains(Environment.NewLine + "8.8.8.128/25" + Environment.NewLine, feed);
+        Assert.DoesNotContain("8.8.8.0/24", feed);
+    }
+
+    [Theory]
+    [InlineData(true, "fortigate/AS15169_ipv4.txt", new[] { "AS15169.txt" })]
+    [InlineData(true, "fortigate/AS15169_ipv6.txt", new[] { "AS15169.txt", "fortigate/AS15169_ipv4.txt" })]
+    [InlineData(true, "AS15169.txt", new string[0])]
+    [InlineData(false, "fortigate/AS15169.txt", new[] { "AS15169.txt" })]
+    public async Task Export_Names_The_File_That_Failed_And_The_Files_Written_Before_It(bool split, string blocked, string[] before)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            FortigateSplitByFamily = split
+        }));
+        // A folder where the file should go makes that one write fail
+        string blockedPath = Path.Combine(_temp.ExportFolder, blocked.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(blockedPath);
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(blockedPath, result.FailedFile);
+        Assert.Equal(
+            before.Select(name => Path.Combine(_temp.ExportFolder, name.Replace('/', Path.DirectorySeparatorChar))).ToArray(),
+            result.Files.ToArray());
+        Assert.All(result.Files, file => Assert.True(File.Exists(file)));
+        Assert.Null(result.OldFilesLeft);
+        // The temporary file was written and its move failed, so it was deleted
+        Assert.Empty(Directory.GetFiles(_temp.ExportFolder, "*.tmp", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task Export_Names_The_Old_Files_Left_When_A_Feed_Write_Fails()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            FortigateSplitByFamily = true
+        }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        Assert.Equal(ExportFailure.None, (await service.ExportAsync(query, [], Ct)).Failure);
+        string ipv6 = Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv6.txt");
+        byte[] oldV6 = File.ReadAllBytes(ipv6);
+        // A folder where the feed's temporary file should go makes that one write fail; the move never runs
+        Directory.CreateDirectory(ipv6 + ".tmp");
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(ipv6, result.FailedFile);
+        Assert.Equal([ipv6], result.OldFilesLeft);
+        Assert.Equal(oldV6, File.ReadAllBytes(ipv6));
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Export_Names_The_Old_Feeds_When_The_Report_Fails(bool split, bool fortigate)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        // An earlier export with the feeds on leaves every file this layout has
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            FortigateEnabled = true,
+            FortigateSplitByFamily = split
+        }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        ExportResult earlier = await service.ExportAsync(query, [], Ct);
+        Assert.Equal(ExportFailure.None, earlier.Failure);
+        string report = Path.Combine(_temp.ExportFolder, "AS15169.txt");
+        string[] feeds = split
+            ? [Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv4.txt"), Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv6.txt")]
+            : [Path.Combine(_temp.ExportFolder, "fortigate", "AS15169.txt")];
+        Assert.Equal([report, .. feeds], earlier.Files);
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { FortigateEnabled = fortigate }));
+        // The report's write fails, so no feed is tried; with the feeds on, FortiGate keeps reading the old ones
+        Directory.CreateDirectory(report + ".tmp");
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(report, result.FailedFile);
+        Assert.Empty(result.Files);
+        Assert.Equal(fortigate ? [report, .. feeds] : [report], result.OldFilesLeft);
+    }
+
+    [Fact]
+    public async Task Export_Names_The_First_Feed_When_The_Feed_Folder_Cannot_Be_Made()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            FortigateSplitByFamily = true
+        }));
+        // A file where the fortigate folder should go fails each feed's folder, so the first feed is named
+        Directory.CreateDirectory(_temp.ExportFolder);
+        File.WriteAllText(Path.Combine(_temp.ExportFolder, "fortigate"), "");
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv4.txt"), result.FailedFile);
+        Assert.Equal([Path.Combine(_temp.ExportFolder, "AS15169.txt")], result.Files.ToArray());
+        Assert.True(File.Exists(result.Files[0]));
+    }
+
+    [Fact]
+    public async Task Export_Writes_No_Feed_After_A_Launch_That_Stopped_On_The_Old_Exceptions()
+    {
+        // No settings save is possible before a launch succeeds, so Fortigate can't be off while the list is unreadable;
+        // ExportWriterTests pins the writer's report-alone rule
+        byte[] unreadable = Encoding.UTF8.GetBytes("{ not json");
+        File.WriteAllBytes(Paths.ExceptionsPath, unreadable);
+        IpInfoService service = NewService();
+        Assert.Equal(StartupFailure.ExceptionsImportUnreadable, (await service.InitializeAsync(Ct)).Failure);
+        Assert.False(service.Exceptions.IsReadable);
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult refused = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.ExceptionsUnreadable, refused.Failure);
+        Assert.Empty(refused.Files);
+        Assert.False(Directory.Exists(service.ExportFolder));
+        service.Dispose();
+        Assert.Equal(unreadable, File.ReadAllBytes(Paths.ExceptionsPath));
     }
 
     [Fact]
@@ -611,6 +869,84 @@ public sealed class IpInfoServiceTests : IDisposable
     // ----- Settings and token -----
 
     [Fact]
+    public async Task Saved_Exceptions_Are_Seen_By_A_New_Instance()
+    {
+        IpInfoService first = NewService();
+        await first.InitializeAsync(Ct);
+        Assert.True(first.Exceptions.IsReadable);
+        Assert.Empty(first.Exceptions.Entries);
+        Assert.Equal(ExceptionsSaveOutcome.Saved, await first.SaveExceptionsAsync(
+            [ExceptionEntryTests.Entry("192.0.2.0/24", "Head office"), ExceptionEntryTests.Entry("2001:db8::/32", null)]));
+        Assert.Equal(2, first.Exceptions.Entries.Count);
+        first.Dispose();
+
+        IpInfoService second = NewService();
+        await second.InitializeAsync(Ct);
+
+        Assert.True(second.Exceptions.IsReadable);
+        Assert.Equal(["192.0.2.0/24", "2001:db8::/32"], second.Exceptions.Entries.Select(entry => entry.Network.Text));
+        Assert.Equal("Head office", second.Exceptions.Entries[0].Note);
+        // config.db is the only place the list is saved
+        Assert.False(File.Exists(Paths.ExceptionsPath));
+    }
+
+    [Fact]
+    public async Task A_Failed_Exceptions_Save_Keeps_The_List_In_Use()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.Equal(ExceptionsSaveOutcome.Saved, await service.SaveExceptionsAsync([ExceptionEntryTests.Entry("192.0.2.0/24", null)]));
+        ExceptionList before = service.Exceptions;
+
+        var tooMany = Enumerable.Range(0, ExceptionList.MaxEntries + 1)
+            .Select(i => ExceptionEntryTests.Entry($"10.{i / 256}.{i % 256}.0/24", null))
+            .ToList();
+        Assert.Equal(ExceptionsSaveOutcome.Failed, await service.SaveExceptionsAsync(tooMany));
+        Assert.Same(before, service.Exceptions);
+
+        // A write that fails inside config.db's transaction changes nothing in use
+        UserSettings settingsBefore = service.Settings;
+        service.Config!.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+        Assert.Equal(ExceptionsSaveOutcome.Failed, await service.SaveExceptionsAsync([ExceptionEntryTests.Entry("198.51.100.0/24", null)]));
+        Assert.Same(before, service.Exceptions);
+        Assert.False(await service.SaveSettingsAsync(settingsBefore with { IPv4MinPrefix = 12 }));
+        Assert.Same(settingsBefore, service.Settings);
+    }
+
+    [Fact]
+    public async Task A_List_Too_Long_To_Save_Fails_And_Leaves_The_Old_Files()
+    {
+        File.WriteAllText(Paths.ExceptionsPath, "{ not json");
+        File.WriteAllText(Paths.UnreadableExceptionsPath, "an older copy");
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.False(service.Exceptions.IsReadable);
+
+        var tooMany = Enumerable.Range(0, ExceptionList.MaxEntries + 1)
+            .Select(i => ExceptionEntryTests.Entry($"10.{i / 256}.{i % 256}.0/24", null))
+            .ToList();
+        ExceptionsSaveOutcome outcome = await service.SaveExceptionsAsync(tooMany);
+
+        Assert.Equal(ExceptionsSaveOutcome.Failed, outcome);
+        Assert.Equal("an older copy", File.ReadAllText(Paths.UnreadableExceptionsPath));
+        Assert.Equal("{ not json", File.ReadAllText(Paths.ExceptionsPath));
+    }
+
+    [Fact]
+    public async Task A_Save_Leaves_An_Older_Unreadable_Copy_Alone()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.Equal(ExceptionsSaveOutcome.Saved, await service.SaveExceptionsAsync([ExceptionEntryTests.Entry("192.0.2.0/24", null)]));
+        File.WriteAllText(Paths.UnreadableExceptionsPath, "an older copy");
+
+        ExceptionsSaveOutcome outcome = await service.SaveExceptionsAsync([ExceptionEntryTests.Entry("198.51.100.0/24", null)]);
+
+        Assert.Equal(ExceptionsSaveOutcome.Saved, outcome);
+        Assert.Equal("an older copy", File.ReadAllText(Paths.UnreadableExceptionsPath));
+    }
+
+    [Fact]
     public async Task Saved_Settings_Are_Seen_By_A_New_Instance_And_Token_Can_Be_Cleared()
     {
         IpInfoService first = NewService();
@@ -629,5 +965,547 @@ public sealed class IpInfoServiceTests : IDisposable
 
         Assert.True(await second.ClearTokenAsync());
         Assert.False(second.HasToken);
+        // config.db is the only place the settings are saved
+        Assert.False(File.Exists(Paths.SettingsPath));
+    }
+
+    [Fact]
+    public async Task SaveSettingsAsync_Clamps_The_Keep_Days_In_Memory_And_In_Config()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { AbuseIpDbKeepDays = 0 }));
+
+        Assert.Equal(1, service.Settings.AbuseIpDbKeepDays);
+        service.Dispose();
+
+        IpInfoService next = NewService();
+        Assert.Equal(StartupFailure.None, (await next.InitializeAsync(Ct)).Failure);
+        Assert.Equal(1, next.Settings.AbuseIpDbKeepDays);
+    }
+
+    [Fact]
+    public async Task Startup_Leaves_The_AbuseIpDb_Database_And_Its_Journal_Untouched()
+    {
+        byte[] database = [0x53, 0x51, 0x4c, 0x00, 0x01, 0x02, 0xff];
+        byte[] journal = [0x0a, 0x0b, 0x0c];
+        string journalPath = Paths.AbuseIpDbDatabasePath + "-journal";
+        File.WriteAllBytes(Paths.AbuseIpDbDatabasePath, database);
+        File.WriteAllBytes(journalPath, journal);
+
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        service.Dispose();
+
+        Assert.Equal(database, File.ReadAllBytes(Paths.AbuseIpDbDatabasePath));
+        Assert.Equal(journal, File.ReadAllBytes(journalPath));
+    }
+
+    // ----- config.db at start-up -----
+
+    [Theory]
+    [InlineData((int)ConfigOpenState.Newer, StartupFailure.ConfigNewer)]
+    [InlineData((int)ConfigOpenState.Unreadable, StartupFailure.ConfigUnreadable)]
+    [InlineData((int)ConfigOpenState.KeyMismatch, StartupFailure.ConfigKeyMismatch)]
+    [InlineData((int)ConfigOpenState.Locked, StartupFailure.ConfigLocked)]
+    [InlineData((int)ConfigOpenState.StorageError, StartupFailure.ConfigStorageError)]
+    [InlineData((int)ConfigOpenState.KeyUnavailable, StartupFailure.ConfigKeyUnavailable)]
+    [InlineData((int)ConfigOpenState.NoKeyStore, StartupFailure.ConfigKeyStoreMissing)]
+    [InlineData((int)ConfigOpenState.ExceptionsImportUnreadable, StartupFailure.ExceptionsImportUnreadable)]
+    [InlineData((int)ConfigOpenState.Missing, StartupFailure.ConfigMissing)]
+    public void Each_Config_State_But_Opened_Has_Its_Startup_Failure(int state, StartupFailure expected)
+    {
+        Assert.Equal(expected, IpInfoService.StartupFailureOf((ConfigOpenState)state));
+    }
+
+    [Fact]
+    public void Every_Config_Startup_Failure_Comes_From_A_Config_State_And_Opened_Has_None()
+    {
+        StartupFailure[] notFromConfig =
+        [
+            StartupFailure.None, StartupFailure.Privileged, StartupFailure.AlreadyRunning,
+            StartupFailure.StorageUnavailable, StartupFailure.DatabaseNewer,
+        ];
+        var image = Enum.GetValues<ConfigOpenState>()
+            .Where(state => state != ConfigOpenState.Opened)
+            .Select(IpInfoService.StartupFailureOf)
+            .ToHashSet();
+
+        Assert.Equal(Enum.GetValues<StartupFailure>().Except(notFromConfig).Order(), image.Order());
+        Assert.Throws<ArgumentOutOfRangeException>(() => IpInfoService.StartupFailureOf(ConfigOpenState.Opened));
+    }
+
+    [Fact]
+    public async Task A_Config_File_That_Is_Not_A_Database_Stops_Launch_As_ConfigUnreadable()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigUnreadable);
+        service.Dispose();
+
+        Assert.Equal(NotADatabase, File.ReadAllBytes(Paths.ConfigPath));
+    }
+
+    [Fact]
+    public async Task A_Config_File_Of_A_Newer_Version_Stops_Launch_As_ConfigNewer()
+    {
+        await LaunchOnceAsync();
+        ExecuteOnConfig("UPDATE metadata SET value = '2' WHERE key = 'schema_version';");
+
+        await StoppedServiceAsync(StartupFailure.ConfigNewer);
+    }
+
+    [Fact]
+    public async Task A_Config_Key_That_Does_Not_Open_The_File_Stops_Launch_As_ConfigKeyMismatch()
+    {
+        await LaunchOnceAsync();
+
+        await StoppedServiceAsync(StartupFailure.ConfigKeyMismatch, new InMemorySecretStore());
+    }
+
+    [Fact]
+    public async Task A_Config_Key_That_Cannot_Be_Read_Now_Stops_Launch_As_ConfigKeyUnavailable()
+    {
+        await LaunchOnceAsync();
+        byte[] key = _configKeys.Secret!.ToArray();
+        _configKeys.ReadFailure = new SecretStoreException("The Keychain couldn't read the secret.");
+
+        await StoppedServiceAsync(StartupFailure.ConfigKeyUnavailable);
+
+        Assert.Equal(key, _configKeys.Secret);
+    }
+
+    [Fact]
+    public async Task A_System_With_No_Secret_Store_Stops_Launch_As_ConfigKeyStoreMissing()
+    {
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigKeyStoreMissing, new SecretStores.UnavailableSecretStore());
+        service.Dispose();
+
+        Assert.False(File.Exists(Paths.ConfigPath));
+    }
+
+    [Fact]
+    public async Task An_Old_Exceptions_File_That_Cannot_Be_Read_Stops_Launch_As_ExceptionsImportUnreadable()
+    {
+        byte[] unreadable = Encoding.UTF8.GetBytes("{ \"schemaVersion\": 1, \"exceptions\": [ { \"network\": \"not a network\" } ] }");
+        File.WriteAllBytes(Paths.ExceptionsPath, unreadable);
+
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ExceptionsImportUnreadable);
+        service.Dispose();
+
+        Assert.Equal(unreadable, File.ReadAllBytes(Paths.ExceptionsPath));
+        Assert.False(File.Exists(Paths.ConfigPath));
+        Assert.False(File.Exists(Paths.UnreadableExceptionsPath));
+    }
+
+    [Fact]
+    public async Task The_Instance_Lock_Is_Held_After_A_Config_Failure()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+        IpInfoService first = NewService();
+        Assert.Equal(StartupFailure.ConfigUnreadable, (await first.InitializeAsync(Ct)).Failure);
+
+        IpInfoService second = NewService();
+        Assert.Equal(StartupFailure.AlreadyRunning, (await second.InitializeAsync(Ct)).Failure);
+        first.Dispose();
+
+        IpInfoService third = NewService();
+        Assert.Equal(StartupFailure.ConfigUnreadable, (await third.InitializeAsync(Ct)).Failure);
+        third.Dispose();
+        Assert.Equal(NotADatabase, File.ReadAllBytes(Paths.ConfigPath));
+    }
+
+    [Fact]
+    public async Task A_Second_Initialize_Answers_What_The_First_Did_And_Runs_Nothing_Again()
+    {
+        IpInfoService service = NewService();
+        StartupResult first = await service.InitializeAsync(Ct);
+        Assert.Equal(StartupFailure.None, first.Failure);
+        File.WriteAllText(Paths.NextDatabasePath, "stale build");
+
+        Assert.Same(first, await service.InitializeAsync(Ct));
+        Assert.True(File.Exists(Paths.NextDatabasePath));
+    }
+
+    [Fact]
+    public async Task A_Second_Initialize_After_A_Config_Failure_Answers_The_Same_Failure()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigUnreadable);
+
+        StartupResult again = await service.InitializeAsync(Ct);
+
+        Assert.Equal(StartupFailure.ConfigUnreadable, again.Failure);
+        Assert.True(File.Exists(Paths.NextDatabasePath));
+        Assert.Null(service.Config);
+    }
+
+    [Fact]
+    public async Task Start_Fresh_After_ConfigUnreadable_Keeps_The_Old_File_And_Starts_With_The_Defaults()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigUnreadable);
+
+        StartupResult fresh = await service.StartFreshAsync(Ct);
+
+        Assert.Equal(StartupFailure.None, fresh.Failure);
+        Assert.NotNull(service.Config);
+        Assert.Equal(new UserSettings(), service.Settings);
+        Assert.True(service.Exceptions.IsReadable);
+        Assert.Empty(service.Exceptions.Entries);
+        Assert.Equal(AbuseAccounting.Empty, service.AbuseAccounting.Current);
+        AssertNoLeftovers();
+
+        // A second press finds nothing to do
+        Assert.Same(fresh, await service.StartFreshAsync(Ct));
+        service.Dispose();
+        Assert.Equal(NotADatabase, File.ReadAllBytes(Paths.UnreadableConfigPath));
+    }
+
+    [Fact]
+    public async Task Start_Fresh_After_ConfigKeyMismatch_Keeps_A_Key_That_Reads()
+    {
+        await LaunchOnceAsync();
+        byte[] wrong = RandomNumberGenerator.GetBytes(32);
+        _configKeys.Secret = wrong.ToArray();
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigKeyMismatch);
+
+        StartupResult fresh = await service.StartFreshAsync(Ct);
+
+        Assert.Equal(StartupFailure.None, fresh.Failure);
+        Assert.True(service.Exceptions.IsReadable);
+        Assert.Equal(wrong, _configKeys.Secret);
+        Assert.True(File.Exists(Paths.UnreadableConfigPath));
+    }
+
+    [Fact]
+    public async Task Start_Fresh_After_ConfigKeyMismatch_Replaces_A_Key_That_Can_Never_Be_Read()
+    {
+        await LaunchOnceAsync();
+        byte[] original = _configKeys.Secret!.ToArray();
+        byte[] unusable = RandomNumberGenerator.GetBytes(31);
+        _configKeys.Secret = unusable.ToArray();
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigKeyMismatch);
+
+        StartupResult fresh = await service.StartFreshAsync(Ct);
+
+        Assert.Equal(StartupFailure.None, fresh.Failure);
+        Assert.True(service.Exceptions.IsReadable);
+        byte[] key = Assert.IsType<byte[]>(_configKeys.Secret);
+        Assert.Equal(32, key.Length);
+        Assert.NotEqual(original, key);
+    }
+
+    [Fact]
+    public async Task Start_Fresh_After_A_Launch_That_Succeeded_Does_Nothing()
+    {
+        IpInfoService service = NewService();
+        StartupResult launched = await service.InitializeAsync(Ct);
+        Assert.Equal(StartupFailure.None, launched.Failure);
+        ConfigStore? config = service.Config;
+
+        Assert.Same(launched, await service.StartFreshAsync(Ct));
+
+        Assert.Same(config, service.Config);
+        Assert.False(File.Exists(Paths.UnreadableConfigPath));
+    }
+
+    [Fact]
+    public async Task Start_Fresh_After_ExceptionsImportUnreadable_Does_Nothing()
+    {
+        File.WriteAllText(Paths.ExceptionsPath, "{ not json");
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ExceptionsImportUnreadable);
+        StartupResult stopped = await service.InitializeAsync(Ct);
+
+        StartupResult result = await service.StartFreshAsync(Ct);
+
+        // The very result the launch gave: nothing ran again
+        Assert.Same(stopped, result);
+        Assert.Equal(StartupFailure.ExceptionsImportUnreadable, result.Failure);
+        Assert.Null(service.Config);
+        Assert.True(File.Exists(Paths.NextDatabasePath));
+        service.Dispose();
+        Assert.False(File.Exists(Paths.UnreadableConfigPath));
+        Assert.False(File.Exists(Paths.ConfigPath));
+        Assert.Equal("{ not json", File.ReadAllText(Paths.ExceptionsPath));
+    }
+
+    [Fact]
+    public async Task Start_Fresh_Before_Initialize_Does_Nothing()
+    {
+        IpInfoService service = NewService();
+
+        StartupResult result = await service.StartFreshAsync(Ct);
+
+        Assert.Equal(StartupFailure.StorageUnavailable, result.Failure);
+        Assert.Null(service.Config);
+        Assert.False(File.Exists(Paths.ConfigPath));
+        Assert.False(File.Exists(Paths.UnreadableConfigPath));
+        Assert.False(File.Exists(Paths.LockPath));
+    }
+
+    [Fact]
+    public async Task Start_Without_The_Old_Exceptions_Keeps_Them_Aside_And_Imports_The_Settings()
+    {
+        byte[] unreadable = Encoding.UTF8.GetBytes("{ not json");
+        File.WriteAllBytes(Paths.ExceptionsPath, unreadable);
+        File.WriteAllBytes(Paths.SettingsPath, SettingsStore.ToJson(new UserSettings { IPv4MinPrefix = 12 }));
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ExceptionsImportUnreadable);
+
+        StartupResult result = await service.StartWithoutOldExceptionsAsync(Ct);
+
+        Assert.Equal(StartupFailure.None, result.Failure);
+        Assert.True(service.Exceptions.IsReadable);
+        Assert.Empty(service.Exceptions.Entries);
+        Assert.Equal(12, service.Settings.IPv4MinPrefix);
+        Assert.True(File.Exists(Paths.SettingsPath + AppPaths.MigratedSuffix));
+        Assert.False(File.Exists(Paths.ExceptionsPath));
+        AssertNoLeftovers();
+        service.Dispose();
+        Assert.Equal(unreadable, File.ReadAllBytes(Paths.UnreadableExceptionsPath));
+    }
+
+    [Fact]
+    public async Task When_The_Old_Exceptions_Cannot_Be_Set_Aside_Nothing_Is_Imported()
+    {
+        File.WriteAllText(Paths.ExceptionsPath, "{ not json");
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ExceptionsImportUnreadable);
+        // A folder where the copy should go: the move fails
+        Directory.CreateDirectory(Paths.UnreadableExceptionsPath);
+
+        StartupResult result = await service.StartWithoutOldExceptionsAsync(Ct);
+
+        Assert.Equal(StartupFailure.ExceptionsImportUnreadable, result.Failure);
+        Assert.Null(service.Config);
+        Assert.False(service.Exceptions.IsReadable);
+        Assert.True(File.Exists(Paths.NextDatabasePath));
+        service.Dispose();
+        Assert.Equal("{ not json", File.ReadAllText(Paths.ExceptionsPath));
+        Assert.False(File.Exists(Paths.ConfigPath));
+    }
+
+    [Fact]
+    public async Task Start_Without_The_Old_Exceptions_After_A_Launch_That_Succeeded_Does_Nothing()
+    {
+        IpInfoService service = NewService();
+        StartupResult launched = await service.InitializeAsync(Ct);
+        Assert.Equal(StartupFailure.None, launched.Failure);
+        File.WriteAllText(Paths.ExceptionsPath, "{ not json");
+
+        Assert.Same(launched, await service.StartWithoutOldExceptionsAsync(Ct));
+
+        Assert.Equal("{ not json", File.ReadAllText(Paths.ExceptionsPath));
+        Assert.False(File.Exists(Paths.UnreadableExceptionsPath));
+    }
+
+    [Fact]
+    public async Task Start_Without_The_Old_Exceptions_After_ConfigUnreadable_Does_Nothing()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+        File.WriteAllText(Paths.ExceptionsPath, "{ not json");
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigUnreadable);
+        StartupResult stopped = await service.InitializeAsync(Ct);
+
+        StartupResult result = await service.StartWithoutOldExceptionsAsync(Ct);
+
+        // The very result the launch gave: nothing ran again
+        Assert.Same(stopped, result);
+        Assert.Equal(StartupFailure.ConfigUnreadable, result.Failure);
+        Assert.Null(service.Config);
+        service.Dispose();
+        Assert.Equal("{ not json", File.ReadAllText(Paths.ExceptionsPath));
+        Assert.False(File.Exists(Paths.UnreadableExceptionsPath));
+        Assert.Equal(NotADatabase, File.ReadAllBytes(Paths.ConfigPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Config_File_Deleted_After_A_Launch_Stops_Launch_Until_Start_Fresh(bool olderCopy)
+    {
+        await LaunchOnceAsync();
+        byte[] key = _configKeys.Secret!.ToArray();
+        File.Delete(Paths.ConfigPath);
+        byte[] older = Encoding.UTF8.GetBytes("an older copy");
+        if (olderCopy)
+            File.WriteAllBytes(Paths.UnreadableConfigPath, older);
+
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigMissing);
+        Assert.False(File.Exists(Paths.ConfigPath));
+
+        StartupResult fresh = await service.StartFreshAsync(Ct);
+
+        Assert.Equal(StartupFailure.None, fresh.Failure);
+        Assert.NotNull(service.Config);
+        Assert.Equal(new UserSettings(), service.Settings);
+        Assert.True(service.Exceptions.IsReadable);
+        Assert.Empty(service.Exceptions.Entries);
+        Assert.Equal(key, _configKeys.Secret);
+        service.Dispose();
+        if (olderCopy)
+            Assert.Equal(older, File.ReadAllBytes(Paths.UnreadableConfigPath));
+        else
+            Assert.False(File.Exists(Paths.UnreadableConfigPath));
+    }
+
+    [Theory]
+    [InlineData(StartupFailure.ConfigNewer)]
+    [InlineData(StartupFailure.ConfigUnreadable)]
+    [InlineData(StartupFailure.ConfigKeyMismatch)]
+    [InlineData(StartupFailure.ConfigMissing)]
+    public async Task Start_Fresh_With_A_Key_That_Cannot_Be_Read_Touches_Nothing_And_Offers_Nothing_More(StartupFailure stopped)
+    {
+        switch (stopped)
+        {
+            case StartupFailure.ConfigNewer:
+                await LaunchOnceAsync();
+                ExecuteOnConfig("UPDATE metadata SET value = '2' WHERE key = 'schema_version';");
+                break;
+            case StartupFailure.ConfigUnreadable:
+                File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+                break;
+            case StartupFailure.ConfigKeyMismatch:
+                await LaunchOnceAsync();
+                _configKeys.Secret = RandomNumberGenerator.GetBytes(32);
+                break;
+            default:
+                await LaunchOnceAsync();
+                File.Delete(Paths.ConfigPath);
+                break;
+        }
+        IpInfoService service = await StoppedServiceAsync(stopped);
+        byte[]? before = File.Exists(Paths.ConfigPath) ? File.ReadAllBytes(Paths.ConfigPath) : null;
+        _configKeys.ReadFailure = new SecretStoreException("The Keychain couldn't read the secret.");
+
+        StartupResult first = await service.StartFreshAsync(Ct);
+
+        Assert.Equal(StartupFailure.ConfigKeyUnavailable, first.Failure);
+        Assert.Null(service.Config);
+        Assert.False(service.Exceptions.IsReadable);
+
+        // The store can be read again, but this run offers nothing more: the very same answer, and nothing ran
+        _configKeys.ReadFailure = null;
+        int reads = _configKeys.Reads;
+        Assert.Same(first, await service.StartFreshAsync(Ct));
+        Assert.Equal(reads, _configKeys.Reads);
+        Assert.Null(service.Config);
+        Assert.True(File.Exists(Paths.NextDatabasePath));
+        service.Dispose();
+        Assert.Equal(before, File.Exists(Paths.ConfigPath) ? File.ReadAllBytes(Paths.ConfigPath) : null);
+        Assert.False(File.Exists(Paths.UnreadableConfigPath));
+    }
+
+    [Fact]
+    public async Task The_Download_Accounting_Is_Available_Only_While_Config_Is_Open()
+    {
+        IpInfoService service = NewService();
+        Assert.False(service.AbuseAccounting.IsAvailable);
+
+        Assert.Equal(StartupFailure.None, (await service.InitializeAsync(Ct)).Failure);
+        Assert.True(service.AbuseAccounting.IsAvailable);
+
+        service.Dispose();
+        Assert.False(service.AbuseAccounting.IsAvailable);
+    }
+
+    [Fact]
+    public async Task The_Download_Accounting_Is_Not_Available_After_A_Failed_Launch()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigUnreadable);
+
+        Assert.False(service.AbuseAccounting.IsAvailable);
+    }
+
+    [Fact]
+    public async Task Dispose_Releases_The_Config_File()
+    {
+        await LaunchOnceAsync();
+
+        // Only a connection that could take the file's lock gets this far without BUSY
+        ExecuteOnConfig("BEGIN EXCLUSIVE; COMMIT;");
+    }
+
+    [Fact]
+    public async Task Dispose_During_A_Start_Up_Step_Waits_For_It_Then_Frees_Both_Locks()
+    {
+        await LaunchOnceAsync();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        // The key read inside the open of config.db holds the step
+        _configKeys.BeforeRead = () =>
+        {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(30));
+        };
+        IpInfoService service = NewService();
+
+        Task<StartupResult> starting = Task.Run(() => service.InitializeAsync(Ct));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30)));
+        _configKeys.BeforeRead = null;
+        Task disposing = Task.Run(service.Dispose);
+
+        // Still inside the step, so Dispose waits for it
+        Assert.NotSame(disposing, await Task.WhenAny(disposing, Task.Delay(TimeSpan.FromMilliseconds(300), Ct)));
+        release.Set();
+        Assert.Equal(StartupFailure.None, (await starting).Failure);
+        await disposing.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        // Neither config.db nor the instance lock is held now
+        IpInfoService next = NewService();
+        Assert.Equal(StartupFailure.None, (await next.InitializeAsync(Ct)).Failure);
+    }
+
+    [Fact]
+    public async Task Start_Without_The_Old_Exceptions_After_A_First_Launch_That_Saved_Only_The_Key_Opens()
+    {
+        // A first launch that saved the key and then couldn't make the file (a folder in its place)
+        Directory.CreateDirectory(Paths.ConfigPath);
+        IpInfoService failed = NewService();
+        Assert.Equal(StartupFailure.ConfigStorageError, (await failed.InitializeAsync(Ct)).Failure);
+        failed.Dispose();
+        Directory.Delete(Paths.ConfigPath);
+        Assert.True(_configKeys.Marker);
+        File.WriteAllText(Paths.ExceptionsPath, "{ not json");
+
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ExceptionsImportUnreadable);
+        StartupResult result = await service.StartWithoutOldExceptionsAsync(Ct);
+
+        Assert.Equal(StartupFailure.None, result.Failure);
+        Assert.NotNull(service.Config);
+        Assert.True(service.Exceptions.IsReadable);
+        Assert.Empty(service.Exceptions.Entries);
+        service.Dispose();
+        Assert.Equal("{ not json", File.ReadAllText(Paths.UnreadableExceptionsPath));
+    }
+
+    [Fact]
+    public async Task The_Download_Accounting_Is_Kept_In_Config_Once_A_Launch_Succeeds()
+    {
+        var limit = new AbuseRateLimit(5, 4, new DateTimeOffset(2026, 10, 8, 0, 0, 0, TimeSpan.Zero));
+        IpInfoService service = NewService();
+        Assert.Equal(AbuseAccounting.Empty, service.AbuseAccounting.Current);
+        Assert.False(service.AbuseAccounting.TryRecordAnswer(limit, _time.GetUtcNow(), countDownload: true));
+
+        await service.InitializeAsync(Ct);
+        Assert.True(service.AbuseAccounting.TryRecordAnswer(limit, _time.GetUtcNow(), countDownload: true));
+        var expected = new AbuseAccounting(limit, new DateOnly(2026, 10, 7), 1);
+        Assert.Equal(expected, service.AbuseAccounting.Current);
+        service.Dispose();
+
+        IpInfoService next = NewService();
+        await next.InitializeAsync(Ct);
+        Assert.Equal(expected, next.AbuseAccounting.Current);
+    }
+
+    [Fact]
+    public async Task The_Download_Accounting_Writes_Nothing_After_A_Failed_Launch()
+    {
+        File.WriteAllBytes(Paths.ConfigPath, NotADatabase);
+        IpInfoService service = await StoppedServiceAsync(StartupFailure.ConfigUnreadable);
+
+        Assert.False(service.AbuseAccounting.TryRecordAnswer(new AbuseRateLimit(5, 4, null), _time.GetUtcNow(), countDownload: true));
+        Assert.Equal(AbuseAccounting.Empty, service.AbuseAccounting.Current);
     }
 }

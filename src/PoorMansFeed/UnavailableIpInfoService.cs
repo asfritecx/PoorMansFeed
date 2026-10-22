@@ -1,4 +1,5 @@
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.FeedExceptions;
 
 namespace PoorMansFeed;
 
@@ -16,7 +17,15 @@ internal sealed class UnavailableIpInfoService : IIpInfoService
 
     public DatasetInfo? Dataset => null;
 
+    public ExceptionList Exceptions => ExceptionList.Unreadable;
+
     public Task<StartupResult> InitializeAsync(CancellationToken ct) =>
+        Task.FromResult(new StartupResult(StartupFailure.StorageUnavailable, null, false));
+
+    public Task<StartupResult> StartFreshAsync(CancellationToken ct) =>
+        Task.FromResult(new StartupResult(StartupFailure.StorageUnavailable, null, false));
+
+    public Task<StartupResult> StartWithoutOldExceptionsAsync(CancellationToken ct) =>
         Task.FromResult(new StartupResult(StartupFailure.StorageUnavailable, null, false));
 
     public Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken ct) =>
@@ -44,6 +53,8 @@ internal sealed class UnavailableIpInfoService : IIpInfoService
     public Task<bool> ClearTokenAsync() => Task.FromResult(false);
 
     public Task<bool> SaveSettingsAsync(UserSettings settings) => Task.FromResult(false);
+
+    public Task<ExceptionsSaveOutcome> SaveExceptionsAsync(IReadOnlyList<ExceptionEntry> entries) => Task.FromResult(ExceptionsSaveOutcome.Failed);
 
     public void Dispose()
     {

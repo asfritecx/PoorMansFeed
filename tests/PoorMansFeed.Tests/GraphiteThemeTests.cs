@@ -6,6 +6,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using GraphiteUi;
 
 namespace PoorMansFeed.Tests;
 
@@ -120,6 +121,36 @@ public sealed class GraphiteThemeTests
             Assert.Equal(Colors.Transparent, Assert.IsAssignableFrom<ISolidColorBrush>(other.Background).Color);
             Assert.Equal(FontWeight.Normal, other.FontWeight);
             Assert.False(Indicator(other).IsVisible);
+        });
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Light", "#8A929E", "#0F16191E")]
+    [InlineData("Dark", "#6B7482", "#1C2027")]
+    public void ADisabledNavDimsEveryItemsTextAndIconAndDropsTheIndicator(string variant, string disabled, string fill)
+    {
+        var selectedText = new TextBlock { Text = "IPInfo Lookup" };
+        var selectedIcon = new LineIcon();
+        var otherText = new TextBlock { Text = "Azure Lookup" };
+        var otherIcon = new LineIcon();
+        var selected = new ListBoxItem { Content = new StackPanel { Children = { selectedIcon, selectedText } } };
+        var other = new ListBoxItem { Content = new StackPanel { Children = { otherIcon, otherText } } };
+        var nav = new ListBox
+        {
+            Classes = { "nav" }, SelectionMode = SelectionMode.AlwaysSelected, IsEnabled = false, Items = { selected, other },
+        };
+        WithWindow(variant, nav, () =>
+        {
+            Assert.Same(selected, nav.SelectedItem);
+            Color expected = Color.Parse(disabled);
+            foreach (ListBoxItem item in new[] { selected, other })
+                Assert.Equal(expected, Assert.IsAssignableFrom<ISolidColorBrush>(item.Foreground).Color);
+            foreach (TextBlock text in new[] { selectedText, otherText })
+                Assert.Equal(expected, Assert.IsAssignableFrom<ISolidColorBrush>(text.Foreground).Color);
+            foreach (LineIcon icon in new[] { selectedIcon, otherIcon })
+                Assert.Equal(expected, Assert.IsAssignableFrom<ISolidColorBrush>(icon.Foreground).Color);
+            Assert.Equal(Color.Parse(fill), Assert.IsAssignableFrom<ISolidColorBrush>(selected.Background).Color);
+            Assert.False(Indicator(selected).IsVisible);
         });
     }
 

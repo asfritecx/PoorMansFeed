@@ -85,6 +85,6 @@
 
     <TextBlock x:Name="CloudAction" Grid.Row="2" Text="{Binding ActionText}" Classes="caption" Height="18"
                Classes.placeholder="{Binding !HasActionText}" TextTrimming="CharacterEllipsis"
-               AutomationProperties.LiveSetting="Polite" />
+               ToolTip.Tip="{Binding ActionText}" AutomationProperties.LiveSetting="Polite" />
   </Grid>
 </UserControl>

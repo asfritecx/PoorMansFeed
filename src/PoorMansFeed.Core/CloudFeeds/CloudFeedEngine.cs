@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.FeedExceptions;
 
 namespace PoorMansFeed.Core.CloudFeeds;
 
@@ -115,6 +116,11 @@ internal sealed class CloudFeedEngine : ICloudFeedService
         if (!plan.Check.MatchesWriteSettings(settings))
             return new CloudFeedWriteResult(CloudFeedWriteFailure.SettingsChanged, [], 0, 0, 0);
 
+        // A feed must never be written as if there were no exceptions
+        ExceptionList exceptions = _ipinfo.Exceptions;
+        if (!exceptions.IsReadable)
+            return new CloudFeedWriteResult(CloudFeedWriteFailure.ExceptionsUnreadable, [], 0, 0, 0);
+
         var allowedLarge = new HashSet<string>(StringComparer.Ordinal);
         foreach (CidrBlock block in includedLargeRanges)
             allowedLarge.Add(block.Text);
@@ -133,10 +139,30 @@ internal sealed class CloudFeedEngine : ICloudFeedService
             toWrite.Add(range);
         }
 
-        if (toWrite.Count == 0)
-            return new CloudFeedWriteResult(CloudFeedWriteFailure.NothingToWrite, [], 0, 0, leftOut);
+        // Each piece of a cut range takes the range's place and its status, so the provider's order holds
+        var lines = new List<FeedLine>(toWrite.Count);
+        var tally = new ExceptionTally();
+        foreach (CheckedRange range in toWrite)
+        {
+            CidrBlock block = range.Prefix.Block;
+            bool confirmed = range.Status == RangeConfirmation.Confirmed;
+            IReadOnlyList<string>? pieces = exceptions.Cut(block.Start, block.End);
+            tally.Count(block.IsIpv6, pieces);
+            if (pieces is null)
+            {
+                lines.Add(new FeedLine(block.Text, block.IsIpv6, confirmed));
+                continue;
+            }
+
+            foreach (string piece in pieces)
+                lines.Add(new FeedLine(piece, block.IsIpv6, confirmed));
+        }
 
         string folder = ExportFolders.Resolve(settings, _defaultExportFolder);
+        List<string> oldFilesLeft = OldFilesLeft(folder, plan.Check, toWrite, lines);
+        if (lines.Count == 0)
+            return new CloudFeedWriteResult(CloudFeedWriteFailure.NothingToWrite, [], 0, 0, leftOut, tally.Cut, tally.Removed, oldFilesLeft);
+
         try
         {
             Directory.CreateDirectory(folder);
@@ -147,22 +173,64 @@ internal sealed class CloudFeedEngine : ICloudFeedService
             return new CloudFeedWriteResult(CloudFeedWriteFailure.FolderUnavailable, [], 0, 0, leftOut);
         }
 
+        var progress = new CloudFeedWriter.Progress();
         try
         {
-            IReadOnlyList<string> files = CloudFeedWriter.Write(folder, plan.Check, toWrite, _time.GetUtcNow());
+            IReadOnlyList<string> files = CloudFeedWriter.Write(folder, plan.Check, lines, tally, _time.GetUtcNow(), progress);
             int unconfirmed = 0;
-            foreach (CheckedRange range in toWrite)
+            foreach (FeedLine line in lines)
             {
-                if (range.Status != RangeConfirmation.Confirmed)
+                if (!line.Confirmed)
                     unconfirmed++;
             }
 
-            return new CloudFeedWriteResult(CloudFeedWriteFailure.None, files, toWrite.Count, unconfirmed, leftOut);
+            return new CloudFeedWriteResult(CloudFeedWriteFailure.None, files, lines.Count, unconfirmed, leftOut, tally.Cut, tally.Removed,
+                                            oldFilesLeft);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Trace.TraceError($"The feed could not be written: {ex.Message}");
-            return new CloudFeedWriteResult(CloudFeedWriteFailure.WriteFailed, [], 0, 0, leftOut);
+            oldFilesLeft.AddRange(LeftByFailure(folder, plan.Check, lines, progress.Attempting));
+            return new CloudFeedWriteResult(CloudFeedWriteFailure.WriteFailed, progress.Written.ToList(), 0, 0, leftOut,
+                                            OldFilesLeft: oldFilesLeft, FailedFile: progress.Attempting);
         }
+    }
+
+    // A failed write leaves the failed file's earlier copy whole, because the move that would replace it never ran, and
+    // never tries a family after it; FortiGate keeps reading what is left. With no file attempted the folder failed, so
+    // no family was tried. Files are written IPv4 first, each family that has lines
+    private static IEnumerable<string> LeftByFailure(string folder, CloudFeedCheck check, IReadOnlyList<FeedLine> lines, string? attempting)
+    {
+        bool reached = attempting is null;
+        foreach (bool ipv6 in new[] { false, true })
+        {
+            if (!lines.Any(line => line.IsIpv6 == ipv6))
+                continue;
+
+            string path = CloudFeedWriter.PathFor(folder, check, ipv6);
+            reached |= path == attempting;
+            if (reached && File.Exists(path))
+                yield return path;
+        }
+    }
+
+    // A family whose every range an exception removed gets no file, as a family with no ranges never did. A file left
+    // by an earlier write is not replaced, and FortiGate keeps reading it, so the operator is told.
+    private static List<string> OldFilesLeft(string folder, CloudFeedCheck check, IReadOnlyList<CheckedRange> toWrite, IReadOnlyList<FeedLine> lines)
+    {
+        var left = new List<string>();
+        foreach (bool ipv6 in new[] { false, true })
+        {
+            bool hadRanges = toWrite.Any(range => range.Prefix.Block.IsIpv6 == ipv6);
+            bool hasLines = lines.Any(line => line.IsIpv6 == ipv6);
+            if (!hadRanges || hasLines)
+                continue;
+
+            string path = CloudFeedWriter.PathFor(folder, check, ipv6);
+            if (File.Exists(path))
+                left.Add(path);
+        }
+
+        return left;
     }
 }

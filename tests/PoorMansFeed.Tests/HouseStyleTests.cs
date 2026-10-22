@@ -9,6 +9,7 @@ using Avalonia.Input;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.FeedExceptions;
 using GraphiteUi;
 
 namespace PoorMansFeed.Tests;
@@ -95,6 +96,36 @@ public sealed partial class HouseStyleTests
             ". Write them as a unicode escape (backslash, u, four hex digits) so the source stays plain ASCII.");
     }
 
+    [GeneratedRegex(@"\b(?:standing\s+)?orders?[ \t]+#?\d+\b", RegexOptions.IgnoreCase)]
+    private static partial Regex OrderNumber();
+
+    // The files at the top of the solution that are published with the source
+    private static readonly string[] PublishedTopFiles =
+        ["README.md", "Directory.Build.props", "global.json", "nuget.config", "PoorMansFeed.slnx", "build/publish.sh", "build/publish.ps1"];
+
+    [Fact]
+    public void SourceStatesTheRuleNotAnOrderNumber()
+    {
+        // The numbered instructions a change was made under stay out of the published files: an order's number means
+        // nothing to a reader of the code, the tests or the readme, so the text states the rule itself. A number
+        // wrapped onto the next line isn't seen
+        string solution = SolutionDirectory();
+        var offenders = new[] { "src", "tests" }
+            .SelectMany(folder => Directory.EnumerateFiles(Path.Combine(solution, folder), "*", SearchOption.AllDirectories))
+            .Where(file => Path.GetExtension(file) is ".cs" or ".axaml" or ".csproj" or ".json" or ".manifest")
+            .Concat(PublishedTopFiles.Select(file => Path.Combine(solution, file)).Where(File.Exists))
+            .Select(file => Path.GetRelativePath(solution, file))
+            .Where(file => !file.Split(Path.DirectorySeparatorChar).Any(part => part is "bin" or "obj" || part.StartsWith('.')))
+            .SelectMany(file => File.ReadLines(Path.Combine(solution, file))
+                .Select((line, index) => (line, number: index + 1))
+                .Where(entry => OrderNumber().IsMatch(entry.line))
+                .Select(entry => $"{file}:{entry.number}"))
+            .ToList();
+
+        Assert.True(offenders.Count == 0, "Order numbers in: " + string.Join(", ", offenders) +
+            ". State the rule itself instead of the number it was given.");
+    }
+
     [AvaloniaFact]
     public void EscapeCancelsAConfirmationAndEnterAloneNeverConfirms()
     {
@@ -148,8 +179,10 @@ public sealed partial class HouseStyleTests
         foreach (Window dialog in new Window[] { confirmation, about }.Concat(AppDialogs()))
         {
             dialog.Show();
+            // An icon-only button has no label to centre; its icon is checked by the automation-name sweep instead
             List<Button> buttons = dialog.GetVisualDescendants().OfType<Button>()
-                .Where(button => button.IsVisible && button.GetType() == typeof(Button)).ToList();
+                .Where(button => button.IsVisible && button.GetType() == typeof(Button))
+                .Where(button => button.GetVisualDescendants().OfType<TextBlock>().Any()).ToList();
             Assert.NotEmpty(buttons);
             Assert.All(buttons, button =>
             {
@@ -195,9 +228,16 @@ public sealed partial class HouseStyleTests
     private static IEnumerable<Window> AppDialogs()
     {
         yield return new TokenDialog(TokenPromptReason.FirstRun);
-        yield return new SettingsDialog(new UserSettings(), "/exports/default");
+        yield return new TokenDialog(SecretPrompt.ForAbuseIpDb(AbuseKeyAsk.Missing));
+        yield return new TokenDialog(SecretPrompt.ForAbuseIpDb(AbuseKeyAsk.Rejected));
+        yield return new TokenDialog(SecretPrompt.ForAbuseIpDb(AbuseKeyAsk.Replace));
         yield return new LargeRangesDialog(new LargeRangePrompt("Export AS15169?", "Message",
             [new LargeRangeChoice("10.0.0.0/8", "16,777,216 addresses")]));
+        PublicAddress.TryCreate([8, 8, 8, 8], out PublicAddress? address);
+        yield return new NewAddressesDialog(new NewAddressesPrompt("New addresses", "Message", "1 new address",
+            [new NewAddressRow("8.8.8.8", "100", "2026-10-19", WebPage.IpInfoAddress(address!), WebPage.AbuseIpDbCheck(address!))],
+            "8.8.8.8", "Copied 1 address"),
+            _ => Task.CompletedTask, _ => Task.CompletedTask);
         yield return new HelpDialog();
     }
 

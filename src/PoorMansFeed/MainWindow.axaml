@@ -15,7 +15,7 @@
   <Grid x:Name="Shell" RowDefinitions="Auto,*" ColumnDefinitions="Auto,*">
     <!-- App bar: product icon, name and version on the left; the dataset pill and the icon buttons on the right -->
     <Border x:Name="AppBar" Grid.ColumnSpan="2">
-      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
         <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
           <ui:LineIcon Data="{StaticResource IconGlobe}" Width="18" Height="18" />
           <TextBlock Text="{x:Static ui:AppInfo.Name}" Classes="body-strong" VerticalAlignment="Center" />
@@ -29,24 +29,12 @@
             <TextBlock Text="{Binding PillText}" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
           </StackPanel>
         </Border>
-        <Button x:Name="SettingsButton" Grid.Column="3" Classes="subtle" VerticalAlignment="Center"
-                Command="{Binding OpenSettingsCommand}"
-                ToolTip.Tip="{x:Static vm:AppText.SettingsTooltip}"
-                AutomationProperties.Name="{x:Static vm:AppText.SettingsTooltip}">
-          <ui:LineIcon Data="{StaticResource IconSettings}" />
-        </Button>
-        <Button x:Name="ResetTokenButton" Grid.Column="4" Classes="subtle" VerticalAlignment="Center"
-                Command="{Binding ResetTokenCommand}"
-                ToolTip.Tip="{x:Static vm:AppText.ResetTokenTooltip}"
-                AutomationProperties.Name="{x:Static vm:AppText.ResetTokenTooltip}">
-          <ui:LineIcon Data="{StaticResource IconKeyRound}" />
-        </Button>
-        <Button x:Name="HelpButton" Grid.Column="5" Classes="subtle" VerticalAlignment="Center"
+        <Button x:Name="HelpButton" Grid.Column="3" Classes="subtle" VerticalAlignment="Center"
                 ToolTip.Tip="{x:Static ui:AppInfo.HelpTitle}"
                 AutomationProperties.Name="{x:Static ui:AppInfo.HelpTitle}" Click="ShowHelpClicked">
           <ui:LineIcon Data="{StaticResource IconCircleHelp}" />
         </Button>
-        <Button x:Name="AboutButton" Grid.Column="6" Classes="subtle" VerticalAlignment="Center"
+        <Button x:Name="AboutButton" Grid.Column="4" Classes="subtle" VerticalAlignment="Center"
                 ToolTip.Tip="{x:Static ui:AppInfo.AboutTitle}"
                 AutomationProperties.Name="{x:Static ui:AppInfo.AboutTitle}" Click="ShowAboutClicked">
           <ui:LineIcon Data="{StaticResource IconInfo}" />
@@ -54,32 +42,57 @@
       </Grid>
     </Border>
 
-    <!-- Nav pane: one item per tool, always one selected; the attribution sits at the foot -->
+    <!-- Nav pane: one item per page, always one selected; Settings is docked at the foot of the list, above the
+         attribution. The list doesn't scroll, so its panel is measured at the pane's height. -->
     <Grid x:Name="NavPane" Grid.Row="1" RowDefinitions="*,Auto">
       <ListBox x:Name="NavList" Classes="nav" SelectionMode="AlwaysSelected" SelectedIndex="0"
-               SelectionChanged="NavSelectionChanged" AutomationProperties.Name="{x:Static vm:AppText.NavName}">
-        <ListBoxItem x:Name="NavLookup" AutomationProperties.Name="{x:Static vm:AppText.Title}">
+               ScrollViewer.VerticalScrollBarVisibility="Disabled"
+               SelectionChanged="NavSelectionChanged" AutomationProperties.Name="{x:Static vm:AppText.NavName}"
+               IsEnabled="{Binding !IsStopped}">
+        <ListBox.ItemsPanel>
+          <ItemsPanelTemplate>
+            <vm:NavItemsPanel LastChildFill="False" VerticalSpacing="2" />
+          </ItemsPanelTemplate>
+        </ListBox.ItemsPanel>
+        <ListBoxItem x:Name="NavLookup" DockPanel.Dock="Top" AutomationProperties.Name="{x:Static vm:AppText.Title}">
           <StackPanel Orientation="Horizontal" Spacing="12">
             <ui:LineIcon Data="{StaticResource IconSearch}" Width="18" Height="18" VerticalAlignment="Center" />
             <TextBlock Text="{x:Static vm:AppText.Title}" VerticalAlignment="Center" />
           </StackPanel>
         </ListBoxItem>
-        <ListBoxItem x:Name="NavGoogleCloud" AutomationProperties.Name="{x:Static vm:AppText.GoogleCloudTitle}">
+        <ListBoxItem x:Name="NavGoogleCloud" DockPanel.Dock="Top" AutomationProperties.Name="{x:Static vm:AppText.GoogleCloudTitle}">
           <StackPanel Orientation="Horizontal" Spacing="12">
             <ui:LineIcon Data="{StaticResource IconCloud}" Width="18" Height="18" VerticalAlignment="Center" />
             <TextBlock Text="{x:Static vm:AppText.GoogleCloudTitle}" VerticalAlignment="Center" />
           </StackPanel>
         </ListBoxItem>
-        <ListBoxItem x:Name="NavAzure" AutomationProperties.Name="{x:Static vm:AppText.AzureTitle}">
+        <ListBoxItem x:Name="NavAzure" DockPanel.Dock="Top" AutomationProperties.Name="{x:Static vm:AppText.AzureTitle}">
           <StackPanel Orientation="Horizontal" Spacing="12">
             <ui:LineIcon Data="{StaticResource IconCloud}" Width="18" Height="18" VerticalAlignment="Center" />
             <TextBlock Text="{x:Static vm:AppText.AzureTitle}" VerticalAlignment="Center" />
           </StackPanel>
         </ListBoxItem>
-        <ListBoxItem x:Name="NavAws" AutomationProperties.Name="{x:Static vm:AppText.AwsTitle}">
+        <ListBoxItem x:Name="NavAws" DockPanel.Dock="Top" AutomationProperties.Name="{x:Static vm:AppText.AwsTitle}">
           <StackPanel Orientation="Horizontal" Spacing="12">
             <ui:LineIcon Data="{StaticResource IconCloud}" Width="18" Height="18" VerticalAlignment="Center" />
             <TextBlock Text="{x:Static vm:AppText.AwsTitle}" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
+        <ListBoxItem x:Name="NavAbuseIpDb" DockPanel.Dock="Top" AutomationProperties.Name="{x:Static vm:AppText.AbuseIpDbTitle}">
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <ui:LineIcon Data="{StaticResource IconTriangleAlert}" Width="18" Height="18" VerticalAlignment="Center" />
+            <TextBlock Text="{x:Static vm:AppText.AbuseIpDbTitle}" VerticalAlignment="Center" />
+          </StackPanel>
+        </ListBoxItem>
+        <ListBoxItem x:Name="NavSettings" DockPanel.Dock="Bottom" AutomationProperties.Name="{x:Static vm:AppText.SettingsTitle}">
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <ui:LineIcon Data="{StaticResource IconSettings}" Width="18" Height="18" VerticalAlignment="Center" />
+            <TextBlock Text="{x:Static vm:AppText.SettingsTitle}" VerticalAlignment="Center" />
+            <!-- Shown from every page while the Settings page has unsaved edits; its context is that page, set in code.
+                 Hidden, it keeps its space, so the item never changes size. -->
+            <TextBlock x:Name="NavSettingsMark" x:DataType="vm:SettingsPageViewModel" Text="{x:Static vm:AppText.SettingsNotSavedMark}"
+                       Classes="small caution" Classes.placeholder="{Binding !HasUnsavedChanges, FallbackValue=True}"
+                       VerticalAlignment="Center" />
           </StackPanel>
         </ListBoxItem>
       </ListBox>
@@ -91,313 +104,732 @@
          grows with the window. MinHeight is the tallest page (Azure and AWS, with their status line) with a 216px list,
          measured headlessly; below it the page scrolls instead of squeezing the list. -->
     <Border x:Name="ContentLayer" Grid.Row="1" Grid.Column="1">
-      <ScrollViewer x:Name="PageScroll" HorizontalScrollBarVisibility="Disabled">
-        <Border x:Name="PageFrame" Padding="32" MinHeight="738" Height="{Binding #PageScroll.Viewport.Height}">
-          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="32">
+      <Panel>
+        <ScrollViewer x:Name="PageScroll" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding !IsStopped}">
+          <Border x:Name="PageFrame" Padding="32" MinHeight="738" Height="{Binding #PageScroll.Viewport.Height}">
+            <Grid RowDefinitions="Auto,Auto,*" RowSpacing="32">
 
-            <!-- Page headings: one per tool, swapped with the pages below -->
-            <Panel>
-              <StackPanel x:Name="LookupHeading" Spacing="2" VerticalAlignment="Center">
-                <TextBlock Text="{x:Static vm:AppText.Title}" Classes="title" />
-                <TextBlock Text="{x:Static vm:AppText.Caption}" Classes="caption" />
-              </StackPanel>
-              <StackPanel x:Name="ToolsHeading" Spacing="2" VerticalAlignment="Center" IsVisible="False">
-                <TextBlock Text="{x:Static vm:AppText.GoogleCloudTitle}" Classes="title" />
-                <TextBlock Text="{x:Static vm:AppText.GoogleCloudCaption}" Classes="caption" />
-              </StackPanel>
-              <Grid x:Name="AzureHeading" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False"
-                    x:DataType="vm:AzureFeedViewModel">
-                <StackPanel Spacing="2" VerticalAlignment="Center">
-                  <TextBlock Text="{x:Static vm:AppText.AzureTitle}" Classes="title" />
-                  <TextBlock Text="{x:Static vm:AppText.AzureCaption}" Classes="caption" />
+              <!-- Page headings: one per tool, swapped with the pages below -->
+              <Panel>
+                <StackPanel x:Name="LookupHeading" Spacing="2" VerticalAlignment="Center">
+                  <TextBlock Text="{x:Static vm:AppText.Title}" Classes="title" />
+                  <TextBlock Text="{x:Static vm:AppText.Caption}" Classes="caption" />
                 </StackPanel>
-                <Button x:Name="AzureCheckForUpdatesButton" Grid.Column="1" Command="{Binding CheckForUpdatesCommand}"
-                        VerticalAlignment="Center" ToolTip.Tip="{x:Static vm:AppText.CheckForUpdatesTooltip}"
-                        AutomationProperties.Name="{x:Static vm:AppText.CheckForUpdates}">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <ui:LineIcon Data="{StaticResource IconCloudDownload}" />
-                    <TextBlock Text="{x:Static vm:AppText.CheckForUpdates}" />
-                  </StackPanel>
-                </Button>
-              </Grid>
-              <Grid x:Name="AwsHeading" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False"
-                    x:DataType="vm:AwsFeedViewModel">
-                <StackPanel Spacing="2" VerticalAlignment="Center">
-                  <TextBlock Text="{x:Static vm:AppText.AwsTitle}" Classes="title" />
-                  <TextBlock Text="{x:Static vm:AppText.AwsCaption}" Classes="caption" />
+                <StackPanel x:Name="ToolsHeading" Spacing="2" VerticalAlignment="Center" IsVisible="False">
+                  <TextBlock Text="{x:Static vm:AppText.GoogleCloudTitle}" Classes="title" />
+                  <TextBlock Text="{x:Static vm:AppText.GoogleCloudCaption}" Classes="caption" />
                 </StackPanel>
-                <Button x:Name="AwsCheckForUpdatesButton" Grid.Column="1" Command="{Binding CheckForUpdatesCommand}"
-                        VerticalAlignment="Center" ToolTip.Tip="{x:Static vm:AppText.AwsCheckForUpdatesTooltip}"
-                        AutomationProperties.Name="{x:Static vm:AppText.CheckForUpdates}">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <ui:LineIcon Data="{StaticResource IconCloudDownload}" />
-                    <TextBlock Text="{x:Static vm:AppText.CheckForUpdates}" />
+                <Grid x:Name="AzureHeading" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False"
+                      x:DataType="vm:AzureFeedViewModel">
+                  <StackPanel Spacing="2" VerticalAlignment="Center">
+                    <TextBlock Text="{x:Static vm:AppText.AzureTitle}" Classes="title" />
+                    <TextBlock Text="{x:Static vm:AppText.AzureCaption}" Classes="caption" />
                   </StackPanel>
-                </Button>
-              </Grid>
-            </Panel>
-
-            <!-- Dataset: on every page, so a download stays in view whichever tool is open. A StackPanel leaves out
-                 the hidden error bar's spacing; a grid row would keep it. -->
-            <StackPanel Grid.Row="1" Spacing="24">
-              <!-- Start-up failure that leaves no page to put a notice on -->
-              <Border x:Name="StartupErrorBar" Classes="infobar error" IsVisible="{Binding ShowStartupError}">
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                  <ui:LineIcon Classes="severity" VerticalAlignment="Center" />
-                  <SelectableTextBlock Grid.Column="1" Text="{Binding StartupErrorText}" TextWrapping="Wrap"
-                                       VerticalAlignment="Center" Margin="0,6" AutomationProperties.LiveSetting="Polite" />
-                </Grid>
-              </Border>
-
-              <StackPanel Spacing="8">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" Margin="2,0,2,4">
-                  <StackPanel Spacing="2">
-                    <TextBlock Text="{x:Static vm:AppText.DatasetHeader}" Classes="section-title" />
-                    <TextBlock Text="{x:Static vm:AppText.DatasetCaption}" Classes="caption" />
-                  </StackPanel>
-                  <Button x:Name="UpdateButton" Grid.Column="1" Classes="accent" VerticalAlignment="Center"
-                          Command="{Binding UpdateDatasetCommand}" ToolTip.Tip="{x:Static vm:AppText.UpdateTooltip}">
+                  <Button x:Name="AzureCheckForUpdatesButton" Grid.Column="1" Command="{Binding CheckForUpdatesCommand}"
+                          VerticalAlignment="Center" ToolTip.Tip="{x:Static vm:AppText.CheckForUpdatesTooltip}"
+                          AutomationProperties.Name="{x:Static vm:AppText.CheckForUpdates}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                       <ui:LineIcon Data="{StaticResource IconCloudDownload}" />
-                      <TextBlock Text="{x:Static vm:AppText.UpdateButton}" />
+                      <TextBlock Text="{x:Static vm:AppText.CheckForUpdates}" />
                     </StackPanel>
                   </Button>
                 </Grid>
-                <Border x:Name="DatasetCard" Classes="card" Padding="20,16" AutomationProperties.LandmarkType="Region">
-                  <StackPanel Spacing="14">
-                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                      <ui:LineIcon Data="{StaticResource IconCloudDownload}" Width="20" Height="20"
-                                   Foreground="{DynamicResource GraphiteTextSecondaryBrush}" VerticalAlignment="Center" />
-                      <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                        <TextBlock x:Name="DatasetStatus" Text="{Binding DatasetStatusText}" Classes="card-title"
-                                   TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
-                        <TextBlock x:Name="DatasetDetail" Text="{Binding DatasetDetailText}" Classes="secondary"
-                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding DatasetDetailText}" />
-                        <TextBlock x:Name="DatasetFacts" Text="{Binding DatasetFactsText}" Classes="caption"
-                                   TextTrimming="CharacterEllipsis" />
-                      </StackPanel>
-                      <Button x:Name="CancelUpdateButton" Grid.Column="2" Content="{x:Static vm:AppText.Cancel}"
-                              Command="{Binding CancelUpdateCommand}" VerticalAlignment="Center" />
-                    </Grid>
-                    <!-- Two bars of the same size: one determinate, one indeterminate. Only one is visible, so the
-                         determinate bar never has to leave indeterminate mode. -->
-                    <Panel>
-                      <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
-                                   IsVisible="{Binding !IsProgressIndeterminate}"
-                                   AutomationProperties.Name="{x:Static vm:AppText.ProgressName}" />
-                      <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsProgressIndeterminate}"
-                                   AutomationProperties.Name="{x:Static vm:AppText.ProgressName}" />
-                    </Panel>
+                <Grid x:Name="AwsHeading" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False"
+                      x:DataType="vm:AwsFeedViewModel">
+                  <StackPanel Spacing="2" VerticalAlignment="Center">
+                    <TextBlock Text="{x:Static vm:AppText.AwsTitle}" Classes="title" />
+                    <TextBlock Text="{x:Static vm:AppText.AwsCaption}" Classes="caption" />
                   </StackPanel>
-                </Border>
-              </StackPanel>
-            </StackPanel>
+                  <Button x:Name="AwsCheckForUpdatesButton" Grid.Column="1" Command="{Binding CheckForUpdatesCommand}"
+                          VerticalAlignment="Center" ToolTip.Tip="{x:Static vm:AppText.AwsCheckForUpdatesTooltip}"
+                          AutomationProperties.Name="{x:Static vm:AppText.CheckForUpdates}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <ui:LineIcon Data="{StaticResource IconCloudDownload}" />
+                      <TextBlock Text="{x:Static vm:AppText.CheckForUpdates}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+                <Grid x:Name="AbuseIpDbHeading" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False"
+                      x:DataType="vm:AbuseIpDbViewModel">
+                  <StackPanel Spacing="2" VerticalAlignment="Center">
+                    <TextBlock Text="{x:Static vm:AppText.AbuseIpDbTitle}" Classes="title" />
+                    <TextBlock Text="{x:Static vm:AppText.AbuseIpDbCaption}" Classes="caption" />
+                  </StackPanel>
+                  <Button x:Name="ShowNewAddressesButton" Grid.Column="1" Command="{Binding ShowNewAddressesCommand}"
+                          Content="{x:Static vm:AppText.NewAddresses}" VerticalAlignment="Center"
+                          ToolTip.Tip="{x:Static vm:AppText.NewAddressesTooltip}"
+                          AutomationProperties.Name="{x:Static vm:AppText.NewAddresses}" />
+                </Grid>
+                <StackPanel x:Name="SettingsHeading" Spacing="2" VerticalAlignment="Center" IsVisible="False">
+                  <TextBlock Text="{x:Static vm:AppText.SettingsTitle}" Classes="title" />
+                  <TextBlock Text="{x:Static vm:AppText.SettingsCaption}" Classes="caption" />
+                </StackPanel>
+              </Panel>
 
-            <!-- Pages: each is a control card over a results section whose card fills the rest of the frame -->
-            <Panel Grid.Row="2">
-              <Grid x:Name="LookupPage" RowDefinitions="Auto,*" RowSpacing="24">
-                <!-- Search: Enter runs the default button only while this page is showing -->
-                <Border Classes="card compact">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <TextBox x:Name="SearchBox" Text="{Binding SearchText}" Classes="mono"
-                             PlaceholderText="{x:Static vm:AppText.SearchPlaceholder}" MaxLength="64"
-                             AutomationProperties.Name="{x:Static vm:AppText.SearchBoxName}" />
-                    <Button x:Name="SearchButton" Grid.Column="1" IsDefault="True" Command="{Binding SearchCommand}">
+              <!-- Dataset: on every page, so a download stays in view whichever tool is open -->
+              <StackPanel Grid.Row="1" Spacing="24">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" Margin="2,0,2,4">
+                    <StackPanel Spacing="2">
+                      <TextBlock Text="{x:Static vm:AppText.DatasetHeader}" Classes="section-title" />
+                      <TextBlock Text="{x:Static vm:AppText.DatasetCaption}" Classes="caption" />
+                    </StackPanel>
+                    <Button x:Name="UpdateButton" Grid.Column="1" Classes="accent" VerticalAlignment="Center"
+                            Command="{Binding UpdateDatasetCommand}" ToolTip.Tip="{x:Static vm:AppText.UpdateTooltip}">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <ui:LineIcon Data="{StaticResource IconSearch}" />
-                        <TextBlock Text="{x:Static vm:AppText.SearchButton}" />
+                        <ui:LineIcon Data="{StaticResource IconCloudDownload}" />
+                        <TextBlock Text="{x:Static vm:AppText.UpdateButton}" />
                       </StackPanel>
                     </Button>
                   </Grid>
-                </Border>
-
-                <!-- Results: the card has a fixed header; the empty text and the list swap inside it -->
-                <Grid Grid.Row="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
-                    <StackPanel Spacing="2">
-                      <TextBlock Text="{x:Static vm:AppText.ResultsHeader}" Classes="section-title" />
-                      <TextBlock x:Name="ResultsSummary" Text="{Binding ResultsSummaryText}" Classes="caption"
-                                 TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
-                      <Button x:Name="CopyResultsButton" Classes="subtle" Command="{Binding CopyResultsCommand}"
-                              ToolTip.Tip="{x:Static vm:AppText.CopyTooltip}"
-                              AutomationProperties.Name="{x:Static vm:AppText.CopyName}">
-                        <ui:LineIcon Data="{StaticResource IconCopy}" Width="15" Height="15" />
-                      </Button>
-                      <Button x:Name="OpenFolderButton" Command="{Binding OpenExportFolderCommand}"
-                              ToolTip.Tip="{x:Static vm:AppText.OpenFolderName}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                          <ui:LineIcon Data="{StaticResource IconFolder}" />
-                          <TextBlock Text="{x:Static vm:AppText.OpenFolder}" />
+                  <Border x:Name="DatasetCard" Classes="card" Padding="20,16" AutomationProperties.LandmarkType="Region">
+                    <StackPanel Spacing="14">
+                      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <ui:LineIcon Data="{StaticResource IconCloudDownload}" Width="20" Height="20"
+                                     Foreground="{DynamicResource GraphiteTextSecondaryBrush}" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                          <TextBlock x:Name="DatasetStatus" Text="{Binding DatasetStatusText}" Classes="card-title"
+                                     TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+                          <TextBlock x:Name="DatasetDetail" Text="{Binding DatasetDetailText}" Classes="secondary"
+                                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding DatasetDetailText}" />
+                          <TextBlock x:Name="DatasetFacts" Text="{Binding DatasetFactsText}" Classes="caption"
+                                     TextTrimming="CharacterEllipsis" />
                         </StackPanel>
-                      </Button>
-                      <Button x:Name="ExportButton" Command="{Binding ExportCommand}"
-                              ToolTip.Tip="{x:Static vm:AppText.ExportTooltip}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                          <ui:LineIcon Data="{StaticResource IconDownload}" />
-                          <TextBlock Text="{x:Static vm:AppText.Export}" />
-                        </StackPanel>
-                      </Button>
-                    </StackPanel>
-                  </Grid>
-
-                  <Border x:Name="ResultsCard" Grid.Row="1" Classes="card" Padding="0" ClipToBounds="True">
-                    <Grid RowDefinitions="36,*">
-                      <Grid x:Name="ResultsHeader" Margin="16,0" ColumnDefinitions="2*,1.4*,2*,1.2*,96" ColumnSpacing="12">
-                        <TextBlock Text="{x:Static vm:AppText.ColumnNetwork}" Classes="caption" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="1" Text="{x:Static vm:AppText.ColumnCountry}" Classes="caption"
-                                   VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Text="{x:Static vm:AppText.ColumnAs}" Classes="caption"
-                                   VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="3" Text="{x:Static vm:AppText.ColumnDomain}" Classes="caption"
-                                   VerticalAlignment="Center" />
+                        <Button x:Name="CancelUpdateButton" Grid.Column="2" Content="{x:Static vm:AppText.Cancel}"
+                                Command="{Binding CancelUpdateCommand}" VerticalAlignment="Center" />
                       </Grid>
-                      <Panel Grid.Row="1">
-                        <TextBlock x:Name="ResultsEmpty" Text="{Binding ResultsEmptyText}" Classes="caption" Margin="16,12"
-                                   TextWrapping="Wrap" IsVisible="{Binding !HasResults}" />
-                        <!-- Virtualized: only the visible rows exist. Every row has the fixed height of Border.row. -->
-                        <ScrollViewer IsVisible="{Binding HasResults}">
-                          <ItemsControl x:Name="ResultsList" ItemsSource="{Binding Results}">
-                            <ItemsControl.ItemsPanel>
-                              <ItemsPanelTemplate>
-                                <VirtualizingStackPanel />
-                              </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                              <DataTemplate x:DataType="vm:ResultRow">
-                                <Border Classes="row" AutomationProperties.Name="{Binding AccessibleText}">
-                                  <Grid ColumnDefinitions="2*,1.4*,2*,1.2*,96" ColumnSpacing="12">
-                                    <TextBlock Text="{Binding NetworkText}" Classes="mono" TextTrimming="CharacterEllipsis"
-                                               VerticalAlignment="Center" ToolTip.Tip="{Binding NetworkText}" />
-                                    <TextBlock Grid.Column="1" Text="{Binding CountryText}" TextTrimming="CharacterEllipsis"
-                                               VerticalAlignment="Center" ToolTip.Tip="{Binding CountryText}" />
-                                    <TextBlock Grid.Column="2" Text="{Binding AsText}" TextTrimming="CharacterEllipsis"
-                                               VerticalAlignment="Center" ToolTip.Tip="{Binding AsText}" />
-                                    <TextBlock Grid.Column="3" Text="{Binding DomainText}" TextTrimming="CharacterEllipsis"
-                                               VerticalAlignment="Center" ToolTip.Tip="{Binding DomainText}" />
-                                    <Border Grid.Column="4" Classes="badge caution" IsVisible="{Binding IsLargeRange}"
-                                            HorizontalAlignment="Right" VerticalAlignment="Center">
-                                      <TextBlock Text="{x:Static vm:AppText.LargeRangeBadge}" />
-                                    </Border>
-                                  </Grid>
-                                </Border>
-                              </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                          </ItemsControl>
-                        </ScrollViewer>
+                      <!-- Two bars of the same size: one determinate, one indeterminate. Only one is visible, so the
+                           determinate bar never has to leave indeterminate mode. -->
+                      <Panel>
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
+                                     IsVisible="{Binding !IsProgressIndeterminate}"
+                                     AutomationProperties.Name="{x:Static vm:AppText.ProgressName}" />
+                        <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsProgressIndeterminate}"
+                                     AutomationProperties.Name="{x:Static vm:AppText.ProgressName}" />
                       </Panel>
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </StackPanel>
+
+              <!-- Pages: each is a control card over a results section whose card fills the rest of the frame -->
+              <Panel Grid.Row="2">
+                <Grid x:Name="LookupPage" RowDefinitions="Auto,*" RowSpacing="24">
+                  <!-- Search: Enter runs the default button only while this page is showing -->
+                  <Border Classes="card compact">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBox x:Name="SearchBox" Text="{Binding SearchText}" Classes="mono"
+                               PlaceholderText="{x:Static vm:AppText.SearchPlaceholder}" MaxLength="64"
+                               AutomationProperties.Name="{x:Static vm:AppText.SearchBoxName}" />
+                      <Button x:Name="SearchButton" Grid.Column="1" IsDefault="True" Command="{Binding SearchCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <ui:LineIcon Data="{StaticResource IconSearch}" />
+                          <TextBlock Text="{x:Static vm:AppText.SearchButton}" />
+                        </StackPanel>
+                      </Button>
                     </Grid>
                   </Border>
 
-                  <!-- Outcome of Export, Copy and Open folder; always present, so the page does not move -->
-                  <TextBlock x:Name="ResultsAction" Grid.Row="2" Text="{Binding ResultsActionText}" Classes="caption"
-                             Height="18" Classes.placeholder="{Binding !HasResultsAction}" TextTrimming="CharacterEllipsis"
-                             AutomationProperties.LiveSetting="Polite" />
-                </Grid>
-              </Grid>
+                  <!-- Results: the card has a fixed header; the empty text and the list swap inside it -->
+                  <Grid Grid.Row="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                    <!-- The summary has a row of its own across the card, so a long IPv6 address shows whole at the
+                         minimum width; the buttons share the first row with the title -->
+                    <Grid x:Name="ResultsTitleBar" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12"
+                          RowSpacing="2" Margin="2,0,2,4">
+                      <TextBlock Text="{x:Static vm:AppText.ResultsHeader}" Classes="section-title" VerticalAlignment="Center" />
+                      <TextBlock x:Name="ResultsSummary" Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding ResultsSummaryText}"
+                                 Classes="caption" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                        <Button x:Name="CopyResultsButton" Classes="subtle" Command="{Binding CopyResultsCommand}"
+                                ToolTip.Tip="{x:Static vm:AppText.CopyTooltip}"
+                                AutomationProperties.Name="{x:Static vm:AppText.CopyName}">
+                          <ui:LineIcon Data="{StaticResource IconCopy}" Width="15" Height="15" />
+                        </Button>
+                        <Button x:Name="CheckAbuseButton" Command="{Binding CheckAbuseCommand}" Content="{x:Static vm:AppText.CheckAbuse}"
+                                ToolTip.Tip="{x:Static vm:AppText.CheckAbuseTooltip}" />
+                        <Button x:Name="OpenFolderButton" Command="{Binding OpenExportFolderCommand}"
+                                ToolTip.Tip="{x:Static vm:AppText.OpenFolderName}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconFolder}" />
+                            <TextBlock Text="{x:Static vm:AppText.OpenFolder}" />
+                          </StackPanel>
+                        </Button>
+                        <Button x:Name="ExportButton" Command="{Binding ExportCommand}"
+                                ToolTip.Tip="{x:Static vm:AppText.ExportTooltip}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconDownload}" />
+                            <TextBlock Text="{x:Static vm:AppText.Export}" />
+                          </StackPanel>
+                        </Button>
+                      </StackPanel>
+                    </Grid>
 
-              <Grid x:Name="ToolsPage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
-                    x:DataType="vm:GoogleCloudFeedViewModel">
-                <Border Classes="card compact">
-                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
-                    <ComboBox x:Name="RegionBox" ItemsSource="{Binding Regions}" SelectedItem="{Binding SelectedRegion}"
-                              HorizontalAlignment="Stretch" IsEnabled="{Binding !IsWorking}"
-                              AutomationProperties.Name="{x:Static vm:AppText.ColumnRegion}">
-                      <ComboBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:RegionOption">
-                          <TextBlock Text="{Binding Text}" />
-                        </DataTemplate>
-                      </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <CheckBox x:Name="AddGlobalBox" Grid.Column="1" Content="{x:Static vm:AppText.AddGlobalRanges}"
-                              IsChecked="{Binding IncludeGlobal}" IsEnabled="{Binding CanIncludeGlobal}"
-                              VerticalAlignment="Center" />
-                    <Button x:Name="CheckRangesButton" Grid.Column="2" Command="{Binding CheckCommand}"
-                            AutomationProperties.Name="{x:Static vm:AppText.CheckRanges}" VerticalAlignment="Center">
-                      <TextBlock Text="{x:Static vm:AppText.CheckRanges}" />
-                    </Button>
+                    <Border x:Name="ResultsCard" Grid.Row="1" Classes="card" Padding="0" ClipToBounds="True">
+                      <Grid RowDefinitions="36,*">
+                        <Grid x:Name="ResultsHeader" Margin="16,0" ColumnDefinitions="2*,1.4*,2*,1.2*,96" ColumnSpacing="12">
+                          <TextBlock Text="{x:Static vm:AppText.ColumnNetwork}" Classes="caption" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="{x:Static vm:AppText.ColumnCountry}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="2" Text="{x:Static vm:AppText.ColumnAs}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="3" Text="{x:Static vm:AppText.ColumnDomain}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                        </Grid>
+                        <Panel Grid.Row="1">
+                          <TextBlock x:Name="ResultsEmpty" Text="{Binding ResultsEmptyText}" Classes="caption" Margin="16,12"
+                                     TextWrapping="Wrap" IsVisible="{Binding !HasResults}" />
+                          <!-- Virtualized: only the visible rows exist. Every row has the fixed height of Border.row. -->
+                          <ScrollViewer IsVisible="{Binding HasResults}">
+                            <ItemsControl x:Name="ResultsList" ItemsSource="{Binding Results}">
+                              <!-- One menu for the list: a row's right-click bubbles up to it, and its pages come from
+                                   the search, which every row shares -->
+                              <ItemsControl.ContextMenu>
+                                <ContextMenu>
+                                  <MenuItem Header="{x:Static vm:AppText.OpenInIpinfo}" Command="{Binding OpenInIpinfoCommand}" />
+                                  <MenuItem Header="{x:Static vm:AppText.OpenInAbuseIpDb}" Command="{Binding OpenInAbuseIpDbCommand}" />
+                                </ContextMenu>
+                              </ItemsControl.ContextMenu>
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                  <VirtualizingStackPanel />
+                                </ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ResultRow">
+                                  <!-- Transparent, so a right-click in a gap between the columns still reaches the list -->
+                                  <Border Classes="row" Background="Transparent" AutomationProperties.Name="{Binding AccessibleText}">
+                                    <Grid ColumnDefinitions="2*,1.4*,2*,1.2*,96" ColumnSpacing="12">
+                                      <TextBlock Text="{Binding NetworkText}" Classes="mono" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding NetworkText}" />
+                                      <TextBlock Grid.Column="1" Text="{Binding CountryText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding CountryText}" />
+                                      <TextBlock Grid.Column="2" Text="{Binding AsText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding AsText}" />
+                                      <TextBlock Grid.Column="3" Text="{Binding DomainText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding DomainText}" />
+                                      <Border Grid.Column="4" Classes="badge caution" IsVisible="{Binding IsLargeRange}"
+                                              HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Static vm:AppText.LargeRangeBadge}" />
+                                      </Border>
+                                    </Grid>
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </ScrollViewer>
+                        </Panel>
+                      </Grid>
+                    </Border>
+
+                    <!-- Outcome of Export, Copy and Open folder; always present, so the page does not move -->
+                    <TextBlock x:Name="ResultsAction" Grid.Row="2" Text="{Binding ResultsActionText}" Classes="caption"
+                               Height="18" Classes.placeholder="{Binding !HasResultsAction}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding ResultsActionText}" AutomationProperties.LiveSetting="Polite" />
                   </Grid>
-                </Border>
+                </Grid>
 
-                <vm:CloudRangesPanel Grid.Row="1" />
-              </Grid>
-
-              <Grid x:Name="AzurePage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
-                    x:DataType="vm:AzureFeedViewModel">
-                <Border Classes="card compact">
-                  <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="12">
-                      <ComboBox x:Name="ServiceBox" ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}"
+                <Grid x:Name="ToolsPage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
+                      x:DataType="vm:GoogleCloudFeedViewModel">
+                  <Border Classes="card compact">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+                      <ComboBox x:Name="RegionBox" ItemsSource="{Binding Regions}" SelectedItem="{Binding SelectedRegion}"
                                 HorizontalAlignment="Stretch" IsEnabled="{Binding !IsWorking}"
-                                AutomationProperties.Name="{x:Static vm:AppText.ColumnService}">
+                                AutomationProperties.Name="{x:Static vm:AppText.ColumnRegion}">
                         <ComboBox.ItemTemplate>
-                          <DataTemplate x:DataType="vm:AzureServiceOption">
+                          <DataTemplate x:DataType="vm:RegionOption">
                             <TextBlock Text="{Binding Text}" />
                           </DataTemplate>
                         </ComboBox.ItemTemplate>
                       </ComboBox>
-                      <ComboBox x:Name="AzureRegionBox" Grid.Column="1" ItemsSource="{Binding Regions}"
-                                SelectedItem="{Binding SelectedRegion}" HorizontalAlignment="Stretch"
-                                IsEnabled="{Binding !IsWorking}" AutomationProperties.Name="{x:Static vm:AppText.ColumnRegion}">
-                        <ComboBox.ItemTemplate>
-                          <DataTemplate x:DataType="vm:AzureTagOption">
-                            <TextBlock Text="{Binding Text}" />
-                          </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                      </ComboBox>
-                      <Button x:Name="AzureCheckRangesButton" Grid.Column="2" Command="{Binding CheckCommand}"
+                      <CheckBox x:Name="AddGlobalBox" Grid.Column="1" Content="{x:Static vm:AppText.AddGlobalRanges}"
+                                IsChecked="{Binding IncludeGlobal}" IsEnabled="{Binding CanIncludeGlobal}"
+                                VerticalAlignment="Center" />
+                      <Button x:Name="CheckRangesButton" Grid.Column="2" Command="{Binding CheckCommand}"
                               AutomationProperties.Name="{x:Static vm:AppText.CheckRanges}" VerticalAlignment="Center">
                         <TextBlock Text="{x:Static vm:AppText.CheckRanges}" />
                       </Button>
                     </Grid>
-                    <TextBlock x:Name="AzureStatus" Text="{Binding StatusText}" Classes="caption" Height="18"
-                               TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
-                  </StackPanel>
-                </Border>
+                  </Border>
 
-                <vm:CloudRangesPanel Grid.Row="1" />
-              </Grid>
+                  <vm:CloudRangesPanel Grid.Row="1" />
+                </Grid>
 
-              <Grid x:Name="AwsPage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
-                    x:DataType="vm:AwsFeedViewModel">
-                <Border Classes="card compact">
-                  <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="12">
-                      <ComboBox x:Name="AwsServiceBox" ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}"
-                                HorizontalAlignment="Stretch" IsEnabled="{Binding !IsWorking}"
-                                AutomationProperties.Name="{x:Static vm:AppText.ColumnService}">
-                        <ComboBox.ItemTemplate>
-                          <DataTemplate x:DataType="vm:AwsServiceOption">
-                            <TextBlock Text="{Binding Text}" />
-                          </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                      </ComboBox>
-                      <ComboBox x:Name="AwsRegionBox" Grid.Column="1" ItemsSource="{Binding Regions}"
-                                SelectedItem="{Binding SelectedRegion}" HorizontalAlignment="Stretch"
-                                IsEnabled="{Binding !IsWorking}" AutomationProperties.Name="{x:Static vm:AppText.ColumnRegion}">
-                        <ComboBox.ItemTemplate>
-                          <DataTemplate x:DataType="vm:AwsRegionOption">
-                            <TextBlock Text="{Binding Text}" />
-                          </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                      </ComboBox>
-                      <Button x:Name="AwsCheckRangesButton" Grid.Column="2" Command="{Binding CheckCommand}"
-                              AutomationProperties.Name="{x:Static vm:AppText.CheckRanges}" VerticalAlignment="Center">
-                        <TextBlock Text="{x:Static vm:AppText.CheckRanges}" />
-                      </Button>
+                <Grid x:Name="AzurePage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
+                      x:DataType="vm:AzureFeedViewModel">
+                  <Border Classes="card compact">
+                    <StackPanel Spacing="8">
+                      <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="12">
+                        <ComboBox x:Name="ServiceBox" ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}"
+                                  HorizontalAlignment="Stretch" IsEnabled="{Binding !IsWorking}"
+                                  AutomationProperties.Name="{x:Static vm:AppText.ColumnService}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AzureServiceOption">
+                              <TextBlock Text="{Binding Text}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <ComboBox x:Name="AzureRegionBox" Grid.Column="1" ItemsSource="{Binding Regions}"
+                                  SelectedItem="{Binding SelectedRegion}" HorizontalAlignment="Stretch"
+                                  IsEnabled="{Binding !IsWorking}" AutomationProperties.Name="{x:Static vm:AppText.ColumnRegion}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AzureTagOption">
+                              <TextBlock Text="{Binding Text}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button x:Name="AzureCheckRangesButton" Grid.Column="2" Command="{Binding CheckCommand}"
+                                AutomationProperties.Name="{x:Static vm:AppText.CheckRanges}" VerticalAlignment="Center">
+                          <TextBlock Text="{x:Static vm:AppText.CheckRanges}" />
+                        </Button>
+                      </Grid>
+                      <TextBlock x:Name="AzureStatus" Text="{Binding StatusText}" Classes="caption" Height="18"
+                                 TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                  </Border>
+
+                  <vm:CloudRangesPanel Grid.Row="1" />
+                </Grid>
+
+                <Grid x:Name="AwsPage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
+                      x:DataType="vm:AwsFeedViewModel">
+                  <Border Classes="card compact">
+                    <StackPanel Spacing="8">
+                      <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="12">
+                        <ComboBox x:Name="AwsServiceBox" ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}"
+                                  HorizontalAlignment="Stretch" IsEnabled="{Binding !IsWorking}"
+                                  AutomationProperties.Name="{x:Static vm:AppText.ColumnService}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AwsServiceOption">
+                              <TextBlock Text="{Binding Text}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <ComboBox x:Name="AwsRegionBox" Grid.Column="1" ItemsSource="{Binding Regions}"
+                                  SelectedItem="{Binding SelectedRegion}" HorizontalAlignment="Stretch"
+                                  IsEnabled="{Binding !IsWorking}" AutomationProperties.Name="{x:Static vm:AppText.ColumnRegion}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AwsRegionOption">
+                              <TextBlock Text="{Binding Text}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button x:Name="AwsCheckRangesButton" Grid.Column="2" Command="{Binding CheckCommand}"
+                                AutomationProperties.Name="{x:Static vm:AppText.CheckRanges}" VerticalAlignment="Center">
+                          <TextBlock Text="{x:Static vm:AppText.CheckRanges}" />
+                        </Button>
+                      </Grid>
+                      <TextBlock x:Name="AwsStatus" Text="{Binding StatusText}" Classes="caption" Height="18"
+                                 TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                  </Border>
+
+                  <vm:CloudRangesPanel Grid.Row="1" />
+                </Grid>
+
+                <!-- AbuseIPDB Blacklist: the list's facts and its two actions over the offending networks, a report grouped by
+                     IPinfo's ASN. The status line and the grouping bar share one 18px panel, so neither moves the page. -->
+                <Grid x:Name="AbuseIpDbPage" RowDefinitions="Auto,*" RowSpacing="24" IsVisible="False"
+                      x:DataType="vm:AbuseIpDbViewModel">
+                  <Border Classes="card compact">
+                    <StackPanel Spacing="8">
+                      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="12">
+                        <!-- Two lines in the buttons' 36px: the last download, then the downloads left and the counts. Both
+                             tips and the name are the whole line; an empty second line keeps its space. -->
+                        <StackPanel VerticalAlignment="Center">
+                          <TextBlock x:Name="AbuseFacts" Text="{Binding FactsHeadText}" TextTrimming="CharacterEllipsis"
+                                     ToolTip.Tip="{Binding FactsText}" AutomationProperties.Name="{Binding FactsText}" />
+                          <TextBlock x:Name="AbuseFactsDetail" Text="{Binding FactsDetailText}" Classes="caption"
+                                     TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding FactsText}"
+                                     AutomationProperties.AccessibilityView="Raw" />
+                        </StackPanel>
+                        <Button x:Name="DownloadBlacklistButton" Grid.Column="1" Command="{Binding DownloadCommand}"
+                                VerticalAlignment="Center" ToolTip.Tip="{x:Static vm:AppText.DownloadBlacklistTooltip}"
+                                AutomationProperties.Name="{x:Static vm:AppText.DownloadBlacklist}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconCloudDownload}" />
+                            <TextBlock Text="{x:Static vm:AppText.DownloadBlacklist}" />
+                          </StackPanel>
+                        </Button>
+                        <Button x:Name="ClearListButton" Grid.Column="2" Command="{Binding ClearListCommand}"
+                                VerticalAlignment="Center" ToolTip.Tip="{x:Static vm:AppText.ClearListTooltip}"
+                                AutomationProperties.Name="{x:Static vm:AppText.ClearList}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconTrash2}" Classes="danger" />
+                            <TextBlock Text="{x:Static vm:AppText.ClearList}" />
+                          </StackPanel>
+                        </Button>
+                      </Grid>
+                      <Panel Height="18">
+                        <TextBlock x:Name="AbuseStatus" Text="{Binding StatusText}" Classes="caption"
+                                   Classes.caution="{Binding IsStatusWarning}" TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding StatusText}" AutomationProperties.LiveSetting="Polite" />
+                        <!-- Determinate only: placeholder hides it but would not stop an indeterminate bar animating -->
+                        <ProgressBar x:Name="AbuseGroupingBar" Minimum="0" Maximum="1" Value="{Binding GroupingProgress}"
+                                     VerticalAlignment="Bottom" Classes.placeholder="{Binding !IsGrouping}"
+                                     AutomationProperties.Name="{x:Static vm:AppText.AbuseGroupingBarName}" />
+                      </Panel>
+                    </StackPanel>
+                  </Border>
+
+                  <Grid Grid.Row="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{x:Static vm:AppText.AbuseNetworksHeader}" Classes="section-title" />
+                        <TextBlock x:Name="AbuseSummary" Text="{Binding SummaryText}" Classes="caption"
+                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SummaryText}"
+                                   AutomationProperties.LiveSetting="Polite" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                        <Button x:Name="AbuseOpenFolderButton" Command="{Binding OpenFolderCommand}"
+                                ToolTip.Tip="{x:Static vm:AppText.OpenFolderName}"
+                                AutomationProperties.Name="{x:Static vm:AppText.OpenFolderName}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconFolder}" />
+                            <TextBlock Text="{x:Static vm:AppText.OpenFolder}" />
+                          </StackPanel>
+                        </Button>
+                        <Button x:Name="EmptyFeedButton" Command="{Binding EmptyFeedCommand}"
+                                ToolTip.Tip="{x:Static vm:AppText.EmptyFeedTooltip}"
+                                AutomationProperties.Name="{x:Static vm:AppText.EmptyFeed}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconFile}" />
+                            <TextBlock Text="{x:Static vm:AppText.EmptyFeed}" />
+                          </StackPanel>
+                        </Button>
+                        <Button x:Name="AbuseWriteFeedButton" Command="{Binding WriteFeedCommand}"
+                                ToolTip.Tip="{Binding WriteFeedTooltip}"
+                                AutomationProperties.Name="{x:Static vm:AppText.WriteFeed}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <ui:LineIcon Data="{StaticResource IconDownload}" />
+                            <TextBlock Text="{x:Static vm:AppText.WriteFeed}" />
+                          </StackPanel>
+                        </Button>
+                      </StackPanel>
                     </Grid>
-                    <TextBlock x:Name="AwsStatus" Text="{Binding StatusText}" Classes="caption" Height="18"
-                               TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
-                  </StackPanel>
-                </Border>
 
-                <vm:CloudRangesPanel Grid.Row="1" />
+                    <Border x:Name="AbuseNetworksCard" Grid.Row="1" Classes="card" Padding="0" ClipToBounds="True">
+                      <Grid RowDefinitions="36,*">
+                        <Grid Margin="16,0" ColumnDefinitions="1.4*,1.9*,1.6*,1*,1.8*,28" ColumnSpacing="12">
+                          <TextBlock Text="{x:Static vm:AppText.ColumnAs}" Classes="caption" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Text="{x:Static vm:AppText.ColumnName}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="2" Text="{x:Static vm:AppText.ColumnDomain}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="3" Text="{x:Static vm:AppText.ColumnAddresses}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="4" Text="{x:Static vm:AppText.ColumnCountries}" Classes="caption"
+                                     VerticalAlignment="Center" />
+                        </Grid>
+                        <Panel Grid.Row="1">
+                          <TextBlock x:Name="AbuseNetworksEmpty" Text="{Binding EmptyText}" Classes="caption" Margin="16,12"
+                                     TextWrapping="Wrap" IsVisible="{Binding !HasRows}" />
+                          <!-- Virtualized: only the visible rows exist. Every row has the fixed height of Border.row. -->
+                          <ScrollViewer IsVisible="{Binding HasRows}">
+                            <ItemsControl x:Name="AbuseNetworkList" ItemsSource="{Binding Rows}">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                  <VirtualizingStackPanel />
+                                </ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:OffendingNetworkRow">
+                                  <!-- Transparent, so a right-click in a gap between the columns still reaches the row's menu -->
+                                  <Border Classes="row" Background="Transparent" AutomationProperties.Name="{Binding AccessibleText}">
+                                    <Border.ContextMenu>
+                                      <ContextMenu>
+                                        <!-- Level 1: the menu is itself an ItemsControl, so the first one up is the menu, not the list -->
+                                        <MenuItem Header="{x:Static vm:AppText.OpenInIpinfo}"
+                                                  Command="{Binding $parent[ItemsControl;1].((vm:AbuseIpDbViewModel)DataContext).OpenNetworkInIpinfoCommand}"
+                                                  CommandParameter="{Binding}" />
+                                      </ContextMenu>
+                                    </Border.ContextMenu>
+                                    <Grid ColumnDefinitions="1.4*,1.9*,1.6*,1*,1.8*,28" ColumnSpacing="12">
+                                      <TextBlock Text="{Binding AsnText}" Classes="mono" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding AsnText}" />
+                                      <TextBlock Grid.Column="1" Text="{Binding NameText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding NameText}" />
+                                      <TextBlock Grid.Column="2" Text="{Binding DomainText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding DomainText}" />
+                                      <TextBlock Grid.Column="3" Text="{Binding AddressesText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding AddressesText}" />
+                                      <TextBlock Grid.Column="4" Text="{Binding CountriesText}" TextTrimming="CharacterEllipsis"
+                                                 VerticalAlignment="Center" ToolTip.Tip="{Binding CountriesText}" />
+                                      <!-- The command is the page's, reached from the row through the list's context -->
+                                      <Button Grid.Column="5" Classes="subtle small" VerticalAlignment="Center"
+                                              Command="{Binding $parent[ItemsControl].((vm:AbuseIpDbViewModel)DataContext).LookUpCommand}"
+                                              CommandParameter="{Binding}" ToolTip.Tip="{Binding LookUpName}"
+                                              AutomationProperties.Name="{Binding LookUpName}">
+                                        <ui:LineIcon Data="{StaticResource IconSearch}" Width="14" Height="14" />
+                                      </Button>
+                                    </Grid>
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </ScrollViewer>
+                        </Panel>
+                      </Grid>
+                    </Border>
+
+                    <!-- Outcome of Write feed, Empty feed and Open folder; always present, so the page does not move -->
+                    <TextBlock x:Name="AbuseAction" Grid.Row="2" Text="{Binding ActionText}" Classes="caption" Height="18"
+                               Classes.placeholder="{Binding !HasActionText}" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding ActionText}" AutomationProperties.LiveSetting="Polite" />
+                  </Grid>
+                </Grid>
+
+                <!-- Settings: the options, the API keys and the exceptions, each section with its own Save. Only this page
+                     scrolls inside the frame, so the frame's minimum stays the tallest list page's. The inputs are off while
+                     a save runs, because a save loads the saved values back into the form. Until start-up has read the
+                     saved values, one line stands in place of the cards; the swap happens once per start-up, so
+                     IsVisible is right here. -->
+                <Grid x:Name="SettingsPage" IsVisible="False" x:DataType="vm:SettingsPageViewModel">
+                  <TextBlock x:Name="SettingsNotStartedText" Text="{x:Static vm:AppText.SettingsNotStarted}" Classes="secondary"
+                             TextWrapping="Wrap" Margin="2,0" IsVisible="{Binding !IsStarted}" />
+                  <ScrollViewer x:Name="SettingsScroll" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsStarted}">
+                    <StackPanel Spacing="32">
+
+                      <!-- Options -->
+                      <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
+                          <StackPanel Spacing="2">
+                            <TextBlock Text="{x:Static vm:AppText.OptionsHeader}" Classes="section-title" />
+                            <TextBlock Text="{x:Static vm:AppText.OptionsCaption}" Classes="caption" />
+                          </StackPanel>
+                          <!-- Neither button is the default: Enter never saves -->
+                          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                            <Button x:Name="SettingsRevertButton" Content="{x:Static vm:AppText.Revert}" MinWidth="88"
+                                    Command="{Binding RevertSettingsCommand}" />
+                            <Button x:Name="SettingsSaveButton" Content="{x:Static vm:AppText.SaveSettings}" MinWidth="88"
+                                    Command="{Binding SaveSettingsCommand}" />
+                          </StackPanel>
+                        </Grid>
+                        <Border x:Name="SettingsCard" Classes="card">
+                          <StackPanel x:Name="SettingsInputs" Spacing="16" IsEnabled="{Binding CanEditInputs}">
+
+                            <!-- Export folder -->
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Static vm:AppText.ExportFolderHeader}" Classes="body-strong" />
+                              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                <TextBlock x:Name="ExportFolderText" Classes="caption quaternary" Text="{Binding Settings.ExportFolder}"
+                                           TextTrimming="PathSegmentEllipsis" VerticalAlignment="Center"
+                                           ToolTip.Tip="{Binding Settings.ExportFolder}" />
+                                <Button x:Name="ChooseFolderButton" Grid.Column="1" Content="{x:Static vm:AppText.ChooseFolder}"
+                                        Command="{Binding ChooseFolderCommand}" />
+                                <Button x:Name="UseDefaultButton" Grid.Column="2" Content="{x:Static vm:AppText.UseDefault}"
+                                        Command="{Binding UseDefaultFolderCommand}" />
+                              </Grid>
+                            </StackPanel>
+
+                            <!-- IPv6 -->
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Static vm:AppText.IPv6Header}" Classes="body-strong" />
+                              <CheckBox x:Name="IPv6EnabledBox" Content="{x:Static vm:AppText.IPv6Enabled}"
+                                        IsChecked="{Binding Settings.IPv6Enabled}" />
+                              <TextBlock Text="{x:Static vm:AppText.IPv6Caption}" Classes="caption" TextWrapping="Wrap" Margin="24,0,0,0" />
+                            </StackPanel>
+
+                            <!-- Fortigate threat feed -->
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Static vm:AppText.FortigateHeader}" Classes="body-strong" />
+                              <CheckBox x:Name="FortigateEnabledBox" Content="{x:Static vm:AppText.FortigateEnabled}"
+                                        IsChecked="{Binding Settings.FortigateEnabled}" />
+                              <StackPanel Spacing="8" Margin="24,0,0,0">
+                                <CheckBox x:Name="FortigateIPv4Box" Content="{x:Static vm:AppText.IncludeIPv4}"
+                                          IsChecked="{Binding Settings.FortigateIncludeIPv4}" IsEnabled="{Binding Settings.FortigateEnabled}" />
+                                <CheckBox x:Name="FortigateIPv6Box" Content="{x:Static vm:AppText.IncludeIPv6}"
+                                          IsChecked="{Binding Settings.FortigateIncludeIPv6}" IsEnabled="{Binding Settings.CanEditFortigateIPv6}" />
+                                <CheckBox x:Name="FortigateSplitBox" Content="{x:Static vm:AppText.SplitByFamily}"
+                                          IsChecked="{Binding Settings.FortigateSplitByFamily}" IsEnabled="{Binding Settings.FortigateEnabled}" />
+                              </StackPanel>
+                            </StackPanel>
+
+                            <!-- Large ranges -->
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Static vm:AppText.LargeRangesHeader}" Classes="body-strong" />
+                              <CheckBox x:Name="LargeRangeCheckBox" Content="{x:Static vm:AppText.AskLargeRanges}"
+                                        IsChecked="{Binding Settings.LargeRangeCheckEnabled}" />
+                              <Grid ColumnDefinitions="*,120" RowDefinitions="Auto,Auto" RowSpacing="8" ColumnSpacing="12" Margin="24,0,0,0">
+                                <TextBlock Text="{x:Static vm:AppText.IPv4PrefixLabel}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <NumericUpDown x:Name="IPv4PrefixBox" Grid.Column="1" Minimum="1" Maximum="32" Increment="1" FormatString="0"
+                                               Value="{Binding Settings.IPv4MinPrefix}" IsEnabled="{Binding Settings.LargeRangeCheckEnabled}"
+                                               AutomationProperties.Name="{x:Static vm:AppText.IPv4PrefixLabel}" />
+                                <TextBlock Grid.Row="1" Text="{x:Static vm:AppText.IPv6PrefixLabel}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <NumericUpDown x:Name="IPv6PrefixBox" Grid.Row="1" Grid.Column="1" Minimum="1" Maximum="128" Increment="1"
+                                               FormatString="0" Value="{Binding Settings.IPv6MinPrefix}"
+                                               IsEnabled="{Binding Settings.CanEditIPv6Prefix}"
+                                               AutomationProperties.Name="{x:Static vm:AppText.IPv6PrefixLabel}" />
+                              </Grid>
+                            </StackPanel>
+
+                            <!-- AbuseIPDB -->
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Static vm:AppText.AbuseIpDbHeader}" Classes="body-strong" />
+                              <Grid ColumnDefinitions="*,120" ColumnSpacing="12">
+                                <TextBlock Text="{x:Static vm:AppText.AbuseIpDbKeepDaysLabel}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <NumericUpDown x:Name="AbuseIpDbKeepDaysBox" Grid.Column="1" Minimum="1" Maximum="365" Increment="1"
+                                               FormatString="0" Value="{Binding Settings.AbuseIpDbKeepDays}"
+                                               AutomationProperties.Name="{x:Static vm:AppText.AbuseIpDbKeepDaysLabel}" />
+                              </Grid>
+                              <TextBlock Text="{x:Static vm:AppText.AbuseIpDbKeepDaysCaption}" Classes="caption" TextWrapping="Wrap" />
+                            </StackPanel>
+
+                          </StackPanel>
+                        </Border>
+                        <!-- Fixed height, so the page doesn't move when the line appears or goes -->
+                        <TextBlock x:Name="SettingsStatus" Classes="small" Height="18" Text="{Binding SettingsStatusText}"
+                                   Classes.critical="{Binding IsSettingsStatusError}" Classes.secondary="{Binding !IsSettingsStatusError}"
+                                   Classes.placeholder="{Binding !HasSettingsStatus}" TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding SettingsStatusText}" AutomationProperties.LiveSetting="Polite" />
+                      </StackPanel>
+
+                      <!-- API keys -->
+                      <StackPanel Spacing="8">
+                        <StackPanel Spacing="2" Margin="2,0,2,4">
+                          <TextBlock Text="{x:Static vm:AppText.KeysHeader}" Classes="section-title" />
+                          <TextBlock Text="{x:Static vm:AppText.KeysCaption}" Classes="caption" />
+                        </StackPanel>
+                        <Border x:Name="KeysCard" Classes="card">
+                          <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                              <TextBlock x:Name="TokenStatus" Text="{Binding TokenStatusText}" VerticalAlignment="Center"
+                                         TextTrimming="CharacterEllipsis" />
+                              <Button x:Name="ResetTokenButton" Grid.Column="1" Content="{x:Static vm:AppText.ResetTokenButton}"
+                                      MinWidth="88" Command="{Binding ResetTokenCommand}" />
+                            </Grid>
+                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                              <TextBlock x:Name="AbuseKeyStatus" Text="{Binding AbuseKeyStatusText}" VerticalAlignment="Center"
+                                         TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding AbuseKeyStatusText}" />
+                              <Button x:Name="SetAbuseKeyButton" Grid.Column="1" Content="{x:Static vm:AppText.SetAbuseKey}"
+                                      MinWidth="88" Command="{Binding SetAbuseKeyCommand}" />
+                              <Button x:Name="RemoveAbuseKeyButton" Grid.Column="2" Content="{x:Static vm:AppText.RemoveAbuseKey}"
+                                      MinWidth="88" Command="{Binding RemoveAbuseKeyCommand}" />
+                            </Grid>
+                          </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="KeysStatus" Classes="caption" Height="18" Text="{Binding KeysStatusText}"
+                                   Classes.placeholder="{Binding !HasKeysStatus}" TextTrimming="CharacterEllipsis"
+                                   AutomationProperties.LiveSetting="Polite" />
+                      </StackPanel>
+
+                      <!-- Exceptions: Enter in the network or note box adds the network (handled in code-behind); Add is
+                           not a default button, so Enter anywhere else on the page adds nothing, and Enter never saves -->
+                      <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
+                          <StackPanel Spacing="2">
+                            <TextBlock Text="{x:Static vm:AppText.ExceptionsTitle}" Classes="section-title" />
+                            <TextBlock Text="{x:Static vm:AppText.ExceptionsMessage}" Classes="caption" TextWrapping="Wrap" />
+                          </StackPanel>
+                          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                            <Button x:Name="ExceptionsRevertButton" Content="{x:Static vm:AppText.Revert}" MinWidth="88"
+                                    Command="{Binding RevertExceptionsCommand}" />
+                            <Button x:Name="ExceptionsSaveButton" Content="{x:Static vm:AppText.SaveExceptions}" MinWidth="88"
+                                    Command="{Binding SaveExceptionsCommand}" />
+                          </StackPanel>
+                        </Grid>
+                        <!-- The network and note boxes sit over the list's columns: both start 16 in, and the 368 and 12
+                             match the rows' network column and spacing -->
+                        <Border x:Name="ExceptionsEditor" Classes="card compact" IsEnabled="{Binding CanEditInputs}">
+                          <Grid ColumnDefinitions="368,*,Auto" ColumnSpacing="12">
+                            <TextBox x:Name="NetworkBox" Classes="mono" Text="{Binding Exceptions.NetworkText}" MaxLength="64"
+                                     KeyDown="ExceptionBoxKeyDown"
+                                     PlaceholderText="{x:Static vm:AppText.ExceptionNetworkPlaceholder}"
+                                     AutomationProperties.Name="{x:Static vm:AppText.ExceptionNetworkName}" />
+                            <TextBox x:Name="NoteBox" Grid.Column="1" Text="{Binding Exceptions.NoteText}" MaxLength="200"
+                                     KeyDown="ExceptionBoxKeyDown"
+                                     PlaceholderText="{x:Static vm:AppText.ExceptionNotePlaceholder}"
+                                     AutomationProperties.Name="{x:Static vm:AppText.ExceptionNoteName}" />
+                            <Button x:Name="AddExceptionButton" Grid.Column="2" Content="{x:Static vm:AppText.AddException}"
+                                    MinWidth="88" Command="{Binding AddExceptionCommand}" />
+                          </Grid>
+                        </Border>
+                        <!-- Fixed height, so the page doesn't move when the line appears or goes -->
+                        <TextBlock x:Name="FeedbackTextBlock" Height="18" Classes="small" Text="{Binding Exceptions.FeedbackText}"
+                                   Classes.critical="{Binding Exceptions.IsFeedbackError}" Classes.secondary="{Binding !Exceptions.IsFeedbackError}"
+                                   Classes.placeholder="{Binding !Exceptions.HasFeedback}" TextTrimming="CharacterEllipsis"
+                                   AutomationProperties.LiveSetting="Polite" />
+
+                        <!-- A fixed-height list: the card clips it and the scroll viewer scrolls it. Rows are one height, so
+                             virtualization holds. -->
+                        <Border x:Name="ExceptionsListCard" Classes="card" Padding="0" ClipToBounds="True" Height="216"
+                                IsEnabled="{Binding CanEditInputs}">
+                          <Panel>
+                            <TextBlock x:Name="ExceptionsEmpty" Text="{x:Static vm:AppText.ExceptionsEmpty}" Classes="caption"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !Exceptions.HasRows}" />
+                            <ScrollViewer x:Name="ExceptionsScroll" IsVisible="{Binding Exceptions.HasRows}">
+                              <ItemsControl x:Name="ExceptionItems" ItemsSource="{Binding Exceptions.Rows}">
+                                <ItemsControl.ItemsPanel>
+                                  <ItemsPanelTemplate>
+                                    <VirtualizingStackPanel />
+                                  </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate x:DataType="vm:ExceptionRow">
+                                    <!-- The network column is fixed at 368, wide enough for the longest network (46 characters
+                                         of Geist Mono, such as 2000:2000:2000:2000:0:5efe:200.200.200.200/125, with a few pixels
+                                         to spare), so no network trims at the minimum window width and every row's columns
+                                         line up; the note takes the rest and trims, with its tooltip -->
+                                    <Border Classes="row">
+                                      <Grid ColumnDefinitions="368,*,Auto" ColumnSpacing="12">
+                                        <TextBlock Text="{Binding NetworkText}" Classes="mono" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" ToolTip.Tip="{Binding NetworkText}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding NoteText}" Classes="caption" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" ToolTip.Tip="{Binding NoteText}" />
+                                        <Button Grid.Column="2" Classes="subtle small" VerticalAlignment="Center"
+                                                Command="{Binding RemoveCommand}" ToolTip.Tip="{Binding RemoveName}"
+                                                AutomationProperties.Name="{Binding RemoveName}">
+                                          <ui:LineIcon Data="{StaticResource IconX}" Width="14" Height="14" />
+                                        </Button>
+                                      </Grid>
+                                    </Border>
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                            </ScrollViewer>
+                          </Panel>
+                        </Border>
+                        <TextBlock x:Name="ExceptionsCountText" Classes="caption" Text="{Binding Exceptions.CountText}" />
+                        <TextBlock x:Name="ExceptionsStatus" Classes="small" Height="18" Text="{Binding ExceptionsStatusText}"
+                                   Classes.critical="{Binding IsExceptionsStatusError}" Classes.secondary="{Binding !IsExceptionsStatusError}"
+                                   Classes.placeholder="{Binding !HasExceptionsStatus}" TextTrimming="CharacterEllipsis"
+                                   AutomationProperties.LiveSetting="Polite" />
+                      </StackPanel>
+
+                    </StackPanel>
+                  </ScrollViewer>
+                </Grid>
+              </Panel>
+            </Grid>
+          </Border>
+        </ScrollViewer>
+
+        <!-- The start-up stop: shown in place of every page once start-up has stopped, with the way on when there is
+             one. It swaps once per start-up, not while work runs, so IsVisible is right here. -->
+        <ScrollViewer x:Name="StartupStop" IsVisible="{Binding IsStopped}" HorizontalScrollBarVisibility="Disabled">
+          <Border x:Name="StartupStopCard" Classes="infobar error" MaxWidth="540" Margin="32" HorizontalAlignment="Center"
+                  VerticalAlignment="Top">
+            <StackPanel Spacing="16">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                <ui:LineIcon Classes="severity" VerticalAlignment="Top" />
+                <StackPanel Grid.Column="1" Spacing="8">
+                  <TextBlock x:Name="StartupStopTitle" Text="{Binding StopTitle}" Classes="subtitle" TextWrapping="Wrap" />
+                  <SelectableTextBlock x:Name="StartupStopText" Text="{Binding StopText}" TextWrapping="Wrap"
+                                       AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
               </Grid>
-            </Panel>
-          </Grid>
-        </Border>
-      </ScrollViewer>
+              <TextBlock x:Name="StartupStopAction" Classes="small" Height="18" Text="{Binding StopActionText}"
+                         Classes.critical="{Binding IsStopActionError}" Classes.secondary="{Binding !IsStopActionError}"
+                         Classes.placeholder="{Binding !HasStopAction}" AutomationProperties.LiveSetting="Polite" />
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                <Button x:Name="StartWithoutOldExceptionsButton" Content="{x:Static vm:AppText.StartWithoutOldExceptionsButton}"
+                        Command="{Binding StartWithoutOldExceptionsCommand}" IsVisible="{Binding CanStartWithoutOldExceptions}" />
+                <Button x:Name="StartFreshButton" Content="{x:Static vm:AppText.StartFreshButton}"
+                        Command="{Binding StartFreshCommand}" IsVisible="{Binding CanStartFresh}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </ScrollViewer>
+      </Panel>
     </Border>
   </Grid>
 </Window>

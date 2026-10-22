@@ -1,3 +1,5 @@
+using PoorMansFeed.Core.AbuseIpDb;
+
 namespace PoorMansFeed.Core;
 
 public sealed record UserSettings
@@ -12,4 +14,5 @@ public sealed record UserSettings
     public bool LargeRangeCheckEnabled { get; init; } = true;
     public int IPv4MinPrefix { get; init; } = LargeRangePolicy.DefaultIPv4MinPrefix;   // 16
     public int IPv6MinPrefix { get; init; } = LargeRangePolicy.DefaultIPv6MinPrefix;   // 32
+    public int AbuseIpDbKeepDays { get; init; } = AbuseIpDbLimits.DefaultKeepDays;     // a cutoff on what is read and written: the addresses listed within this many days of the last download (counted back from the earlier of now and the last download); nothing stored depends on it
 }

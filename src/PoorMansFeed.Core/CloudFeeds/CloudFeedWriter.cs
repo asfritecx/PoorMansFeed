@@ -2,35 +2,58 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.FeedExceptions;
 
 namespace PoorMansFeed.Core.CloudFeeds;
 
 internal static class CloudFeedWriter
 {
-    public static IReadOnlyList<string> Write(string exportFolder, CloudFeedCheck check, IReadOnlyList<CheckedRange> ranges, DateTimeOffset utcNow)
+    /// <summary>Where the feed file of one family goes.</summary>
+    public static string PathFor(string exportFolder, CloudFeedCheck check, bool ipv6) =>
+        Path.Combine(exportFolder, ExportWriter.FortigateFolderName, $"{check.Description.FileStem}_{(ipv6 ? "ipv6" : "ipv4")}.txt");
+
+    /// <summary>
+    /// The files one write has made so far, and the one it is writing; after a failed write, Attempting names the file
+    /// that failed, or is null when the folder failed before any file.
+    /// </summary>
+    public sealed class Progress
     {
-        var written = new List<string>();
-        string directory = Path.Combine(exportFolder, ExportWriter.FortigateFolderName);
-        Directory.CreateDirectory(directory);
+        public List<string> Written { get; } = [];
 
-        List<CheckedRange> ipv4 = ranges.Where(range => !range.Prefix.Block.IsIpv6).ToList();
-        List<CheckedRange> ipv6 = ranges.Where(range => range.Prefix.Block.IsIpv6).ToList();
-        if (ipv4.Count > 0)
-            written.Add(WriteFamily(directory, check, ipv4, "ipv4", "IPv4", utcNow));
-        if (ipv6.Count > 0)
-            written.Add(WriteFamily(directory, check, ipv6, "ipv6", "IPv6", utcNow));
-
-        return written;
+        public string? Attempting { get; set; }
     }
 
-    private static string WriteFamily(string directory, CloudFeedCheck check, IReadOnlyList<CheckedRange> ranges,
-                                      string familyFile, string familyLabel, DateTimeOffset utcNow)
+    public static IReadOnlyList<string> Write(string exportFolder, CloudFeedCheck check, IReadOnlyList<FeedLine> lines,
+                                              ExceptionTally tally, DateTimeOffset utcNow, Progress progress)
     {
-        string path = Path.Combine(directory, $"{check.Description.FileStem}_{familyFile}.txt");
+        Directory.CreateDirectory(Path.Combine(exportFolder, ExportWriter.FortigateFolderName));
+
+        List<FeedLine> ipv4 = lines.Where(line => !line.IsIpv6).ToList();
+        List<FeedLine> ipv6 = lines.Where(line => line.IsIpv6).ToList();
+        if (ipv4.Count > 0)
+            WriteTracked(progress, PathFor(exportFolder, check, ipv6: false), check, ipv4, "IPv4", tally.HeaderLine(includesIpv4: true, includesIpv6: false), utcNow);
+        if (ipv6.Count > 0)
+            WriteTracked(progress, PathFor(exportFolder, check, ipv6: true), check, ipv6, "IPv6", tally.HeaderLine(includesIpv4: false, includesIpv6: true), utcNow);
+
+        return progress.Written;
+    }
+
+    // Attempting stays set when WriteFamily throws, so the caller can name the file that failed
+    private static void WriteTracked(Progress progress, string path, CloudFeedCheck check, IReadOnlyList<FeedLine> lines,
+                                     string familyLabel, string? exceptionsLine, DateTimeOffset utcNow)
+    {
+        progress.Attempting = path;
+        progress.Written.Add(WriteFamily(path, check, lines, familyLabel, exceptionsLine, utcNow));
+        progress.Attempting = null;
+    }
+
+    private static string WriteFamily(string path, CloudFeedCheck check, IReadOnlyList<FeedLine> lines,
+                                      string familyLabel, string? exceptionsLine, DateTimeOffset utcNow)
+    {
         string tmp = path + ".tmp";
         try
         {
-            File.WriteAllText(tmp, Body(check, ranges, familyLabel, utcNow), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            TemporaryFile.WriteNew(tmp, Body(check, lines, familyLabel, exceptionsLine, utcNow));
             File.Move(tmp, path, overwrite: true);
             return path;
         }
@@ -41,16 +64,17 @@ internal static class CloudFeedWriter
         }
     }
 
-    private static string Body(CloudFeedCheck check, IReadOnlyList<CheckedRange> ranges, string familyLabel, DateTimeOffset utcNow)
+    private static string Body(CloudFeedCheck check, IReadOnlyList<FeedLine> lines, string familyLabel, string? exceptionsLine,
+                               DateTimeOffset utcNow)
     {
         int confirmed = 0;
-        foreach (CheckedRange range in ranges)
+        foreach (FeedLine line in lines)
         {
-            if (range.Status == RangeConfirmation.Confirmed)
+            if (line.Confirmed)
                 confirmed++;
         }
 
-        int unconfirmed = ranges.Count - confirmed;
+        int unconfirmed = lines.Count - confirmed;
         string timestamp = utcNow.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
         string datasetDate = check.Dataset.DownloadedOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         string nl = Environment.NewLine;
@@ -60,13 +84,15 @@ internal static class CloudFeedWriter
             sb.Append("# ").Append(line).Append(nl);
         sb.Append("# Address Family: ").Append(familyLabel).Append(nl);
         sb.Append("# Generated: ").Append(timestamp).Append(" UTC").Append(nl);
-        sb.Append("# Entries: ").Append(ranges.Count.ToString(CultureInfo.InvariantCulture))
+        sb.Append("# Entries: ").Append(lines.Count.ToString(CultureInfo.InvariantCulture))
             .Append(" (").Append(confirmed.ToString(CultureInfo.InvariantCulture)).Append(" confirmed by IPinfo, ")
             .Append(unconfirmed.ToString(CultureInfo.InvariantCulture)).Append(" added without confirmation)").Append(nl);
+        if (exceptionsLine is not null)
+            sb.Append("# ").Append(exceptionsLine).Append(nl);
         sb.Append("# Confirmed against: IPinfo Lite dataset of ").Append(datasetDate).Append(nl);
         sb.Append("# ").Append(ExportWriter.IpinfoAttribution).Append(nl);
-        foreach (CheckedRange range in ranges)
-            sb.Append(range.Prefix.Block.Text).Append(nl);
+        foreach (FeedLine line in lines)
+            sb.Append(line.Text).Append(nl);
 
         return sb.ToString();
     }

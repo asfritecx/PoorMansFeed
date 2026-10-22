@@ -8,12 +8,15 @@ namespace PoorMansFeed.Core;
 /// <summary>
 /// The IPInfo API token, kept by the operating system for the current user (<see cref="ISecretStore"/>): DPAPI on
 /// Windows, the login Keychain on macOS. Failures come back as null or false, and nothing traced holds the token.
+/// The AbuseIPDB key uses the same rules over its own store; <paramref name="secretName"/> says in traces which secret
+/// a failure is about.
 /// </summary>
-internal sealed class TokenStore(ISecretStore store)
+internal sealed class TokenStore(ISecretStore store, string secretName = "API token")
 {
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly ISecretStore _store = store;
+    private readonly string _secretName = secretName;
 
     /// <summary>True when a token is saved. It doesn't read the token, so it never makes the OS ask the user.</summary>
     public bool HasToken => _store.Exists;
@@ -102,10 +105,10 @@ internal sealed class TokenStore(ISecretStore store)
     }
 
     // Types and messages only. The stores' messages name the store, a path or an OS error code, never the secret.
-    private static void TraceFailure(string what, Exception ex)
+    private void TraceFailure(string what, Exception ex)
     {
         string cause = ex.InnerException is { } inner ? $"; {Describe(inner)}" : "";
-        Trace.TraceWarning($"The API token couldn't be {what} ({Describe(ex)}{cause}).");
+        Trace.TraceWarning($"The {_secretName} couldn't be {what} ({Describe(ex)}{cause}).");
     }
 
     // A fallback exception's message quotes the bytes or the character it couldn't convert, which are the token's own,

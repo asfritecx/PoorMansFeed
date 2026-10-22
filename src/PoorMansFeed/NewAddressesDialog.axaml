@@ -1,0 +1,62 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:PoorMansFeed"
+        x:Class="PoorMansFeed.NewAddressesDialog"
+        Width="540"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="16">
+    <TextBlock x:Name="TitleText" Classes="subtitle" />
+    <TextBlock x:Name="MessageText" Grid.Row="1" TextWrapping="Wrap" LineHeight="22" />
+
+    <!-- A fixed-height list: the card clips it and the scroll viewer scrolls it. Rows are one height, so virtualization holds. -->
+    <Border x:Name="AddressCard" Grid.Row="2" Classes="card" Padding="0" ClipToBounds="True" Height="216">
+      <ScrollViewer>
+        <ItemsControl x:Name="AddressList">
+          <!-- One menu for the list: a row's right-click bubbles up to it, and the code-behind records which row it was,
+               so a request that isn't on a row opens nothing -->
+          <ItemsControl.ContextMenu>
+            <ContextMenu Opening="MenuOpening">
+              <MenuItem x:Name="OpenInIpinfoItem" Header="{x:Static local:AppText.OpenInIpinfo}" Click="OpenInIpinfoClicked" />
+              <MenuItem x:Name="OpenInAbuseIpDbItem" Header="{x:Static local:AppText.OpenInAbuseIpDb}" Click="OpenInAbuseIpDbClicked" />
+            </ContextMenu>
+          </ItemsControl.ContextMenu>
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="local:NewAddressRow">
+              <!-- Transparent, so a right-click in a gap between the columns still reaches a row -->
+              <Border Classes="row" Background="Transparent">
+                <Grid ColumnDefinitions="*,32,80" ColumnSpacing="12">
+                  <TextBlock Text="{Binding Address}" Classes="mono" TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center" ToolTip.Tip="{Binding Address}" />
+                  <TextBlock Grid.Column="1" Text="{Binding Score}" Classes="caption" TextTrimming="CharacterEllipsis"
+                             TextAlignment="Right" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="2" Text="{Binding LastReported}" Classes="caption" TextTrimming="CharacterEllipsis"
+                             VerticalAlignment="Center" />
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <TextBlock x:Name="CountText" Grid.Row="3" Classes="caption" AutomationProperties.LiveSetting="Polite" />
+
+    <!-- What Copy did; empty and hidden at first, but it keeps its height so the dialog never moves -->
+    <TextBlock x:Name="CopyStatusText" Grid.Row="4" Classes="caption placeholder" Height="18" TextTrimming="CharacterEllipsis"
+               AutomationProperties.LiveSetting="Polite" />
+
+    <!-- Neither button is the default: Enter alone does nothing, and Copy keeps the dialog open -->
+    <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button x:Name="CopyButton" Content="{x:Static local:AppText.NewAddressesCopy}" MinWidth="88" Click="CopyClicked" />
+      <Button x:Name="CloseButton" Content="{x:Static local:AppText.Close}" MinWidth="88" IsCancel="True" Click="CloseClicked" />
+    </StackPanel>
+  </Grid>
+</Window>

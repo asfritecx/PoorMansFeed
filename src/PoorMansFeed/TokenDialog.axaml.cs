@@ -1,27 +1,33 @@
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 
 namespace PoorMansFeed;
 
-/// <summary>Asks for the IPinfo API token. Returns the trimmed token, or null when cancelled.</summary>
+/// <summary>
+/// Asks for an API secret (the IPinfo token or the AbuseIPDB key). Returns the trimmed text, or null when cancelled.
+/// </summary>
 public sealed partial class TokenDialog : Window
 {
     public TokenDialog() => InitializeComponent();
 
-    internal TokenDialog(TokenPromptReason reason) : this()
+    internal TokenDialog(TokenPromptReason reason) : this(SecretPrompt.ForIpInfo(reason)) { }
+
+    // The prompt is the one source of the dialog's texts: the XAML names none of them
+    internal TokenDialog(SecretPrompt prompt) : this()
     {
-        string title = reason == TokenPromptReason.Reset ? AppText.TokenResetTitle : AppText.TokenFirstTitle;
-        Title = title;
-        this.FindControl<TextBlock>("TitleText")!.Text = title;
-        this.FindControl<TextBlock>("BodyText")!.Text = BodyFor(reason);
-        this.FindControl<TextBox>("TokenBox")!.TextChanged += (_, _) => UpdateSaveEnabled();
+        Title = prompt.Title;
+        this.FindControl<TextBlock>("TitleText")!.Text = prompt.Title;
+        this.FindControl<TextBlock>("BodyText")!.Text = prompt.Body;
+        var box = this.FindControl<TextBox>("TokenBox")!;
+        box.PlaceholderText = prompt.BoxName;
+        AutomationProperties.SetName(box, prompt.BoxName);
+        this.FindControl<CheckBox>("ShowToken")!.Content = prompt.ShowText;
+        this.FindControl<Button>("SaveButton")!.Content = prompt.SaveText;
+        box.TextChanged += (_, _) => UpdateSaveEnabled();
         UpdateSaveEnabled();
     }
-
-    // A reset has already been explained, so it gets the body without the first sentence
-    private static string BodyFor(TokenPromptReason reason) =>
-        reason == TokenPromptReason.FirstRun ? AppText.TokenBody : AppText.TokenResetBody;
 
     protected override void OnOpened(EventArgs e)
     {

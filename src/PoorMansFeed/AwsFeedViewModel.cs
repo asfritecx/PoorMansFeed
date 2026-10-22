@@ -33,8 +33,8 @@ public sealed class AwsFeedViewModel : CloudFeedPageViewModel
     private IReadOnlyList<AwsRegionOption> _regions = [];
 
     public AwsFeedViewModel(IAwsFeedService feeds, IIpInfoService ipinfo, IUiServices ui, TimeProvider time,
-                            string? defaultExportFolder = null)
-        : base(feeds, ipinfo, ui, defaultExportFolder, AppText.AwsLoading)
+                            IWorkGate gate, string? defaultExportFolder = null, IUnsavedSettings? unsaved = null)
+        : base(feeds, ipinfo, ui, defaultExportFolder, AppText.AwsLoading, gate, unsaved)
     {
         _aws = feeds;
         _ipinfo = ipinfo;

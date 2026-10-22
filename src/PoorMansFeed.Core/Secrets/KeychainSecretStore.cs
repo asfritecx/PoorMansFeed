@@ -17,6 +17,12 @@ internal sealed class KeychainSecretStore : ISecretStore
     internal const string ServiceName = "PoorMansFeed";
     internal const string AccountName = "ipinfo-api-token";
 
+    /// <summary>The AbuseIPDB key's account, under the same <see cref="ServiceName"/>.</summary>
+    internal const string AbuseIpDbAccountName = "abuseipdb-api-key";
+
+    /// <summary>The config.db key's account, under the same <see cref="ServiceName"/>.</summary>
+    internal const string ConfigKeyAccountName = "config-key";
+
     private readonly string _markerPath;
     private readonly Storage _storage;
 

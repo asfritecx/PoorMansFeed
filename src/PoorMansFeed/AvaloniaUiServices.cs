@@ -58,21 +58,61 @@ internal sealed class AvaloniaUiServices(Window owner) : IUiServices
         }
     }
 
+    // True means only that the browser was asked, not that the page showed. The https check repeats WebPage's own
+    // rule, because Windows hands the text to ShellExecute.
+    public async Task OpenWebPageAsync(WebPage page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        if (page.Uri.Scheme != Uri.UriSchemeHttps || !await owner.Launcher.LaunchUriAsync(page.Uri))
+        {
+            throw new InvalidOperationException("The page could not be opened.");
+        }
+    }
+
     public async Task<string?> PromptForTokenAsync(TokenPromptReason reason)
     {
         var dialog = new TokenDialog(reason);
         return await dialog.ShowDialog<string?>(owner);
     }
 
-    public async Task<UserSettings?> EditSettingsAsync(UserSettings current, string defaultExportFolder)
+    public async Task<string?> PromptForAbuseIpDbKeyAsync(AbuseKeyAsk why)
     {
-        var dialog = new SettingsDialog(current, defaultExportFolder);
-        return await dialog.ShowDialog<UserSettings?>(owner);
+        var dialog = new TokenDialog(SecretPrompt.ForAbuseIpDb(why));
+        return await dialog.ShowDialog<string?>(owner);
+    }
+
+    public async Task<string?> ChooseFolderAsync(string? startFolder)
+    {
+        // Start the picker in the folder given, when that folder still exists
+        IStorageFolder? start = null;
+        if (!string.IsNullOrWhiteSpace(startFolder) && Directory.Exists(startFolder)
+            && Uri.TryCreate(Path.GetFullPath(startFolder), UriKind.Absolute, out Uri? folderUri))
+        {
+            start = await owner.StorageProvider.TryGetFolderFromPathAsync(folderUri);
+        }
+
+        IReadOnlyList<IStorageFolder> folders = await owner.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = AppText.ChooseFolderTitle,
+            AllowMultiple = false,
+            SuggestedStartLocation = start,
+        });
+
+        // A cancelled picker gives no folders, and a folder without a local path cannot be used
+        string? path = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        return string.IsNullOrWhiteSpace(path) ? null : path;
     }
 
     public async Task<IReadOnlyList<string>?> ChooseLargeRangesAsync(LargeRangePrompt prompt)
     {
         var dialog = new LargeRangesDialog(prompt);
         return await dialog.ShowDialog<IReadOnlyList<string>?>(owner);
+    }
+
+    public async Task ShowNewAddressesAsync(NewAddressesPrompt prompt)
+    {
+        // Copy goes through the same clipboard path as Lookup's Copy
+        var dialog = new NewAddressesDialog(prompt, CopyTextAsync, OpenWebPageAsync);
+        await dialog.ShowDialog(owner);
     }
 }

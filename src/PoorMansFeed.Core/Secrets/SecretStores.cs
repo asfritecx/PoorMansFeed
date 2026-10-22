@@ -16,7 +16,41 @@ internal static class SecretStores
         return new UnavailableSecretStore();
     }
 
-    private sealed class UnavailableSecretStore : ISecretStore
+    /// <summary>
+    /// The AbuseIPDB key's store: DPAPI on Windows and its own account in the login Keychain on macOS, with
+    /// <see cref="AppPaths.AbuseIpDbKeyPath"/> as the DPAPI file or the Keychain marker. The path is taken here, not
+    /// from the caller, because on Windows the file is the only thing that tells the two secrets apart: any other path
+    /// could replace the IPinfo token. Any other system gets a store that saves nothing.
+    /// </summary>
+    public static ISecretStore AbuseIpDbKeyForCurrentUser(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        string path = paths.AbuseIpDbKeyPath;
+        if (OperatingSystem.IsWindows())
+            return new DpapiSecretStore(path);
+        if (OperatingSystem.IsMacOS())
+            return new KeychainSecretStore(path, KeychainSecretStore.ServiceName, KeychainSecretStore.AbuseIpDbAccountName);
+        return new UnavailableSecretStore();
+    }
+
+    /// <summary>
+    /// The config.db key's store: DPAPI on Windows and its own account in the login Keychain on macOS, with
+    /// <see cref="AppPaths.ConfigKeyPath"/> as the DPAPI file or the Keychain marker. The path is taken here, not from
+    /// the caller, because on Windows the file is the only thing that tells the three secrets apart: any other path
+    /// could replace the IPinfo token or the AbuseIPDB key. Any other system gets a store that saves nothing.
+    /// </summary>
+    internal static ISecretStore ConfigKeyForCurrentUser(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        string path = paths.ConfigKeyPath;
+        if (OperatingSystem.IsWindows())
+            return new DpapiSecretStore(path);
+        if (OperatingSystem.IsMacOS())
+            return new KeychainSecretStore(path, KeychainSecretStore.ServiceName, KeychainSecretStore.ConfigKeyAccountName);
+        return new UnavailableSecretStore();
+    }
+
+    internal sealed class UnavailableSecretStore : ISecretStore
     {
         public bool Exists => false;
 

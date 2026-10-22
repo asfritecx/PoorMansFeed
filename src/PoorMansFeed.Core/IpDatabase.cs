@@ -93,11 +93,23 @@ public sealed class IpDatabase(string path)
     /// Overlaps for each block, under one gate hold and one read-only connection. IPv6 blocks are left out when
     /// includeIPv6 is false, and the file being missing returns an empty list.
     /// </summary>
-    public List<NetworkOverlap> QueryOverlaps(IReadOnlyList<CidrBlock> blocks, bool includeIPv6)
+    public List<NetworkOverlap> QueryOverlaps(IReadOnlyList<CidrBlock> blocks, bool includeIPv6) =>
+        QueryOverlaps(blocks, includeIPv6, out _);
+
+    /// <summary>
+    /// The overlaps of <see cref="QueryOverlaps(IReadOnlyList{CidrBlock}, bool)"/>, with
+    /// <paramref name="answeredBy"/> read from the metadata on the same connection, so it names the file that answered
+    /// even right after a <see cref="Promote"/>. Null when the file is missing or its metadata can't be parsed. A file
+    /// with no <c>metadata</c> table, or a NULL value in it, fails the query instead (the exception escapes), because
+    /// <c>ReadMetadata</c> throws.
+    /// </summary>
+    public List<NetworkOverlap> QueryOverlaps(IReadOnlyList<CidrBlock> blocks, bool includeIPv6, out DatasetInfo? answeredBy)
     {
         ArgumentNullException.ThrowIfNull(blocks);
 
-        return Query(conn =>
+        // A lambda can't assign an out parameter, so the label is caught here and assigned after the query
+        DatasetInfo? label = null;
+        List<NetworkOverlap> found = Query(conn =>
         {
             using var descendants = conn.CreateCommand();
             // The length predicate keeps an IPv6 row out of an IPv4 block.
@@ -158,8 +170,12 @@ public sealed class IpDatabase(string path)
                 results.Add(new NetworkOverlap(block, groups));
             }
 
+            // The schema version isn't checked: the live file was judged at start-up or built by this version
+            label = TryParseInfo(ReadMetadata(conn), out DatasetInfo? info) ? info : null;
             return results;
         }, []);
+        answeredBy = label;
+        return found;
     }
 
     /// <summary>

@@ -22,4 +22,16 @@ public sealed record CoreOptions
 
     public int AwsRequestTimeoutSeconds { get; init; } = 60;
     public int AwsMaxFileBytes { get; init; } = 32 * 1024 * 1024;
+
+    /// <summary>The AbuseIPDB check endpoint, with no query. The key goes in a header, never in this address.</summary>
+    public string AbuseIpDbCheckUrl { get; init; } = "https://api.abuseipdb.com/api/v2/check";
+
+    public int AbuseIpDbRequestTimeoutSeconds { get; init; } = 60;
+    public int AbuseIpDbMaxCheckBytes { get; init; } = 256 * 1024;
+
+    /// <summary>The AbuseIPDB blacklist endpoint, sent with no query, or with <c>ipVersion=4</c> while IPv6 is off. The key goes in a header, never in this address.</summary>
+    public string AbuseIpDbBlacklistUrl { get; init; } = "https://api.abuseipdb.com/api/v2/blacklist";
+
+    /// <summary>The largest blacklist answer read; a larger one is refused as a bad answer.</summary>
+    public int AbuseIpDbMaxBlacklistBytes { get; init; } = 16 * 1024 * 1024;
 }

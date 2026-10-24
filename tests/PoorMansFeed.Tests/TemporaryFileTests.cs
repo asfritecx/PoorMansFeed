@@ -1,13 +1,13 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using PoorMansFeed.Core;
 
 namespace PoorMansFeed.Tests;
 
 /// <summary>
-/// The feed writers' temporary file. It is made new, so a link or a stale file at its path is never written through, and
-/// a feed writer makes it only through TemporaryFile.WriteNew, so a later writer can't bring back a write that follows a
-/// link. The export folder may be one another account can write, which is why this matters there.
+/// The feed writers' temporary file is made new, so a link or a stale file at its path is never written through.
+/// The export folder may be one another account can write, which is why this matters there.
 /// </summary>
 public sealed class TemporaryFileTests
 {
@@ -71,6 +71,86 @@ public sealed class TemporaryFileTests
             Assert.Contains("TemporaryFile.WriteNew(", source, StringComparison.Ordinal);
             Assert.Empty(following);
         }
+    }
+
+    // A feed ends every line with LF only, on every OS; the report and Copy keep their own. On macOS
+    // Environment.NewLine is LF, so only this sweep sees a writer go back to it.
+    [Fact]
+    public void Every_feed_writer_ends_its_lines_with_LF_only()
+    {
+        // A verbatim or raw string spanning lines takes the checkout's line ends, CRLF on a Windows checkout
+        string[] newlineTokens =
+        [
+            "Environment.NewLine", "AppendLine(", "WriteLine(", "WriteAllLines(", "AppendAllLines(", "\\r", "@\"", "@$\"",
+            "\"\"\"",
+        ];
+        string[] notFeeds = ["WriteAsnReport", "BuildClipboardText"];
+        List<string> writers = FeedWriterFiles();
+
+        Assert.True(writers.Count >= 3, $"Only {writers.Count} feed writers were found.");
+        foreach (string writer in writers)
+        {
+            string name = Path.GetFileName(writer);
+            string source = File.ReadAllText(writer);
+            foreach (string method in notFeeds)
+            {
+                string? without = WithoutMethodBody(source, method);
+                if (name == "ExportWriter.cs")
+                    Assert.True(without is not null, $"{name} no longer declares {method} with a block body.");
+                source = without ?? source;
+            }
+
+            List<string> found = newlineTokens
+                .Where(token => source.Contains(token, StringComparison.Ordinal))
+                .Select(token => $"{name}: {token}")
+                .ToList();
+
+            Assert.Empty(found);
+            Assert.Contains("FeedText.LineEnd", source, StringComparison.Ordinal);
+            // The rolling feed writes PublicAddress.Text, which is bare by construction
+            if (name != "AbuseIpDbFeedWriter.cs")
+                Assert.True(source.Contains("FeedText.Entry(", StringComparison.Ordinal), $"{name} doesn't write its entries through FeedText.Entry.");
+        }
+    }
+
+    // A writer under another name is still swept when it makes its file through WriteNew
+    private static List<string> FeedWriterFiles()
+    {
+        string separator = Path.DirectorySeparatorChar.ToString();
+        return Directory
+            .EnumerateFiles(Path.Combine(RepositoryRoot(), "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(file => !file.Contains(separator + "obj" + separator, StringComparison.Ordinal)
+                && !file.Contains(separator + "bin" + separator, StringComparison.Ordinal))
+            .Where(file => Path.GetFileName(file) is "ExportWriter.cs"
+                || Path.GetFileName(file).EndsWith("FeedWriter.cs", StringComparison.Ordinal)
+                || File.ReadAllText(file).Contains("TemporaryFile.WriteNew(", StringComparison.Ordinal))
+            .ToList();
+    }
+
+    // Null unless the method has a block body. Braces are counted as they come; the bodies swept hold none in a
+    // string or char literal that is unbalanced.
+    private static string? WithoutMethodBody(string source, string method)
+    {
+        Match declaration = Regex.Match(source, $@"\bstatic\s+[\w<>\[\]?]+\s+{method}\s*\(");
+        if (!declaration.Success)
+            return null;
+
+        int open = source.IndexOf('{', declaration.Index);
+        int arrow = source.IndexOf("=>", declaration.Index, StringComparison.Ordinal);
+        int end = source.IndexOf(';', declaration.Index);
+        if (open < 0 || (arrow >= 0 && arrow < open) || (end >= 0 && end < open))
+            return null;
+
+        int depth = 0;
+        for (int i = open; i < source.Length; i++)
+        {
+            if (source[i] == '{')
+                depth++;
+            else if (source[i] == '}' && --depth == 0)
+                return string.Concat(source.AsSpan(0, declaration.Index), source.AsSpan(i + 1));
+        }
+
+        return null;
     }
 
     private static string RepositoryRoot([CallerFilePath] string testFile = "")

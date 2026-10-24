@@ -45,7 +45,7 @@ public sealed class CloudFeedEngineTests : IDisposable
     [Fact]
     public async Task Check_Drops_IPv6_Before_The_Query_When_IPv6_Is_Off()
     {
-        _ipinfo.Settings = new UserSettings { IPv6Enabled = false };
+        _ipinfo.Settings = new UserSettings { IPv6Enabled = false, WriteFortigateFeeds = true };
         CloudFeedEngine engine = Engine();
 
         CheckResult result = await engine.CheckAsync(
@@ -118,7 +118,7 @@ public sealed class CloudFeedEngineTests : IDisposable
         Assert.Equal(CloudFeedWriteFailure.None, written.Failure);
         string folder = Path.Combine(_temp.ExportFolder, "fortigate");
         Assert.Equal([Path.Combine(folder, "Azure_Storage_ipv4.txt"), Path.Combine(folder, "Azure_Storage_ipv6.txt")], written.Files.ToArray());
-        string nl = Environment.NewLine;
+        string nl = "\n";
         string expected =
             "# PoorMansFeed - Fortigate Threat Feed" + nl +
             "# Ranges: Test source" + nl +
@@ -167,7 +167,7 @@ public sealed class CloudFeedEngineTests : IDisposable
         Assert.Equal([ipv4, ipv6], written.Files.ToArray());
         Assert.Equal(victimBefore, File.ReadAllBytes(victim));
         Assert.False(File.Exists(missing));
-        string nl = Environment.NewLine;
+        string nl = "\n";
         Assert.Null(new FileInfo(ipv4).LinkTarget);
         Assert.Null(new FileInfo(ipv6).LinkTarget);
         Assert.StartsWith("# PoorMansFeed - Fortigate Threat Feed" + nl, File.ReadAllText(ipv4));
@@ -234,13 +234,13 @@ public sealed class CloudFeedEngineTests : IDisposable
     }
 
     [Fact]
-    public async Task Write_Names_No_File_When_The_Feed_Folder_Cannot_Be_Made()
+    public async Task Write_Fails_The_First_File_When_The_Feed_Folder_Cannot_Be_Made()
     {
         CloudFeedEngine engine = Engine();
         CheckResult result = await engine.CheckAsync(
             Description(), [Prefix("34.1.0.0/16", "a"), Prefix("2001:db8::/32", "a")], CancellationToken.None);
         CloudFeedPlan plan = engine.PlanWrite(result.Check!, result.Check!.Ranges.Select(range => range.Prefix.Block).ToList());
-        // A file where the fortigate folder should go fails the folder before any feed file
+        // The folder is made inside the first file's write, so a file in its place fails that file
         Directory.CreateDirectory(_temp.ExportFolder);
         string fortigate = Path.Combine(_temp.ExportFolder, "fortigate");
         File.WriteAllText(fortigate, "");
@@ -249,7 +249,7 @@ public sealed class CloudFeedEngineTests : IDisposable
 
         Assert.Equal(CloudFeedWriteFailure.WriteFailed, written.Failure);
         Assert.Empty(written.Files);
-        Assert.Null(written.FailedFile);
+        Assert.Equal(Path.Combine(fortigate, "Azure_Test_ipv4.txt"), written.FailedFile);
         Assert.Empty(written.OldFilesLeft!);
         Assert.True(File.Exists(fortigate));
     }
@@ -309,7 +309,7 @@ public sealed class CloudFeedEngineTests : IDisposable
         Assert.Equal(1, written.ExceptionRemovals);
         // Every IPv6 range was removed, so no IPv6 file is written
         string file = Assert.Single(written.Files);
-        string nl = Environment.NewLine;
+        string nl = "\n";
         string expected =
             "# PoorMansFeed - Fortigate Threat Feed" + nl +
             "# Ranges: Test source" + nl +
@@ -355,10 +355,60 @@ public sealed class CloudFeedEngineTests : IDisposable
 
         CloudFeedWriteResult written = await engine.WriteAsync(plan, [], CancellationToken.None);
 
-        string nl = Environment.NewLine;
+        string nl = "\n";
         Assert.Contains("# Exceptions: 1 range cut, 1 removed" + nl, File.ReadAllText(written.Files[0]));
         Assert.Contains("# Exceptions: 1 range cut, 0 removed" + nl + "# Confirmed against:", File.ReadAllText(written.Files[1]));
         Assert.EndsWith("2001:db8:8000::/33" + nl, File.ReadAllText(written.Files[1]));
+    }
+
+    [Fact]
+    public async Task Write_Writes_A_Single_Host_Bare_And_Keeps_A_Networks_Prefix()
+    {
+        CloudFeedEngine engine = Engine();
+        CheckResult result = await engine.CheckAsync(
+            Description(),
+            [Prefix("34.1.2.3/32", "a"), Prefix("2001:db8::1/128", "a"), Prefix("2001:db8::/32", "a")],
+            CancellationToken.None);
+        CloudFeedPlan plan = engine.PlanWrite(result.Check!, result.Check!.Ranges.Select(range => range.Prefix.Block).ToList());
+
+        CloudFeedWriteResult written = await engine.WriteAsync(plan, [], CancellationToken.None);
+
+        Assert.Equal(CloudFeedWriteFailure.None, written.Failure);
+        Assert.Equal(3, written.RangesWritten);
+        Assert.Equal(0, written.UnconfirmedWritten);
+        Assert.Equal(2, written.Files.Count);
+        string[] v4 = File.ReadAllLines(written.Files[0]);
+        Assert.Contains("# Entries: 1 (1 confirmed by IPinfo, 0 added without confirmation)", v4);
+        Assert.Equal(["34.1.2.3"], v4.Where(line => !line.StartsWith('#')));
+        string[] v6 = File.ReadAllLines(written.Files[1]);
+        Assert.Contains("# Entries: 2 (2 confirmed by IPinfo, 0 added without confirmation)", v6);
+        Assert.Equal(["2001:db8::1", "2001:db8::/32"], v6.Where(line => !line.StartsWith('#')));
+        foreach (string file in written.Files)
+            FeedFormat.AssertWellFormed(File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public async Task Write_Writes_A_Single_Host_An_Exception_Cut_Leaves_Bare()
+    {
+        _ipinfo.Exceptions = RangeSubtractionTests.List("34.1.2.0/31", "34.1.2.3/32", "2001:db8::1/128");
+        CloudFeedEngine engine = Engine();
+        CheckResult result = await engine.CheckAsync(
+            Description(), [Prefix("34.1.2.0/30", "a"), Prefix("2001:db8::/127", "a")], CancellationToken.None);
+        CloudFeedPlan plan = engine.PlanWrite(result.Check!, result.Check!.Ranges.Select(range => range.Prefix.Block).ToList());
+
+        CloudFeedWriteResult written = await engine.WriteAsync(plan, [], CancellationToken.None);
+
+        Assert.Equal(CloudFeedWriteFailure.None, written.Failure);
+        Assert.Equal(2, written.ExceptionCuts);
+        Assert.Equal(2, written.Files.Count);
+        string[] v4 = File.ReadAllLines(written.Files[0]);
+        Assert.Contains("# Exceptions: 1 range cut, 0 removed", v4);
+        Assert.Equal(["34.1.2.2"], v4.Where(line => !line.StartsWith('#')));
+        string[] v6 = File.ReadAllLines(written.Files[1]);
+        Assert.Contains("# Exceptions: 1 range cut, 0 removed", v6);
+        Assert.Equal(["2001:db8::"], v6.Where(line => !line.StartsWith('#')));
+        foreach (string file in written.Files)
+            FeedFormat.AssertWellFormed(File.ReadAllBytes(file));
     }
 
     [Fact]

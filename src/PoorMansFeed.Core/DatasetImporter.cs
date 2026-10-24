@@ -15,9 +15,8 @@ public static class DatasetImporter
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// Streams the gzip NDJSON dataset into the builder. Does not call builder.Complete.
-    /// When the builder does not include IPv6, IPv6 rows are left out: they are not added, not counted as skipped
-    /// and not counted as corrupt. Returns the number of rows added.
+    /// Does not call builder.Complete. When the builder leaves out IPv6, IPv6 rows are neither added nor counted as
+    /// skipped or corrupt. Returns the number of rows added.
     /// </summary>
     public static Task<long> ImportAsync(string gzPath, IpDatabase.Builder builder, IProgress<UpdateProgress>? progress, CancellationToken ct)
     {

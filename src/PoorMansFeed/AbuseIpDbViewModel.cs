@@ -7,11 +7,8 @@ using PoorMansFeed.Core.AbuseIpDb;
 namespace PoorMansFeed;
 
 /// <summary>
-/// The AbuseIPDB Blacklist page: the rolling list's status, Download blacklist (with the key prompt and one retry),
-/// Clear list, Write feed, Empty feed and Open folder. Its runs keep their own IsWorking rather than the work gate, so
-/// an update never disables the page; only its dialogs (the two confirmations, the key prompt and the new addresses, whose
-/// press holds it only while its dialog is open) hold the gate, so no dialog opens over another. It never reads or sets MainViewModel.IsBusy. The offending networks group beside the
-/// runs with their own IsGrouping, so a 12-second grouping and a download never lock each other.
+/// The AbuseIPDB Blacklist page. Its runs keep their own IsWorking, not the work gate, so an update never disables it;
+/// only its dialogs hold the gate. The grouping has its own IsGrouping, so it and a download never lock each other.
 /// </summary>
 public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 {
@@ -54,6 +51,11 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     private int _newCount;
     private bool _showingNew;
 
+    // The rules button: the ModSecurity copies of the last Write feed, and whether its press is out
+    private readonly ModSecurityRulesPress _rulesPress;
+    private readonly ModSecurityRulesFiles _rulesFiles = new();
+    private bool _showingRules;
+
     // The close: the service call out right now (and whether it is a download), the window's holds on the runs, and
     // whether the stop has begun, after which a run starts nothing more once its call ends
     private Task? _call;
@@ -91,6 +93,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         _abuse = abuse;
         _abuseKeys = abuseKeys ?? (abuse is null ? null : new AbuseKeyPrompt(ui, abuse, gate));
         _unsaved = unsaved;
+        _rulesPress = new ModSecurityRulesPress(ipinfo, ui, gate);
+        _rulesFiles.ShowsChanged += RulesFilesShowsChanged;
         _defaultExportFolder = defaultExportFolder ?? Path.Combine(ipinfo.DataFolder, "exports");
         _factsText = abuse is null ? AppText.AbuseKeysUnavailable : AppText.ReadingAbuseList;
         _factsHeadText = _factsText;
@@ -102,9 +106,10 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         EmptyFeedCommand = new AsyncRelayCommand(EmptyFeedAsync, CanRun);
         OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync, () => IsAvailable && !_disposed);
         ShowNewAddressesCommand = new AsyncRelayCommand(ShowNewAddressesAsync, CanShowNewAddresses);
+        ModSecurityRulesCommand = new AsyncRelayCommand(ShowModSecurityRulesAsync, () => CanRun() && ShowsModSecurityRules);
 
         // Not on IsWorking, IsGrouping or the gate: Look up only hands an ASN to the window, which searches it there
-        LookUpCommand = new RelayCommand<OffendingNetworkRow>(LookUp, row => row is not null && IsAvailable && !_disposed && !_showingNew);
+        LookUpCommand = new RelayCommand<OffendingNetworkRow>(LookUp, row => row is not null && IsAvailable && !_disposed && !_showingNew && !_showingRules);
 
         // Not on the new addresses press either: opening a browser is no page run, and that dialog is modal anyway
         OpenNetworkInIpinfoCommand = new AsyncRelayCommand<OffendingNetworkRow>(OpenNetworkInIpinfoAsync,
@@ -115,6 +120,9 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     }
 
     public bool IsAvailable => _abuse is not null;
+
+    /// <summary>The last Write feed succeeded and wrote ModSecurity copies.</summary>
+    public bool ShowsModSecurityRules => _rulesFiles.Shows;
 
     /// <summary>A download, Clear list, Write feed or Empty feed is running, from the press to the end.</summary>
     public bool IsWorking
@@ -157,9 +165,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// While Download or Clear list runs, its own line. Otherwise the newest status chooses: the list's state, then the
-    /// clock behind the last download, then the refusal, then the stale warning, and with none of them the last download
-    /// or Clear list line, so a line whose condition has gone gives way.
+    /// While Download or Clear list runs, its own line. Otherwise the newest status chooses, before the last action's
+    /// line, so a line whose condition has gone gives way.
     /// </summary>
     public string StatusText
     {
@@ -245,14 +252,14 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     public IAsyncRelayCommand EmptyFeedCommand { get; }
     public IAsyncRelayCommand OpenFolderCommand { get; }
     public IAsyncRelayCommand ShowNewAddressesCommand { get; }
+    public IAsyncRelayCommand ModSecurityRulesCommand { get; }
     public IRelayCommand<OffendingNetworkRow> LookUpCommand { get; }
 
     /// <summary>Opens a row's AS on ipinfo.io, from the row's menu. The page is built from the grouping's ASN alone.</summary>
     public IAsyncRelayCommand<OffendingNetworkRow> OpenNetworkInIpinfoCommand { get; }
 
-    /// <summary>A download, Clear list, Write feed or Empty feed is with the service: from just before its call to the call's end.
-    /// Not while a confirmation or the key prompt is open, and never for the grouping or a status read. The close asks
-    /// about it first, and the stop waits for that call.</summary>
+    /// <summary>A download, Clear list, Write feed or Empty feed is with the service, from just before its call to
+    /// its end; not while a confirmation or the key prompt is open, nor for the grouping or a status read.</summary>
     public bool AsksBeforeClose => _callOut && !_disposed;
 
     /// <summary>Asks whether to stop the page's work and close. True at once when nothing is with the service. Asking
@@ -266,12 +273,10 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         return await ConfirmAsync(AppText.CloseAbuseWorkTitle, body, AppText.CloseAbuseWorkButton) == true;
     }
 
-    /// <summary>Stops the page's work for the close. From now on a run whose call ends starts nothing more: no key
-    /// prompt, retry, line, status read or grouping. A download not yet answered is cancelled; once a 2xx answer's
-    /// headers are in, its body (up to the request's remaining timeout) and its merge still finish. Clear list, Write
-    /// feed and Empty feed are never cancelled, only waited for. Returns once the
-    /// call with the service has ended, not the run around it, and at once when nothing is with the service. Never
-    /// throws.</summary>
+    /// <summary>
+    /// A run whose call ends starts nothing more; when the call is a download, the page's lifetime is cancelled,
+    /// and every read with it. Returns once the call with the service has ended, not the run around it. Never throws.
+    /// </summary>
     public async Task StopForCloseAsync()
     {
         _closing = true;
@@ -301,10 +306,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>Turns the page's run commands off (Download, Clear list, Write feed, Empty feed) until the returned hold
-    /// is disposed. The window takes it once the page's close question is agreed or not needed, so nothing starts while
-    /// the update winds down or the page's work is stopped; a later question declined releases it. A run already going
-    /// goes on. Holds nest, and a second Dispose does nothing.</summary>
+    /// <summary>Turns the run commands off until disposed, so nothing starts while the close winds down; a later close
+    /// question declined releases it. A run already going goes on. Holds nest; a second Dispose does nothing.</summary>
     public IDisposable HoldRunsForClose()
     {
         _closeHolds++;
@@ -313,11 +316,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Called on every show: reads the status again, because a download, the keep days or the clock may have moved it
-    /// since. A run reads the status itself when it ends, so nothing is read while one is out. A show while an earlier
-    /// show's read is out joins that read: the list answers one read at a time, so repeated shows would queue reads
-    /// ahead of a download. The offending networks are checked on every show, a run or a joined read included, and
-    /// grouped again only when stale; that isn't awaited.
+    /// A show while an earlier show's read is out joins that read: the list answers one read at a time, so repeated
+    /// shows would queue reads ahead of a download. The grouping, run only when stale, isn't awaited.
     /// </summary>
     public Task ActivateAsync()
     {
@@ -338,6 +338,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
         GroupIfStale(_abuse);
 
+        // A run reads the status itself when it ends, so nothing is read while one is out
         if (IsWorking)
             return Task.CompletedTask;
 
@@ -368,7 +369,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
     // Never on the gate's CanStart: an update or another page's dialog must not disable the page's own runs. The
     // window's close hold is its own, not the gate's
-    private bool CanRun() => IsAvailable && _gate.IsStarted && !IsWorking && !_disposed && _closeHolds == 0 && !_showingNew;
+    private bool CanRun() => IsAvailable && _gate.IsStarted && !IsWorking && !_disposed && _closeHolds == 0 && !_showingNew
+                             && !_showingRules;
 
     private bool CanShowNewAddresses() => CanRun() && _newCount > 0;
 
@@ -426,6 +428,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         EmptyFeedCommand.NotifyCanExecuteChanged();
         OpenFolderCommand.NotifyCanExecuteChanged();
         ShowNewAddressesCommand.NotifyCanExecuteChanged();
+        ModSecurityRulesCommand.NotifyCanExecuteChanged();
         LookUpCommand.NotifyCanExecuteChanged();
         OpenNetworkInIpinfoCommand.NotifyCanExecuteChanged();
     }
@@ -503,11 +506,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     private async Task ActivateCoreAsync(IAbuseIpDbService abuse) => await ReadStatusAsync(abuse);
 
     /// <summary>
-    /// Reads the status, shows the facts row, keeps the answer as the last status and chooses the line from it. Null
-    /// when the read failed, was cancelled, or was overtaken by a newer read, whose answer is the one shown; then the
-    /// last status and the line stay as they were. <paramref name="callerRegroups"/> is true for a caller that groups
-    /// again itself right after the read (a successful download, Clear list), so the read starts no grouping it would
-    /// supersede at once.
+    /// Null when the read failed, was cancelled or was overtaken by a newer read; the last status and line then stay.
+    /// <paramref name="callerRegroups"/>: the caller groups again right after, so the read starts no grouping.
     /// </summary>
     private async Task<(AbuseListStatus status, int keepDays)?> ReadStatusAsync(IAbuseIpDbService abuse,
                                                                               bool callerRegroups = false)
@@ -528,9 +528,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
             ShowNewAddressesCommand.NotifyCanExecuteChanged();
             ChooseStatusLine();
 
-            // A grouping refused for a clock behind the last download groups again once a read finds the clock put
-            // right, also after an action, not only on a show; not once the close has stopped the runs. A grouping never
-            // reads the status, so this can't loop
+            // A grouping refused for the clock groups again once any read finds it put right, not only on a show.
+            // A grouping never reads the status, so this can't loop
             if (!callerRegroups && !_closing && !status.ClockBehind && !IsGrouping
                 && _groupingOutcome == AbuseNetworksFailure.ClockWrong && ReadGroupingInputs() is { } inputs)
             {
@@ -699,6 +698,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            _rulesFiles.Clear();
             SetStatus(AppText.ClearingAbuseList, warning: false);
             AbuseIpDbFailure failure;
             try
@@ -742,8 +742,9 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         if (_abuse is not { } abuse || !CanRun())
             return;
 
+        int rulesMark = _rulesFiles.Clear();
+
         IsWorking = true;
-        ActionText = AppText.WritingAbuseFeed;
         try
         {
             int keepDays = AbuseIpDbLimits.DefaultKeepDays;
@@ -753,13 +754,23 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                 // Read once, just before the write, so the line says what the write read; a save during it doesn't change it
                 bool unsaved = _unsaved?.HasUnsavedChanges == true;
                 UserSettings settings = _ipinfo.Settings;
-                string folder = FortigateFolder(settings);
+                if (!settings.TicksAnyFeedType())
+                {
+                    await AskToConfigureFeedsAsync();
+                    return;
+                }
+
+                string folder = ExportFolders.Resolve(settings, _defaultExportFolder);
                 keepDays = KeepDays(settings);
                 ipv6Enabled = settings.IPv6Enabled;
 
+                ActionText = AppText.WritingAbuseFeed;
                 AbuseFeedWriteResult result = await CallServiceAsync(abuse.WriteFeedAsync, isDownload: false);
                 if (_disposed || _closing)
                     return;
+
+                if (result.Failure == AbuseFeedWriteFailure.None)
+                    _rulesFiles.Set(rulesMark, result.ModSecurityFiles);
 
                 ActionText = result.Failure switch
                 {
@@ -791,10 +802,41 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         }
     }
 
+    // Not shown while something else holds the gate, as the page's confirmations aren't; Close leaves the line as it
+    // was before the press
+    private async Task AskToConfigureFeedsAsync()
+    {
+        if (_gate.IsHeld)
+        {
+            ActionText = AppText.ConfigureFeedsBusy;
+            return;
+        }
+
+        ConfigureFeedsChoice choice;
+        using (IDisposable hold = _gate.Hold())
+        {
+            try
+            {
+                choice = await _ui.AskToConfigureFeedsAsync();
+            }
+            catch (Exception)
+            {
+                if (!_disposed && !_closing)
+                    ActionText = AppText.Generic;
+                return;
+            }
+        }
+
+        if (choice == ConfigureFeedsChoice.OpenSettings && !_disposed && !_closing)
+            _ui.ShowSettingsPage();
+    }
+
     private async Task EmptyFeedAsync()
     {
         if (_abuse is not { } abuse || !CanRun())
             return;
+
+        _rulesFiles.Clear();
 
         IsWorking = true;
         try
@@ -822,7 +864,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
             string folder = "";
             try
             {
-                folder = FortigateFolder(_ipinfo.Settings);
+                folder = ExportFolders.Resolve(_ipinfo.Settings, _defaultExportFolder);
                 AbuseFeedWriteResult result = await CallServiceAsync(abuse.EmptyFeedAsync, isDownload: false);
                 if (_disposed || _closing)
                     return;
@@ -853,12 +895,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Reads the last download's new addresses and shows them in the dialog. The page's runs and this button are off
-    /// from the press until the dialog closes; the gate is held only while the dialog is open, so Lookup, the Settings
-    /// page and an update stay usable during the read. When the rows are in, the press shows nothing while anything
-    /// else holds the gate or the window's close holds the runs, because a close question or another dialog may have
-    /// opened during the read. The read is a read like the status's: it isn't a run, the close doesn't ask about it and
-    /// the stop doesn't wait for it. The press never sets the action line.
+    /// The gate is held only while the dialog is open, so Lookup and Settings stay usable during the read. The gate and
+    /// the close's hold are tested once the rows are in, because a close question or another dialog may have opened.
     /// </summary>
     private async Task ShowNewAddressesAsync()
     {
@@ -892,10 +930,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                     ? AbuseNewAddressesFailure.NotKnown
                     : read.Failure;
 
-                // The status chooses the line and the count; only while the list is usable and still names new
-                // addresses does the press say why it showed none, and that line gives way at the next read
-                // The read is the page's activation while it runs, so a show meanwhile joins it rather than overtaking
-                // it and dropping the line
+                // Only while the list is usable and still names new addresses does the press say why it showed none.
+                // The read is the page's activation, so a show meanwhile joins it rather than dropping the line
                 Task<(AbuseListStatus status, int keepDays)?> reading = ReadStatusAsync(abuse);
                 _activation = reading;
                 (AbuseListStatus status, int keepDays)? after = await reading;
@@ -940,6 +976,33 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void RulesFilesShowsChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(ShowsModSecurityRules));
+        RefreshCommands();
+    }
+
+    private async Task ShowModSecurityRulesAsync()
+    {
+        if (!CanRun() || _rulesFiles.Files is not { Count: > 0 } files)
+            return;
+
+        _showingRules = true;
+        RefreshCommands();
+        try
+        {
+            string? line = await _rulesPress.RunAsync(files, () => !_disposed && !_closing && _closeHolds == 0,
+                _lifetime.Token);
+            if (line is not null && !_disposed && !_closing)
+                ActionText = line;
+        }
+        finally
+        {
+            _showingRules = false;
+            RefreshCommands();
+        }
+    }
+
     private static NewAddressesPrompt BuildNewAddressesPrompt(IReadOnlyList<AbuseNewAddress> addresses, DateTimeOffset asOf)
     {
         var rows = addresses.Take(NewAddressRowLimit)
@@ -971,9 +1034,6 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                 ActionText = AppText.FolderOpenFailed;
         }
     }
-
-    private string FortigateFolder(UserSettings settings) =>
-        Path.Combine(ExportFolders.Resolve(settings, _defaultExportFolder), ExportWriter.FortigateFolderName);
 
     // A browser that launched proves nothing, so only a failure says anything
     private async Task OpenNetworkInIpinfoAsync(OffendingNetworkRow? row)
@@ -1025,11 +1085,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         && kept.KeepDays == current.KeepDays;
 
     /// <summary>
-    /// Groups when there has been no grouping, when the inputs changed, or when the last one ended in a failure that
-    /// can heal on its own: a list that couldn't be read now, a lookup that failed or a dataset that changed. The others
-    /// heal only when an input changes (no dataset) or through a download or Clear list, which group again themselves;
-    /// rerunning them on every show would read the whole feed each time. A grouping refused for the clock groups again
-    /// when a status read finds the clock put right.
+    /// Groups when none was made or the inputs changed, and after a failure that can heal (a storage error, a failed
+    /// lookup, a changed dataset); rerunning the other failures on every show would read the whole feed each time.
     /// </summary>
     private void GroupIfStale(IAbuseIpDbService abuse)
     {
@@ -1156,11 +1213,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Asks, holding the gate only while the dialog is open, so the service call that follows doesn't lock Lookup or
-    /// the Settings page. Null when the dialog failed to show; the hold stops a second dialog opening meanwhile.
-    /// Clear list and Empty feed test the gate before they ask, because a holder may show its own dialog later (Reset
-    /// token holds it while the token is removed, then asks for a new one); the close's question doesn't, as the close
-    /// must be asked.
+    /// Holds the gate only while the dialog is open, so the service call that follows doesn't lock Lookup or Settings.
+    /// Null when the dialog failed to show. Clear list and Empty feed test IsHeld before calling it; the close doesn't.
     /// </summary>
     private async Task<bool?> ConfirmAsync(string title, string message, string confirmText)
     {

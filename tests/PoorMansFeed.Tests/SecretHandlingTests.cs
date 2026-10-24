@@ -4,17 +4,13 @@ using System.Text.RegularExpressions;
 namespace PoorMansFeed.Tests;
 
 /// <summary>
-/// Sweeps the sources for the rules that keep the API token and the AbuseIPDB key in the operating system's store:
-/// neither is ever encrypted by the app, each platform library is used in one file, and no test reaches the real store.
-/// The only cipher is config.db's sealing in ConfigSeal.cs, under a random key that is itself kept in the operating
-/// system's store; there is no cipher, key derivation or passphrase anywhere else.
+/// Sweeps the sources for the rules that keep the API token and the AbuseIPDB key in the operating system's store.
+/// The only cipher is config.db's sealing in ConfigSeal.cs, under a random key the operating system's store keeps.
 /// </summary>
 public sealed class SecretHandlingTests
 {
-    // The token and the AbuseIPDB key are protected by DPAPI or the Keychain, never by the app. A cipher or key
-    // derivation here would mean a key or passphrase in the app, which anyone with the source or the binary can read.
-    // The one cipher is config.db's AES-GCM sealing, whose random key is kept by the OS store; it is fenced to its file
-    // by SealingOnly, and every name below stays banned there too.
+    // A cipher or key derivation here would mean a key or passphrase in the app, which anyone with the binary can read.
+    // config.db's AES-GCM sealing is fenced to its file by SealingOnly, and every name below stays banned there too.
     private static readonly string[] OwnCryptography =
     [
         "Aes.Create", "AesCcm", "AesCng", "AesManaged", "AesCryptoServiceProvider", "Rijndael",
@@ -71,9 +67,8 @@ public sealed class SecretHandlingTests
     [Fact]
     public void Config_paths_are_named_only_where_they_belong()
     {
-        // On macOS a System.IO open of config.db while the app's SQLite connection holds it drops SQLite's locks for
-        // the whole process, so only the store may touch the file. On Windows the key's file is all that tells the
-        // secrets apart, so only its store factory may name it.
+        // On macOS a System.IO open of config.db while SQLite holds it drops SQLite's locks for the whole process. On
+        // Windows the key's file is all that tells the secrets apart, so only its store factory may name it.
         List<string> Naming(string pattern) => SourceFiles("src")
             .Where(file => Regex.IsMatch(File.ReadAllText(file), pattern))
             .Select(file => Path.GetFileName(file))
@@ -91,15 +86,22 @@ public sealed class SecretHandlingTests
         // which name the file to the user and open nothing.
         Assert.Equal(["AppPaths.cs", "Config/ConfigStore.cs"],
                      Users(@"\bConfigPath\b|\bUnreadableConfigPath\b|\bConfigMadePath\b|\bConfigMadeFileName\b"));
-        Assert.Equal(["../PoorMansFeed/AppText.cs", "AppPaths.cs"], Users(@"\bConfigFileName\b|\bUnreadableConfigFileName\b"));
-        Assert.DoesNotMatch(AppTextFileAccess, File.ReadAllText(Path.Combine(root, "src", "PoorMansFeed", "AppText.cs")));
+        static bool IsAppTextFile(string file) =>
+            Regex.IsMatch(file, @"^\.\./PoorMansFeed/AppText[^/]*\.cs$", RegexOptions.CultureInvariant);
+        List<string> fileNameUsers = Users(@"\bConfigFileName\b|\bUnreadableConfigFileName\b");
+        Assert.Contains("AppPaths.cs", fileNameUsers);
+        Assert.Contains(fileNameUsers, IsAppTextFile);
+        Assert.All(fileNameUsers, file => Assert.True(file == "AppPaths.cs" || IsAppTextFile(file), file));
+
+        string[] appTextFiles = Directory.GetFiles(Path.Combine(root, "src", "PoorMansFeed"), "AppText*.cs");
+        Assert.NotEmpty(appTextFiles);
+        Assert.All(appTextFiles, file => Assert.DoesNotMatch(AppTextFileAccess, File.ReadAllText(file)));
 
         Assert.Equal(["AppPaths.cs", "SecretStores.cs"], Naming(@"\bConfigKeyPath\b"));
     }
 
-    // Any way of opening, listing, running or importing a file API, which the UI's texts must never hold. The type names
-    // are refused anywhere, so a target-typed new(...) is caught too. File and Directory are refused before a dot, with
-    // any white space between, and so is any using alias, which could rename them
+    // Type names are refused anywhere, so a target-typed new(...) is caught too, and so is any using alias, which
+    // could rename File or Directory
     private const string AppTextFileAccess =
         @"\b(File|Directory)\s*\.|\b(FileStream|FileInfo|DirectoryInfo|StreamReader|StreamWriter|SqliteConnection" +
         @"|Process|ProcessStartInfo|FileSystemWatcher)\b" +
@@ -281,12 +283,8 @@ public sealed class SecretHandlingTests
         Assert.Equal(["AbuseIpDbService.cs", "AppPaths.cs"], users);
     }
 
-    // Only AbuseIpDbFeedWriter.Select, which applies the exceptions, may make a feed family with addresses, so a
-    // report's selection can never be written as a feed. In any other file that names the family or WriteFamily:
-    // "new AbuseFeedFamily(" only with no addresses ([]); no declaration "AbuseFeedFamily x = new("; no target-typed
-    // "new(" with four arguments unless its addresses are [] (a family's shape, wherever it stands: an argument, a
-    // return, an expression body); no "with" on a name declared as a family; and no "with" of any receiver (a call,
-    // an indexer) that sets one of the family's members.
+    // A target-typed new( is judged by a family's shape (four arguments) wherever it stands, and a with by the members
+    // it sets, whatever its receiver (a call, an indexer), because the sweep can't see a type.
     [Fact]
     public void A_feed_family_with_addresses_is_made_only_by_the_writer()
     {
@@ -402,10 +400,8 @@ public sealed class SecretHandlingTests
         Assert.Empty(offenders);
     }
 
-    // Each statement that starts at the opening text is read to the ';' that ends it, so a name on a later line counts
-    // too. A ';' inside a string literal doesn't end it. The reading is plain text, not C#, so a statement ends early,
-    // and a name after that point goes unseen, at a ';' in a '//' comment, at a char literal (';' or '"'), or at a string
-    // inside an interpolation hole, whose quotes flip the string state
+    // Plain text, not C#: a statement ends early, and a name after that point goes unseen, at a ';' in a '//' comment,
+    // at a char literal (';' or '"'), or at a string inside an interpolation hole, whose quotes flip the string state
     private static IEnumerable<(string Text, int Line)> Statements(string text, string opening)
     {
         for (int start = text.IndexOf(opening, StringComparison.Ordinal); start >= 0;

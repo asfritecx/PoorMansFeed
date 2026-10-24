@@ -4,9 +4,8 @@ using PoorMansFeed.Core.Secrets;
 namespace PoorMansFeed.Tests;
 
 /// <summary>
-/// These use the real login Keychain, so they run only on macOS and only when asked for:
-/// <c>POORMANSFEED_KEYCHAIN_TESTS=1 dotnet test</c>. Each test saves under its own service name, never the app's, and
-/// removes its item afterwards. The test process creates the items itself, so the Keychain doesn't prompt.
+/// These use the real login Keychain, so each saves under its own service name, never the app's, and removes its item
+/// afterwards. The test process creates the items itself, so the Keychain doesn't prompt.
 /// </summary>
 public sealed class KeychainSecretStoreTests
 {
@@ -23,9 +22,8 @@ public sealed class KeychainSecretStoreTests
     [Fact]
     public void The_service_and_account_names_stay_fixed_and_apart()
     {
-        // Makes no store, so it runs on every macOS test run without the variable; the guard is only for CA1416.
-        // Changing a name loses every saved secret, because the item is found by these names alone; equal account
-        // names would make one secret replace the other.
+        // Makes no store, so it runs without the variable; the guard is only for CA1416. A changed name loses every
+        // saved secret, as the item is found by these names alone; equal names would make one secret replace the other.
         if (!OperatingSystem.IsMacOS())
         {
             Assert.Skip("The Keychain names are used only on macOS.");

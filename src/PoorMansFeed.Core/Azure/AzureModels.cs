@@ -3,9 +3,8 @@ using PoorMansFeed.Core;
 namespace PoorMansFeed.Core.Azure;
 
 /// <summary>
-/// One Azure service tag: "Storage", or a variant such as "Storage.SoutheastAsia". Region is the file's own
-/// region id ("" = global); Suffix is the part of the name after the dot, which often differs from Region.
-/// Prefixes are unique, IPv4 first, then by address.
+/// One Azure service tag, such as "Storage" or "Storage.SoutheastAsia". Region is the file's own region id ("" for
+/// global), and Suffix, the part after the dot, often differs from it. Prefixes are unique, IPv4 first, by address.
 /// </summary>
 public sealed class AzureServiceTag
 {

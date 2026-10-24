@@ -1,13 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:GraphiteUi">
-  <!-- Graphite design system: cool graphite neutrals, one blue, Geist type, 36px controls, 4px control and 8px overlay
-       corners. The Graphite* brushes are its colour tokens, one per token, and views read them directly.
-
-       The light dictionaries are keyed "Default", not "Light". Fluent reads SystemAccentColor and its shades through
-       DynamicResources declared inside its own "Default" dictionary, and those lookups ask for the Default variant only,
-       so an override keyed "Light" is skipped (verified on 12.1.3). A control in the Light variant still finds "Default",
-       because a lookup falls back to it. Every themed key therefore appears in both dictionaries below. -->
+  <!-- The light dictionaries are keyed "Default", not "Light": Fluent's accent lookups ask for the Default variant
+       only, so an override keyed "Light" is skipped. Every themed key therefore appears in both dictionaries below. -->
   <Styles.Resources>
     <ResourceDictionary>
       <ResourceDictionary.ThemeDictionaries>
@@ -244,12 +239,8 @@
       <StreamGeometry x:Key="IconUpload">M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8L12 3L7 8 M12 3L12 15</StreamGeometry>
       <StreamGeometry x:Key="IconX">M18 6 6 18 M6 6l12 12</StreamGeometry>
 
-      <!-- Graphite's NavItem: 40 high, 12 inset, 4 corners. Hover and selected take selection-nav; selected also turns
-           SemiBold and shows a 3x16 accent-fill pill on the left edge. A ControlTheme rather than styles, because the
-           pill is a template part: Fluent's ListBoxItem template is a bare ContentPresenter. ListBox.nav applies it.
-           Disabled (the whole nav, while a start-up stop shows), the text and the icon, which inherits the item's
-           foreground, take text-disabled; a selected item keeps its neutral fill and weight, so the place stays
-           marked, but drops the accent pill, because blue marks only a live selection. -->
+      <!-- A ControlTheme rather than styles, because the accent pill is a template part: Fluent's ListBoxItem template
+           is a bare ContentPresenter. Disabled, a selected item drops the pill: blue marks only a live selection. -->
       <ControlTheme x:Key="GraphiteNavItemTheme" TargetType="ListBoxItem">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Foreground" Value="{DynamicResource GraphiteTextPrimaryBrush}" />
@@ -299,11 +290,8 @@
     <Setter Property="Background" Value="{DynamicResource GraphiteBgSolidBrush}" />
   </Style>
 
-  <!-- The main window's shell (Graphite's layout): a 48px app bar and a 248px nav pane on bg-window, and the content on a
-       bg-solid layer with a 1px stroke-divider edge and an 8px top-left corner. The app bar has no rule of its own; the
-       content layer's edge is the line. Each part is matched by name, not by a class: a Border class selector is
-       checked against every Border, including each list row. The 20 inset lines the product icon up with the nav icons
-       (the nav's 8 padding plus an item's 12). -->
+  <!-- The main window's shell. Each part is matched by name, not by a class: a Border class selector is checked
+       against every Border, including each list row. The 20 inset is the nav's 8 padding plus an item's 12. -->
   <Style Selector="Grid#Shell">
     <Setter Property="Background" Value="{DynamicResource GraphiteBgWindowBrush}" />
   </Style>
@@ -452,9 +440,8 @@
     <Setter Property="Fill" Value="{DynamicResource GraphiteCautionBrush}" />
   </Style>
 
-  <!-- The signed-in user's initials in an accent circle. Matched by name, not by a class: a Border class selector is
-       checked against every Border, which cost about 470 bytes per list row in a soak test; a name costs nothing.
-       The text colour and weight are inherited from the border, as in pill. -->
+  <!-- Matched by name, not by a class: a Border class selector cost about 470 bytes per list row in a soak test. The
+       text colour and weight are inherited from the border, as in pill. -->
   <Style Selector="Border#Avatar">
     <Setter Property="Background" Value="{DynamicResource GraphiteAccentFillBrush}" />
     <Setter Property="TextElement.Foreground" Value="{DynamicResource GraphiteAccentOnFillBrush}" />

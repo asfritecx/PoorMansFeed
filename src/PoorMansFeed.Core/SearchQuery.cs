@@ -11,9 +11,8 @@ public sealed partial record SearchQuery
     private static readonly Regex AsnPattern = new(@"^(?i:AS)?[0-9]{1,10}\z", RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Parses the single search box: an ASN ("AS" optional, then digits), or an address in its plain form
-    /// (IpAddressText). A legacy form such as "010.0.0.1" (octal, so 8.0.0.1) or "192.168.1" (192.168.0.1) is
-    /// rejected rather than searched as a different address.
+    /// An ASN ("AS" optional, then digits) or a plain address. A legacy form such as "010.0.0.1" (octal, so 8.0.0.1)
+    /// is rejected rather than searched as a different address.
     /// </summary>
     public static bool TryParse(string? input, [NotNullWhen(true)] out SearchQuery? query)
     {

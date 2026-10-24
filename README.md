@@ -2,14 +2,14 @@
 
 Build your own IP threat feeds from freely available data.
 
-PoorMansFeed is a desktop app for Windows and macOS. It keeps a local copy of the free [IPinfo Lite](https://ipinfo.io/products/free-ip-database) dataset and uses it to turn an AS number, or the address ranges that Google Cloud, Azure and AWS publish, into a feed your firewall can load and use in its policies. Cloud ranges are checked against IPinfo before they are written, so a range that IPinfo places with another network is shown to you unticked instead of going into the feed unseen.
+PoorMansFeed is a desktop app for Windows and macOS. It keeps a local copy of the free [IPinfo Lite](https://ipinfo.io/products/free-ip-database) dataset and uses it to turn an AS number, or the address ranges that Google Cloud, Azure and AWS publish, into a feed your firewall can load and use in its policies. Cloud ranges are checked against IPinfo before they are written, so a range that IPinfo places with another network is shown to you unticked instead of going into the feed unseen. It can also keep a rolling list of the addresses on AbuseIPDB's blacklist and write a feed from that.
 
-Feeds are written for FortiGate today. Formats for ModSecurity, nginx and other firewalls are planned (see [Roadmap](#roadmap)).
+Feeds are written for FortiGate and for ModSecurity. Formats for nginx and other firewalls are planned (see [Roadmap](#roadmap)).
 
 | Firewall | Feed | Status |
 |---|---|---|
 | FortiGate (FortiOS) | IP address threat feed, loaded through an external connector | Supported |
-| ModSecurity (with nginx or Apache) | IP list for the `@ipMatchFromFile` operator | Planned (feature set 1) |
+| ModSecurity (v3 with nginx, v2.9 with Apache) | IP list for the `@ipMatchFromFile` operator, with a rule to load it | Supported |
 | nginx | `deny` or `geo` include files | Planned |
 | Other firewalls | | Planned |
 
@@ -30,19 +30,22 @@ The tool is in active use. It is still a manual process today: you build a feed 
 - **Check an address before you act on it.** A lookup shows its network, country, ASN and the AS owner's domain, so you block the provider you meant to.
 - **Allow only the cloud services you depend on.** Use a feed as the source of an allow rule, so that only one Azure service tag, say, can reach an endpoint.
 - **Keep cloud regions in countries you must not serve off your network,** such as the AWS China regions. A region is where the servers are, not who rents them (see [From AWS ranges](#from-aws-ranges)).
+- **Block the addresses reported for abuse.** Download AbuseIPDB's blacklist and write it as a feed. An address stays in it until no download has listed it for the number of days you set (30 by default).
 - **Make the case to management.** The ASN report lists every network a provider holds, with its country and domain, which gives a proposal for better tooling something concrete to point at.
 
 Before you deny a provider, check what you rely on that runs there: payment and webhook callbacks, uptime monitors, email delivery, crawlers you want to let in, partner integrations, and staff or customers on VPNs and cloud desktops. Watching what a feed would match, with a policy that allows and logs, before you set it to deny avoids surprises.
 
 ## Features
 
-- **ASN feeds:** every network IPinfo lists for an AS (`AS15169` or `15169`), written as a FortiGate feed and a text report
+- **ASN feeds:** every network IPinfo lists for an AS (`AS15169` or `15169`), written as a feed and a text report
 - **Cloud provider feeds:** Google Cloud ranges for one region, Azure ranges for one service tag, and AWS ranges for one service and region, each confirmed against the local dataset
+- **FortiGate and ModSecurity:** every feed is written for each feed type you tick in Settings, as a FortiGate threat feed, a ModSecurity IP list or both, with the same entries
+- **ModSecurity rules:** after a write, **ModSecurity rules…** gives one ready-made rule per list, which denies the matches, closes the connection with no reply or only logs them, to copy into your nginx or Apache configuration; each list keeps its rule id from one write to the next
 - **Lookups:** search by ASN or by IPv4 or IPv6 address, copy the results to the clipboard, tab-separated, for a spreadsheet, and open a result on ipinfo.io or AbuseIPDB's website from its right-click menu
 - **Abuse scores:** check a searched address against [AbuseIPDB](https://www.abuseipdb.com) for its abuse confidence score and reports, only when you press **Check AbuseIPDB**; private and reserved addresses are never sent
-- **AbuseIPDB blacklist feed:** download AbuseIPDB's blacklist into a rolling list kept on your computer, write it as a FortiGate feed, and see which networks hold the listed addresses
+- **AbuseIPDB blacklist feed:** download AbuseIPDB's blacklist into a rolling list kept on your computer, write it as a feed, and see which networks hold the listed addresses
 - **Large range check:** networks broader than a set size are listed before anything is written, and are left out unless you tick them
-- **Exceptions:** networks that must never be blocked, such as your offices and partners, are cut out of every FortiGate feed before it is written
+- **Exceptions:** networks that must never be blocked, such as your offices and partners, are cut out of every feed, FortiGate and ModSecurity, before it is written
 - **Safe updates:** the dataset is checked against the SHA-256 that IPinfo publishes, built alongside the current copy and swapped in only when complete, so a cancelled or failed update leaves the existing data in use
 - **Saved cloud files:** the Azure service tags file and the AWS ranges file are kept locally and checked for a newer version when their page opens
 - **Per-user storage:** no administrator rights needed and nothing written to the program folder; the IPinfo API token and the AbuseIPDB API key are kept by the operating system (DPAPI on Windows, the login keychain on macOS), and your settings and exceptions are kept in one encrypted file whose key the operating system keeps the same way
@@ -115,20 +118,24 @@ The first time, the app asks for your AbuseIPDB API key (you'll find it in your 
 
 ## Building a feed
 
-Every feed goes into the `fortigate/` folder inside the export folder. A feed is plain text: a few `#` comment lines saying what it holds, the address family, when it was written (UTC), the number of entries, what your exceptions changed (only when they changed something) and the IPinfo attribution (the AbuseIPDB feed has none), then one network or address per line. File names carry no date, so writing a feed again replaces the file at the same path. When a file can't be written, the result line names it and any written before it.
+Each feed is written once for every feed type ticked under **Write feed** in Settings, under the same name: FortiGate threat feeds into the `fortigate/` folder inside the export folder, and ModSecurity IP lists into its `modsecurity/` folder. The FortiGate files are written first. The two copies of a feed hold the same entries and differ only in their first line, which says which kind of file it is. The paths below name the `fortigate/` copy; the `modsecurity/` copy has the same name.
+
+A feed is plain text: a few `#` comment lines saying what it holds, the address family, when it was written (UTC), the number of entries, what your exceptions changed (only when they changed something) and the IPinfo attribution (the AbuseIPDB feed has none), then one network or address per line. File names carry no date, so writing a feed again replaces the file at the same path. When a file can't be written, the result line names it and any written before it. If a FortiGate file can't be written, the ModSecurity copies after it aren't written either.
+
+If no feed type is ticked, **Write feed**, and **Export** while **Write the ticked feed types with each ASN export** is on, first show a dialog saying so, with **Open Settings**, which takes you to the feed types, and **Close**. After **Close**, **Write feed** writes nothing, and **Export** writes only the ASN report. A type you untick keeps its files as they were: they are no longer written or deleted, so they stop updating.
 
 ### From an ASN
 
 Search for the AS, then choose **Export**. Export writes every network for the AS, not only the rows on screen:
 
 - `AS{number}.txt`: a report with a table of networks, country and domain, and the IPinfo attribution at the foot.
-- `fortigate/AS{number}_ipv4.txt` and `fortigate/AS{number}_ipv6.txt`, or `fortigate/AS{number}.txt` when IPv4 and IPv6 are not split. The feed is written while **Write a Fortigate threat feed with each export** is on in Settings, which it is by default.
+- `fortigate/AS{number}_ipv4.txt` and `fortigate/AS{number}_ipv6.txt`, or `fortigate/AS{number}.txt` when IPv4 and IPv6 are not split, and the same names in `modsecurity/`. The feed is written while **Write the ticked feed types with each ASN export** is on in Settings, once for each ticked feed type: **Fortigate threat feeds, in the fortigate folder** and **ModSecurity IP lists, in the modsecurity folder**.
 
 ### From Google Cloud ranges
 
 The list on the left of the window switches between **IPInfo Lookup**, **Google Cloud Lookup**, **Azure Lookup**, **AWS Lookup** and **AbuseIPDB Blacklist**. The window can be resized, and the results lists grow with it.
 
-Google Cloud Lookup reads the ranges from `https://www.gstatic.com/ipranges/cloud.json`. Choose a region, then **Check ranges**. A prefix is confirmed when every overlapping network's AS domain is google.com. Confirmed rows start ticked. **Write feed** asks about large ranges, then writes into `fortigate/`:
+Google Cloud Lookup reads the ranges from `https://www.gstatic.com/ipranges/cloud.json`. Choose a region, then **Check ranges**. A prefix is confirmed when every overlapping network's AS domain is google.com. Confirmed rows start ticked. **Write feed** asks about large ranges, then writes into the folder of each ticked feed type, `fortigate/` or `modsecurity/`:
 
 - `GoogleCloud_{region}_ipv4.txt` and `GoogleCloud_{region}_ipv6.txt`
 - `GoogleCloud_{region}_global_ipv4.txt` and `GoogleCloud_{region}_global_ipv6.txt` when global ranges were added to a region
@@ -160,8 +167,8 @@ AWS Lookup builds the same kind of feed from AWS's `ip-ranges.json`, the file AW
 **AbuseIPDB Blacklist** keeps a rolling list of the addresses AbuseIPDB's blacklist has named, and writes a feed from it. It uses the same API key as **Check AbuseIPDB**, and asks for one when none is saved or AbuseIPDB doesn't accept it.
 
 - **Download blacklist** downloads the free blacklist (the 10,000 most reported addresses) and adds it to the list on this computer, without duplicates. With **Include IPv6 networks** off in Settings, it asks for IPv4 addresses only, so all 10,000 are IPv4. The free plan allows 5 downloads a day. The page shows how many are left; when none are, it says when the next can be sent, and pressing the button sends nothing.
-- **Write feed** writes `fortigate/AbuseIPDB_rolling_ipv4.txt` and `fortigate/AbuseIPDB_rolling_ipv6.txt`: the addresses listed in the days before the last download, as many days as Settings sets (30 by default), less every address your exceptions cover, and at most 131,072 a file (the most recently listed are kept). When a family has no addresses and its file exists, the file is rewritten with none, so a FortiGate that reads it follows the list down to empty. With IPv6 off, an existing IPv6 file is emptied.
-- **Empty feed**, after a confirmation, rewrites the feed files that exist with no addresses and keeps the list; the next **Write feed** fills them again. **Clear list**, after a confirmation, removes every downloaded address from this computer; the download count, the API key and the feed files are kept.
+- **Write feed** writes `fortigate/AbuseIPDB_rolling_ipv4.txt` and `fortigate/AbuseIPDB_rolling_ipv6.txt`: the addresses listed in the days before the last download, as many days as Settings sets (30 by default), less every address your exceptions cover, and at most 131,072 a file (the most recently listed are kept). When a family has no addresses and its file exists, the file is rewritten with none, so a FortiGate or ModSecurity that reads it follows the list down to empty. With IPv6 off, an existing IPv6 file is emptied.
+- **Empty feed**, after a confirmation, rewrites the feed files that exist with no addresses and keeps the list; the next **Write feed** fills them again. It empties the files in both `fortigate/` and `modsecurity/`, whatever is ticked, so to retire the list of a type you unticked, press **Empty feed** and then **Write feed**, which fills the ticked type's files again. **Clear list**, after a confirmation, removes every downloaded address from this computer; the download count, the API key and the feed files are kept.
 - **Offending networks** groups the listed addresses by AS using the IPinfo dataset, with each network's name, domain, address count and countries. It is a report, like the ASN report, so exceptions aren't applied. The search button on a row looks the AS up on **IPInfo Lookup**, where **Export** writes its feed. Right-click a row to open its AS on ipinfo.io.
 - The feed header names AbuseIPDB as the source and says the data is for your own firewalls only. AbuseIPDB's terms don't allow it to be republished, so serve the file only where your own firewalls read it.
 - **New addresses**, at the top right of the page, lists the addresses the last download added to the list: each address, its AbuseIPDB score and the day of its last report, at most 300 lines shown, with **Copy** for all of them. Right-click an address to open it on ipinfo.io or AbuseIPDB's website. It is a report, so exceptions aren't applied.
@@ -175,16 +182,18 @@ Before an export or a feed is written, networks broader than the thresholds are 
 
 **Exceptions**, on the **Settings** page, holds networks that no feed may block, such as your offices, payment providers, uptime monitors and partners. Type a network (`203.0.113.0/24`) or a single address (`203.0.113.7`) and a note on why, choose **Add**, then **Save exceptions**. A network typed with host bits set, such as `203.0.113.7/24`, is added as `203.0.113.0/24`, and the page says so.
 
-- Every FortiGate feed, from an ASN, a cloud provider or the AbuseIPDB blacklist, has the exceptions cut out before it is written (the AbuseIPDB feed leaves out each address an exception covers). A range that holds an exception is replaced, in its place in the feed, by the fewest networks that cover the rest of it (a `/16` less one address is 16 networks). A range that an exception covers is left out. The ASN report and the AbuseIPDB offending networks still list everything.
+- Every feed, FortiGate or ModSecurity, from an ASN, a cloud provider or the AbuseIPDB blacklist, has the exceptions cut out before it is written (the AbuseIPDB feed leaves out each address an exception covers). A range that holds an exception is replaced, in its place in the feed, by the fewest networks that cover the rest of it (a `/16` less one address is 16 networks). A range that an exception covers is left out. The ASN report and the AbuseIPDB offending networks still list everything.
 - A feed that exceptions changed says so in its header, for example `# Exceptions: 2 ranges cut, 1 removed`, and the line under the results says how many were cut or removed. A feed that no exception touched is written exactly as it would be without them.
-- When exceptions remove every range of one address family, no file is written for that family. A file left by an earlier write stays where it is, and the app names it, because your FortiGate still reads it. The AbuseIPDB feed instead rewrites that file with no addresses.
+- When exceptions remove every range of one address family, no file is written for that family. A file left by an earlier write stays where it is, and the app names it, because your firewall still reads it. The AbuseIPDB feed instead rewrites that file with no addresses.
 - The list holds up to 5,000 networks and is kept with your settings in the app's settings file (see [Where data is stored](#where-data-is-stored)).
 
 ### Export folder
 
 Exports go to `Documents/PoorMansFeed` by default. You can choose another folder in Settings. Feeds already written to the earlier folder stay there and aren't updated, and the Settings page says so when you save. **Open folder** opens the export folder.
 
-Keep the export folder one that only your account can write. The app won't write a feed through a link someone put in place of the file, but another account that can write the folder could replace the `fortigate` folder itself with a link and send every feed somewhere else.
+Inside it, FortiGate threat feeds go into the `fortigate` folder and ModSecurity IP lists into the `modsecurity` folder. Each folder is made by the first feed written into it, and the folder of a type that isn't ticked is left alone, except by **Empty feed** on **AbuseIPDB Blacklist**.
+
+Keep the export folder one that only your account can write. The app won't write a feed through a link someone put in place of the file, but another account that can write the folder could replace the `fortigate` or `modsecurity` folder itself with a link and send every feed somewhere else.
 
 ## Using a feed on a FortiGate
 
@@ -208,15 +217,51 @@ FortiOS loads an IP address threat feed (called an external feed from FortiOS 8.
 
 A feed can hold IPv4 and IPv6 in one file, so the unsplit ASN feed works as one connector. FortiOS reads at most 10 MB or 131,072 entries per feed, whichever comes first, and leaves out anything beyond that. From FortiOS 7.4.4, every IP address feed on a FortiGate shares one pool of entries (300,000 on entry-level models), so two full AbuseIPDB files, 262,144 addresses, take most of it. See Fortinet's [IP address external feed](https://docs.fortinet.com/document/fortigate/8.0.0/administration-guide/891236/ip-address-external-feed) guide for the details for your version.
 
+## Using a list with ModSecurity
+
+ModSecurity v3 with nginx and ModSecurity v2.9 with Apache read a list through the `@ipMatchFromFile` operator, from a folder on the web server or from an https link. The app writes the lists and gives you the rules that load them; it doesn't copy the lists to the server or change the server's configuration.
+
+1. In **Settings**, under **Write feed**, tick **ModSecurity IP lists, in the modsecurity folder**.
+2. In **Where your server reads the lists**, enter the folder on the web server that will hold the lists, starting with `/` (such as `/etc/modsecurity/lists`), or a link starting with `https://`. A link may carry a read-only SAS for one Azure Blob Storage container or directory (`sp=r` or `rl`, `sr=c` or `d`), with its expiry (`se`) in the link. The note under the box says why a location can't be used, or when the link's SAS expires, and warns from 14 days before it does.
+3. Choose the **Rule action**, **Log only** (the default), **Deny with status 403** or **Close with no reply (444)**, and the **First rule id for new lists** (10,000 by default, up to 99,999), then choose **Save settings**.
+4. Write the feed. Once a write has made ModSecurity lists, **ModSecurity rules…** shows beside the results: on **IPInfo Lookup** after **Export**, and on the cloud pages and **AbuseIPDB Blacklist** after **Write feed**. It opens a dialog with one rule per list, built from the saved location and action, and **Copy** puts them on the clipboard. You can try another location or action in the dialog; nothing there is saved.
+5. Copy the lists from the `modsecurity/` folder to that folder on the server, or publish them at the link.
+6. Put the rules in a file and load it once, with `modsecurity_rules_file` on nginx or `Include` on Apache. Never paste them inline into the server configuration: each rule's message is quoted, and inside nginx's `modsecurity_rules '...'` the quote ends the string.
+7. Reload the server: `nginx -s reload`, or `apachectl graceful` on Apache. The server reads the lists only when it starts and when it reloads, so reload it after each write. A reload that a list fails is refused, and the old lists stay in use.
+
+A rule that denies looks like this (with **Log only**, `deny,status:403` is `pass`, and with **Close with no reply (444)** it is `drop,status:444`):
+
+```
+SecRule REMOTE_ADDR "@ipMatchFromFile /etc/modsecurity/lists/AS64500_ipv4.txt" "id:10000,phase:1,deny,status:403,log,t:none,msg:'PoorMansFeed (AS64500_ipv4.txt)'"
+```
+
+Things to know:
+
+- **Rule ids.** Each list keeps the rule id it was first given, and a new list takes the next id above every one kept. When you copy the rules again, replace a list's earlier rule rather than adding a second one: ModSecurity won't load two rules with the same id, and including one rules file twice in nginx repeats every id. Leave the OWASP CRS ranges alone.
+- **After Start fresh,** the app no longer knows the ids it gave, so raise **First rule id for new lists** above every rule id already in your server's configuration.
+- **An https link** ties the server's start to that host and to the SAS expiry: if the list can't be fetched, the server won't start, and a reload is refused, keeping the lists it had. The whole link, SAS included, ends up in the server's configuration and can appear in its logs, so use a read-only SAS, never the one that publishes the lists. ModSecurity v2 refuses `http://`. A Windows folder can't be used as the location.
+- **Behind a reverse proxy, load balancer or CDN,** ModSecurity sees the proxy's address, not the visitor's, so the rules match nothing until the web server takes the visitor's address from the proxy's header: `mod_remoteip` on Apache, or the realip module (`set_real_ip_from` and `real_ip_header` in the `http` or `server` block) on nginx, trusting only your proxy's addresses.
+- **On nginx, keep the two lines** `listen 80;` and `listen [::]:80;`. With a single `listen [::]:80 ipv6only=off;` instead, ModSecurity v3 sees every IPv4 visitor as `::ffff:a.b.c.d`, and the IPv4 lists match nothing.
+- **Where matches are logged.** On nginx, ModSecurity writes a log-only match to the `error_log` at `info`, so an `error_log` at `notice` or above hides it; the audit log has it too while `SecAuditEngine` is `On`. On Apache it writes log-only, deny and close matches at `error`. When a list fails to load, ModSecurity v3 names only the rules file and line: the rule on that line names the list.
+- **Close with no reply (444)** sends nothing back, so the server spends no response on a listed address. nginx logs the request as 444; Apache logs it as 403, and its error log says the connection was closed. Behind a reverse proxy, load balancer or CDN, it is the proxy's connection that closes: the proxy answers the visitor with its own error, and may first try another server.
+- **Don't edit the lists by hand.** One line ModSecurity can't read can fail the whole list, and by default a server won't start with a list that fails.
+- The AbuseIPDB list keeps FortiOS's cap of 131,072 addresses a family, as its FortiGate twin does.
+
+The help button in the bar at the top of the window (**How to use PoorMansFeed**) has these notes too, and the rules dialog repeats the ones about the rules.
+
 ## Settings
 
 **Settings** is at the foot of the list on the left, with the gear icon. On macOS, **Settings…** in the app menu opens it too. The page has three parts.
 
 **Options**, saved with **Save settings** (**Revert** goes back to what is saved):
 
-- **Include IPv6 networks** (on by default). When off, IPv6 networks are left out of the dataset, searches and exports, an IPv6 address search says so, and the AbuseIPDB blacklist download asks for IPv4 addresses only. Turning it back on needs a dataset update, which the app offers.
+- **Write feed**: the feed types that **Write feed** and **Export** write, **Fortigate threat feeds, in the fortigate folder** and **ModSecurity IP lists, in the modsecurity folder**. Each feed is written once for every type ticked. A new install starts with neither ticked, and an update from an earlier version keeps FortiGate ticked. Under ModSecurity, and open to edits only while it is ticked (see [Using a list with ModSecurity](#using-a-list-with-modsecurity)):
+  - **Where your server reads the lists**: a folder on the web server or an https link. The note under it says why a location can't be used, or when a link's SAS expires, with a warning from 14 days before. While ModSecurity is ticked, a location that can't be used stops **Save settings** until you correct it or clear it.
+  - **Rule action**: **Log only** (the default), **Deny with status 403** or **Close with no reply (444)**.
+  - **First rule id for new lists** (10,000 by default, 1 to 99,999). A list keeps the id it was first given; a new list takes this id, or the next one above every id kept.
+- **ASN export**: whether **Export** writes the ticked feed types as well as the report, whether IPv4 and IPv6 are included, and whether they are written to separate files (all on by default)
 - the export folder (**Choose folder**, or **Use default**)
-- whether a Fortigate threat feed is written with each export, whether IPv4 and IPv6 are included, and whether they are written to separate files (all on by default)
+- **Include IPv6 networks** (on by default). When off, IPv6 networks are left out of the dataset, searches and exports, an IPv6 address search says so, and the AbuseIPDB blacklist download asks for IPv4 addresses only. Turning it back on needs a dataset update, which the app offers.
 - whether to ask before exporting large ranges, and the IPv4 and IPv6 prefix thresholds (whole numbers only)
 - how many days of AbuseIPDB listings go into its feed: an address is in the feed while it was listed within this many days of the last download (30 by default, 1 to 365). Each address is kept in the list for 365 days after it was last listed, so raising the number brings back addresses it had left out (see [From the AbuseIPDB blacklist](#from-the-abuseipdb-blacklist)).
 
@@ -232,11 +277,11 @@ Nothing is written to the program folder.
 
 | What | Where |
 |------|-------|
-| Dataset database, the settings file `config.db` (your settings, your exceptions and the AbuseIPDB download count, encrypted), the AbuseIPDB rolling list `abuseipdb.db`, the saved Azure service tags file and AWS ranges file | Your per-user app data folder: `%LOCALAPPDATA%\PoorMansFeed` on Windows, and `~/Library/Application Support/PoorMansFeed` on macOS |
+| Dataset database, the settings file `config.db` (your settings, your exceptions, the AbuseIPDB download count and the ModSecurity rule id given to each list, encrypted), the AbuseIPDB rolling list `abuseipdb.db`, the saved Azure service tags file and AWS ranges file | Your per-user app data folder: `%LOCALAPPDATA%\PoorMansFeed` on Windows, and `~/Library/Application Support/PoorMansFeed` on macOS |
 | API token | Windows: `ipinfo_token` in the app data folder, protected with DPAPI for your Windows account. macOS: the `PoorMansFeed` item in your login keychain (Keychain Access lists it); the empty `ipinfo_token` file in the app data folder only marks that a token is saved. |
 | AbuseIPDB API key | Windows: `abuseipdb_key` in the app data folder, protected with DPAPI for your Windows account. macOS: a second item in your login keychain under `PoorMansFeed` (account `abuseipdb-api-key`); the empty `abuseipdb_key` file in the app data folder only marks that a key is saved. |
 | Settings file key | Windows: `config_key` in the app data folder, protected with DPAPI for your Windows account. macOS: a third item in your login keychain under `PoorMansFeed` (account `config-key`); the empty `config_key` file in the app data folder only marks that the key is saved. |
-| Exports and feeds | The export folder (default `Documents/PoorMansFeed`) |
+| Exports and feeds | The export folder (default `Documents/PoorMansFeed`): the ASN reports in the folder itself, FortiGate threat feeds in its `fortigate` subfolder and ModSecurity IP lists in its `modsecurity` subfolder |
 
 After an update from 1.0.0, `settings.json.migrated` in the app data folder is your old settings file. It is kept as it was, and the app doesn't read it again.
 
@@ -244,9 +289,9 @@ After an update from 1.0.0, `settings.json.migrated` in the app data folder is y
 
 If `config.db` can't be used when the app starts, the app shows what is wrong in place of its pages and does nothing else:
 
-- If the file was made by a newer version, is damaged, can't be opened with the key saved on this computer (or was changed outside the app), or is missing although the app has run before, **Start fresh**, after a confirmation, keeps the old file as `config.unreadable.db` and makes a new one with the default settings and no exceptions. The dataset, the AbuseIPDB list and your API keys are kept. If you have a copy of a missing file, put it back in the app data folder first, and Start fresh opens it as it is.
+- If the file was made by a newer version, is damaged, can't be opened with the key saved on this computer (or was changed outside the app), or is missing although the app has run before, **Start fresh**, after a confirmation, keeps the old file as `config.unreadable.db` and makes a new one with the default settings and no exceptions, and the AbuseIPDB download count starts again. The dataset, the AbuseIPDB list and your API keys are kept. If you have a copy of a missing file, put it back in the app data folder first, and Start fresh opens it as it is.
 - If the file is in use by another program, can't be written, or its key can't be read now (for example after you denied a keychain prompt), the app says so and changes nothing. Fix the cause and open the app again.
-- If an `exceptions.json` in the app data folder can't be read at the first launch after an update, the app offers **Start without exceptions**. Only if you choose it, the file is kept as `exceptions.unreadable.json`, so the networks it held can be copied back by hand, and the app starts with an empty list. Or fix `exceptions.json`, then close the app and open it again.
+- If an `exceptions.json` was put in the app data folder before the app first made `config.db`, and it can't be read, the app offers **Start without exceptions**. Only if you choose it, the file is kept as `exceptions.unreadable.json`, so the networks it held can be copied back by hand, and the app starts with an empty list. Or fix `exceptions.json`, then close the app and open it again.
 
 ## Building from source
 
@@ -281,11 +326,7 @@ The version number comes from `<Version>` in `Directory.Build.props`.
 
 ### Feature set 1
 
-Planned next. AbuseIPDB is now a source (see [From the AbuseIPDB blacklist](#from-the-abuseipdb-blacklist)); the aim is to keep feeds current on your firewalls without building and copying each one by hand.
-
-**ModSecurity**
-
-- **ModSecurity lists:** every feed can also be written as a list for ModSecurity's `@ipMatchFromFile` operator, with nginx or Apache, together with a sample rule that denies the matches or only logs them. ModSecurity can read the list from disk or from an HTTPS address, such as a feed published to Azure Blob Storage.
+Planned next. AbuseIPDB is now a source (see [From the AbuseIPDB blacklist](#from-the-abuseipdb-blacklist)), and every feed can now be written as a ModSecurity IP list too, with the rules to load it (see [Using a list with ModSecurity](#using-a-list-with-modsecurity)); the aim is to keep feeds current on your firewalls without building and copying each one by hand.
 
 **Keeping feeds current**
 
@@ -345,6 +386,6 @@ The IP address data isn't part of this project. It comes from IPinfo under CC BY
 
 ## Attribution
 
-IP address data powered by [IPinfo](https://ipinfo.io), licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The app shows this attribution in its window, and every exported file carries it.
+IP address data powered by [IPinfo](https://ipinfo.io), licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The app shows this attribution in its window, and every exported file whose entries come from IPinfo carries it: the ASN report and every ASN and cloud feed. The AbuseIPDB feed holds no IPinfo data and carries none.
 
 The app's fonts are [Geist and Geist Mono](https://vercel.com/font) by Vercel, under the SIL Open Font License 1.1 (`src/PoorMansFeed/GraphiteUi/Fonts/OFL.txt`).

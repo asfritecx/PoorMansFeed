@@ -53,10 +53,8 @@ public sealed class IpDatabase(string path)
     }
 
     /// <summary>
-    /// The networks that hold the address, the highest start first and, for one start, the broadest first. Only the
-    /// starts a network holding the address can have (Cidr.ContainingStarts) are looked up, as index seeks on
-    /// idx_ip_range, so a lookup takes the same time wherever the address is. A range scan on start_ip &lt;= @ip read
-    /// every row below the address, which made a 223.x lookup hundreds of times slower than a 1.x one.
+    /// Highest start first and, for one start, broadest first. Seeking only the starts a holding network can have keeps
+    /// the time the same wherever the address is; a start_ip &lt;= @ip scan read every row below it.
     /// </summary>
     public List<NetworkRecord> QueryIp(byte[] ip, int limit)
     {
@@ -70,10 +68,8 @@ public sealed class IpDatabase(string path)
         return Query(conn =>
         {
             using var cmd = conn.CreateCommand();
-            // Every row is a CIDR whose start has its host bits cleared, so a network holding the address starts at
-            // one of these. The length predicate keeps IPv4 lookups away from IPv6 blobs, which share a leading-byte
-            // prefix. Start, end and rowid all descend, as the index is read: of the networks sharing a start the
-            // broadest comes first, and the same network twice comes back last added first.
+            // The length predicate keeps IPv4 lookups off IPv6 blobs, which can share leading bytes. Of networks
+            // sharing a start the broadest comes first, and the same network twice comes back last added first.
             cmd.CommandText = $"""
                 SELECT network, country_code, country, continent, asn, as_name, as_domain
                 FROM ip_data
@@ -97,11 +93,8 @@ public sealed class IpDatabase(string path)
         QueryOverlaps(blocks, includeIPv6, out _);
 
     /// <summary>
-    /// The overlaps of <see cref="QueryOverlaps(IReadOnlyList{CidrBlock}, bool)"/>, with
-    /// <paramref name="answeredBy"/> read from the metadata on the same connection, so it names the file that answered
-    /// even right after a <see cref="Promote"/>. Null when the file is missing or its metadata can't be parsed. A file
-    /// with no <c>metadata</c> table, or a NULL value in it, fails the query instead (the exception escapes), because
-    /// <c>ReadMetadata</c> throws.
+    /// <paramref name="answeredBy"/> is read on the same connection, so it names the file that answered even just
+    /// after a <see cref="Promote"/>. Null for a missing file or unparsable metadata; no metadata table throws.
     /// </summary>
     public List<NetworkOverlap> QueryOverlaps(IReadOnlyList<CidrBlock> blocks, bool includeIPv6, out DatasetInfo? answeredBy)
     {

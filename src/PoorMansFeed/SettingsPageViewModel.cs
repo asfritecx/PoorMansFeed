@@ -14,10 +14,8 @@ public sealed class SettingsSavedEventArgs(bool ipv6Changed) : EventArgs
 }
 
 /// <summary>
-/// The Settings page: every setting, the two API keys and the exceptions editor. Edits stay until Save or Revert, and
-/// the settings and the exceptions are saved apart. Every action waits on the shared gate, so nothing here starts
-/// while an update, a dialog or another page's save is out. The AbuseIPDB key passes through
-/// <see cref="AbuseKeyPrompt"/> only and is never held here.
+/// Every action waits on the shared gate, so nothing here starts while an update, a dialog or a save is out. The
+/// AbuseIPDB key passes through <see cref="AbuseKeyPrompt"/> only and is never held here.
 /// </summary>
 public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsavedSettings
 {
@@ -39,7 +37,8 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
     private string _keysStatusText = "";
 
     internal SettingsPageViewModel(IIpInfoService service, IUiServices ui, string defaultExportFolder, IWorkGate gate,
-        Func<Task<TokenResetOutcome>> resetToken, IAbuseIpDbService? abuse = null, AbuseKeyPrompt? abuseKeys = null)
+        Func<Task<TokenResetOutcome>> resetToken, IAbuseIpDbService? abuse = null, AbuseKeyPrompt? abuseKeys = null,
+        TimeProvider? time = null)
     {
         _service = service ?? throw new ArgumentNullException(nameof(service));
         _ui = ui ?? throw new ArgumentNullException(nameof(ui));
@@ -54,7 +53,7 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
         _abuseKeys = abuseKeys;
         _defaultExportFolder = defaultExportFolder;
 
-        Settings = new SettingsFormModel(service.Settings, defaultExportFolder);
+        Settings = new SettingsFormModel(service.Settings, defaultExportFolder, time);
         Exceptions = new ExceptionsEditorModel(service.Exceptions);
 
         SaveSettingsCommand = new AsyncRelayCommand(SaveSettingsAsync, CanSaveSettings);
@@ -111,9 +110,7 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
     public bool HasUnsavedChanges => Settings.HasChanges || HasUnsavedExceptions;
 
     /// <summary>
-    /// The exceptions have work that isn't saved: the rows differ from the saved list, or a network is typed but not
-    /// added. A note typed alone doesn't count, because Save adds nothing for it. The mark, the exceptions line, Save,
-    /// Revert and the close question all read this.
+    /// A network typed but not added counts as unsaved; a note typed alone doesn't, because Save adds nothing for it.
     /// </summary>
     private bool HasUnsavedExceptions => Exceptions.HasChanges || !string.IsNullOrWhiteSpace(Exceptions.NetworkText);
 
@@ -195,9 +192,8 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
     }
 
     /// <summary>
-    /// Asks before unsaved edits are dropped, as when the window closes. True when nothing is unsaved or the user
-    /// agrees; false when the user declines or the confirmation can't be shown, so the edits stay. The gate is held
-    /// while it asks, as for every other confirmation, and released before it returns.
+    /// False when the user declines or the confirmation can't be shown, so the edits stay. The gate is held while it
+    /// asks, as for every other confirmation.
     /// </summary>
     internal async Task<bool> ConfirmDiscardAsync()
     {
@@ -561,17 +557,17 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
         OnPropertyChanged(nameof(IsExceptionsStatusError));
     }
 
-    /// <summary>Raises both key lines again, so they read whether each key is saved now. Showing the page calls it.</summary>
+    /// <summary>Raises the key lines and the expiry note again, so they read as of now. A page show calls it.</summary>
     internal void RefreshKeyTexts()
     {
         OnPropertyChanged(nameof(TokenStatusText));
         OnPropertyChanged(nameof(AbuseKeyStatusText));
+        Settings.RefreshExpiry();
         RefreshCommands();
     }
 
     // A token or key saved outside the page (a first-run or update prompt, Check AbuseIPDB's prompt) ends with a gate
-    // flip or the prompt closing, so the key texts follow it here. The macOS menu's Reset API token runs this page's
-    // own command. The start-up flip also swaps the page's line for its cards.
+    // flip or the prompt closing, so the key texts follow it here.
     private void GateChanged(object? sender, EventArgs e)
     {
         OnPropertyChanged(nameof(IsStarted));

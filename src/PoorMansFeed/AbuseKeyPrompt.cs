@@ -12,9 +12,8 @@ public enum AbuseKeyAsk { Missing, Rejected, Replace }
 internal enum AbuseKeyOutcome { Saved, Cancelled, Busy, NotAKey, SaveFailed, DialogFailed }
 
 /// <summary>
-/// Asks for the AbuseIPDB key and saves it, for Check AbuseIPDB and for the Settings page alike, so only one prompt is
-/// ever open. The gate is held while the dialog is open and the save runs. The typed key passes straight from the
-/// dialog to the service: it is kept in a local variable only, and never returned, stored or raised.
+/// Shared by Check AbuseIPDB and the Settings page, so only one prompt is ever open. The typed key passes straight from
+/// the dialog to the service, in a local variable only, and is never returned, stored or raised.
 /// </summary>
 internal sealed class AbuseKeyPrompt(IUiServices ui, IAbuseIpDbService abuse, IWorkGate gate)
 {

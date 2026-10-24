@@ -47,7 +47,7 @@ public partial class App : Application
             // A feed's result line says when the Settings page holds edits; the page is built after main, which it takes
             var unsaved = new LateUnsavedSettings();
             var main = new MainViewModel(service, ui, paths?.DefaultExportFolder, abuse, gate, abuseKeys, unsaved);
-            var settings = new SettingsPageViewModel(service, ui, defaultExportFolder, gate, main.ResetTokenAsync, abuse, abuseKeys);
+            var settings = new SettingsPageViewModel(service, ui, defaultExportFolder, gate, main.ResetTokenAsync, abuse, abuseKeys, TimeProvider.System);
             unsaved.Source = settings;
             window.AttachViewModel(
                 main,

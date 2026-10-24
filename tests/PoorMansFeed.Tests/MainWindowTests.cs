@@ -5,6 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -204,7 +205,7 @@ public sealed class MainWindowTests
     // The main view model and the Settings page on one gate, as the app composes them; not started yet
     // With an AbuseIPDB service, its key prompt is on the same gate, as the app composes it.
     private static (MainViewModel Vm, SettingsPageViewModel Page) NewWithSettingsPage(FakeIpInfoService service, FakeUi? ui = null,
-        FakeAbuseIpDbService? abuse = null)
+        FakeAbuseIpDbService? abuse = null, TimeProvider? time = null)
     {
         ui ??= new FakeUi();
         var gate = new WorkGate();
@@ -213,15 +214,15 @@ public sealed class MainWindowTests
         {
             ProgressFactory = handler => new ImmediateProgress<UpdateProgress>(handler),
         };
-        var page = new SettingsPageViewModel(service, ui, "/exports/default", gate, vm.ResetTokenAsync, abuse, keys);
+        var page = new SettingsPageViewModel(service, ui, "/exports/default", gate, vm.ResetTokenAsync, abuse, keys, time);
         return (vm, page);
     }
 
     // The same, started as the window starts it
     private static async Task<(MainViewModel Vm, SettingsPageViewModel Page)> StartWithSettingsPageAsync(
-        FakeIpInfoService service, FakeUi? ui = null, FakeAbuseIpDbService? abuse = null)
+        FakeIpInfoService service, FakeUi? ui = null, FakeAbuseIpDbService? abuse = null, TimeProvider? time = null)
     {
-        (MainViewModel vm, SettingsPageViewModel page) = NewWithSettingsPage(service, ui, abuse);
+        (MainViewModel vm, SettingsPageViewModel page) = NewWithSettingsPage(service, ui, abuse, time);
         await vm.InitializeAsync();
         if (vm.PendingCheck is { } check)
         {
@@ -2974,8 +2975,13 @@ public sealed class MainWindowTests
         {
             Navigate(window, "NavSettings");
             string[] inputs = ["SettingsInputs", "ExceptionsEditor", "ExceptionsListCard", "NetworkBox", "AddExceptionButton"];
+            // The section has its own name scope, and is laid out only once start-up shows the scroll viewer, so before
+            // that its place under SettingsInputs is what keeps it off
+            FeedTypesSection section = window.FindControl<FeedTypesSection>("FeedTypesSection")!;
+            string[] sectionInputs = ["WriteFortigateFeedsBox", "WriteModSecurityListsBox"];
             Assert.False(page.CanEditInputs);
             Assert.All(inputs, name => Assert.False(window.FindControl<Control>(name)!.IsEffectivelyEnabled, name));
+            Assert.Contains(window.FindControl<Control>("SettingsInputs")!, section.GetLogicalAncestors());
             Assert.False(page.AddExceptionCommand.CanExecute(null));
 
             await vm.InitializeAsync();
@@ -2984,9 +2990,48 @@ public sealed class MainWindowTests
 
             Assert.True(page.CanEditInputs);
             Assert.All(inputs, name => Assert.True(window.FindControl<Control>(name)!.IsEffectivelyEnabled, name));
+            Assert.All(sectionInputs, name => Assert.True(section.FindControl<Control>(name)!.IsEffectivelyEnabled, name));
         }
         finally
         {
+            window.Close();
+        }
+    }
+
+    // The SAS expiry is judged on the clock of the page's show, so a link that has come near its expiry is flagged
+    [AvaloniaFact]
+    public async Task ShowingTheSettingsPageAgainJudgesTheSasExpiryOnTheClockOfTheShow()
+    {
+        var now = new DateTimeOffset(2026, 10, 23, 8, 0, 0, TimeSpan.Zero);
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+        var service = WithDataset();
+        service.Settings = new UserSettings { WriteFortigateFeeds = true, WriteModSecurityLists = true };
+        (MainViewModel vm, SettingsPageViewModel page) = await StartWithSettingsPageAsync(service, time: time);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, settings: page);
+        window.Show();
+        try
+        {
+            Navigate(window, "NavSettings");
+            page.Settings.ModSecurityLocation = "https://acct.blob.core.windows.net/feeds?sv=2026-01-01&sr=c&sp=rl&se="
+                + now.AddDays(20).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture)
+                + "&sig=SAMPLEONLY%2Bnot%3Dreal";
+            Settle(window);
+            TextBlock note = window.FindControl<FeedTypesSection>("FeedTypesSection")!.FindControl<TextBlock>("ModSecurityLocationNote")!;
+            string later = note.Text!;
+            Assert.DoesNotContain("caution", note.Classes);
+            Assert.DoesNotContain("placeholder", note.Classes);
+
+            Navigate(window, "NavLookup");
+            time.Advance(TimeSpan.FromDays(10));
+            Navigate(window, "NavSettings");
+
+            Assert.Contains("caution", note.Classes);
+            Assert.NotEqual(later, note.Text);
+        }
+        finally
+        {
+            page.RevertSettingsCommand.Execute(null);
             window.Close();
         }
     }
@@ -3230,10 +3275,7 @@ public sealed class MainWindowTests
         }
     }
 
-    // A close while start-up's service call runs is held with no question, and the window closes once the step has
-    // returned, applying nothing. A close with no step running is unchanged: ClosingWithNothingUnsavedAsksNothing,
-    // ClosingWithUnsavedChangesAsksAndDecliningKeepsTheWindowAndTheEdits and ClosingDuringAnUpdateWithUnsavedChangesAsksAboutTheEditsFirst.
-    // The pill says the close is waiting from the first close until the window has closed. The step may also throw
+    // The close is held with no question and applies nothing the step gives. The step may also throw
     // OperationCanceledException, as the real one does for a cancel before its one look at the token.
     [AvaloniaTheory]
     [InlineData(false)]
@@ -3293,9 +3335,8 @@ public sealed class MainWindowTests
         }
     }
 
-    // Avalonia 12.1.4's routing, pinned headlessly: focusing a control in the owner while an owned dialog is active
-    // takes the dialog's keys. The focus moves out of the dialog, and what is typed into it goes to the owner's box.
-    // So the window moves no focus while it owns an open window (MainWindow.FocusShownPageWhenNoDialog).
+    // Avalonia 12.1.4, pinned headlessly: focusing the owner while an owned dialog is active moves the focus out of the
+    // dialog, so its keys go to the owner. So the window moves no focus while it owns an open window.
     [AvaloniaFact]
     public void FocusingTheOwnerWhileAnOwnedDialogIsActiveTakesTheDialogsKeys()
     {
@@ -3331,9 +3372,8 @@ public sealed class MainWindowTests
         }
     }
 
-    // After Start fresh with no dataset and no token the token dialog opens before the posted focus runs: the page
-    // takes no focus while the dialog is open, so the dialog keeps the keys, and takes it once the dialog has closed.
-    // On Lookup the search box is off while the prompt holds the gate; the nav item of another page is not.
+    // With no dataset and no token the token dialog opens before the posted focus runs. On Lookup the search box is
+    // off while the prompt holds the gate; the nav item of another page is not.
     [AvaloniaTheory]
     [InlineData("NavLookup")]
     [InlineData("NavGoogleCloud")]

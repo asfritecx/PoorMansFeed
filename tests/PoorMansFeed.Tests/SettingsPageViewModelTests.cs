@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.Extensions.Time.Testing;
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.FeedExceptions;
@@ -26,7 +27,8 @@ public sealed class SettingsPageViewModelTests
         public int ResetCalls { get; set; }
     }
 
-    private static Page NewPage(FakeIpInfoService? service = null, bool withAbuse = true, bool started = true)
+    private static Page NewPage(FakeIpInfoService? service = null, bool withAbuse = true, bool started = true,
+        TimeProvider? time = null)
     {
         service ??= new FakeIpInfoService();
         var ui = new FakeUi();
@@ -40,7 +42,7 @@ public sealed class SettingsPageViewModelTests
                 page!.ResetCalls++;
                 return Task.FromResult(page.Resets.TryDequeue(out TokenResetOutcome outcome) ? outcome : TokenResetOutcome.Saved);
             },
-            withAbuse ? abuse : null, withAbuse ? keys : null);
+            withAbuse ? abuse : null, withAbuse ? keys : null, time);
         page = new Page { Service = service, Ui = ui, Abuse = abuse, Gate = gate, Keys = keys, Vm = vm };
         vm.SettingsSaved += (_, e) => page.Saved.Add(e);
         return page;
@@ -185,6 +187,65 @@ public sealed class SettingsPageViewModelTests
         Assert.False(vm.HasSettingsStatus);
         Assert.Equal(0, page.Service.SaveSettingsCalls);
         Assert.Empty(page.Saved);
+    }
+
+    [Fact]
+    public void AnEditToTheModSecurityTickIsAnUnsavedChange()
+    {
+        var vm = NewPage().Vm;
+        Assert.False(vm.HasUnsavedChanges);
+
+        vm.Settings.WriteModSecurityLists = true;
+
+        Assert.True(vm.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public async Task ASaveSendsTheFeedTypeFields()
+    {
+        var page = NewPage();
+        var vm = page.Vm;
+        vm.Settings.WriteFortigateFeeds = true;
+        vm.Settings.WriteModSecurityLists = true;
+        vm.Settings.IsDeny = true;
+        vm.Settings.ModSecurityFirstRuleId = 25_000;
+        vm.Settings.ModSecurityLocation = " /etc/modsecurity/lists ";
+
+        await vm.SaveSettingsCommand.ExecuteAsync(null);
+
+        UserSettings saved = page.Service.SavedSettings!;
+        Assert.True(saved.WriteFortigateFeeds);
+        Assert.True(saved.WriteModSecurityLists);
+        Assert.Equal(PoorMansFeed.Core.ModSecurity.ModSecurityAction.Deny, saved.ModSecurityAction);
+        Assert.Equal(25_000, saved.ModSecurityFirstRuleId);
+        Assert.Equal("/etc/modsecurity/lists", saved.ModSecurityLocation);
+        Assert.False(vm.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void RevertPutsTheFeedTypeFieldsBack()
+    {
+        var settings = new UserSettings
+        {
+            WriteFortigateFeeds = true,
+            ModSecurityFirstRuleId = 15_000,
+            ModSecurityLocation = "/srv/lists",
+        };
+        var vm = NewPage(new FakeIpInfoService { Settings = settings }).Vm;
+        vm.Settings.WriteFortigateFeeds = false;
+        vm.Settings.WriteModSecurityLists = true;
+        vm.Settings.IsDeny = true;
+        vm.Settings.ModSecurityFirstRuleId = 16_000;
+        vm.Settings.ModSecurityLocation = "/srv/other";
+
+        vm.RevertSettingsCommand.Execute(null);
+
+        Assert.True(vm.Settings.WriteFortigateFeeds);
+        Assert.False(vm.Settings.WriteModSecurityLists);
+        Assert.True(vm.Settings.IsLogOnly);
+        Assert.Equal(15_000m, vm.Settings.ModSecurityFirstRuleId);
+        Assert.Equal("/srv/lists", vm.Settings.ModSecurityLocation);
+        Assert.False(vm.HasUnsavedChanges);
     }
 
     [Fact]
@@ -1125,5 +1186,93 @@ public sealed class SettingsPageViewModelTests
         page.Gate.SetBusy(true);
         Assert.Empty(raised);
         vm.Dispose();
+    }
+
+    // ----- the location note -----
+
+    private static readonly DateTimeOffset NoteNow = new(2026, 10, 23, 8, 0, 0, TimeSpan.Zero);
+
+    private static string SasExpiring(DateTimeOffset expiry) =>
+        "https://acct.blob.core.windows.net/feeds?sv=2026-01-01&sr=c&sp=rl&se="
+        + expiry.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture)
+        + "&sig=SAMPLEONLY%2Bnot%3Dreal";
+
+    // A save's hold release flips the gate, and every flip refreshes the note, so a refresh must not count as an edit
+    [Fact]
+    public async Task ANoteRefreshAfterASaveKeepsTheSavedLine()
+    {
+        var time = new FakeTimeProvider(NoteNow);
+        var page = NewPage(time: time);
+        var vm = page.Vm;
+        vm.Settings.WriteModSecurityLists = true;
+        vm.Settings.ModSecurityLocation = SasExpiring(NoteNow.AddDays(15));
+        Assert.False(vm.Settings.LocationNote.IsCaution);
+
+        await vm.SaveSettingsCommand.ExecuteAsync(null);
+        Assert.Equal(AppText.SettingsSaved, vm.SettingsStatusText);
+
+        vm.RefreshKeyTexts();
+        Assert.Equal(AppText.SettingsSaved, vm.SettingsStatusText);
+
+        time.Advance(TimeSpan.FromDays(2));
+        vm.RefreshKeyTexts();
+
+        Assert.True(vm.Settings.LocationNote.IsCaution);
+        Assert.Equal(AppText.SettingsSaved, vm.SettingsStatusText);
+        Assert.False(vm.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public async Task AGateFlipAfterASaveKeepsTheSavedLine()
+    {
+        var time = new FakeTimeProvider(NoteNow);
+        var page = NewPage(time: time);
+        var vm = page.Vm;
+        vm.Settings.WriteModSecurityLists = true;
+        vm.Settings.ModSecurityLocation = SasExpiring(NoteNow.AddDays(15));
+        await vm.SaveSettingsCommand.ExecuteAsync(null);
+
+        time.Advance(TimeSpan.FromDays(2));
+        page.Gate.SetStarted(false);
+        page.Gate.SetStarted(true);
+
+        Assert.True(vm.Settings.LocationNote.IsCaution);
+        Assert.Equal(AppText.SettingsSaved, vm.SettingsStatusText);
+    }
+
+    [Fact]
+    public async Task AGateFlipAfterASaveThatMovedTheFolderKeepsItsLine()
+    {
+        var time = new FakeTimeProvider(NoteNow);
+        var page = NewPage(time: time);
+        var vm = page.Vm;
+        vm.Settings.ExportFolder = "/exports/chosen";
+        vm.Settings.WriteModSecurityLists = true;
+        vm.Settings.ModSecurityLocation = SasExpiring(NoteNow.AddDays(15));
+        await vm.SaveSettingsCommand.ExecuteAsync(null);
+        Assert.Equal(AppText.SettingsSavedFolderChanged, vm.SettingsStatusText);
+
+        time.Advance(TimeSpan.FromDays(2));
+        page.Gate.SetStarted(false);
+        page.Gate.SetStarted(true);
+
+        Assert.True(vm.Settings.LocationNote.IsCaution);
+        Assert.Equal(AppText.SettingsSavedFolderChanged, vm.SettingsStatusText);
+    }
+
+    [Fact]
+    public void ThePagePassesItsClockToTheForm()
+    {
+        var time = new FakeTimeProvider(NoteNow);
+        var page = NewPage(time: time);
+        page.Vm.Settings.WriteModSecurityLists = true;
+        page.Vm.Settings.ModSecurityLocation = SasExpiring(NoteNow.AddDays(1));
+        Assert.True(page.Vm.Settings.LocationNote.IsCaution);
+
+        time.Advance(TimeSpan.FromDays(2));
+        page.Vm.RefreshKeyTexts();
+
+        Assert.True(page.Vm.Settings.LocationNote.IsError);
+        Assert.False(page.Vm.Settings.LocationNote.IsCaution);
     }
 }

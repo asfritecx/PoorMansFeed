@@ -119,10 +119,8 @@ public sealed class SettingsPageTests
 
     // ----- the three checks of Avalonia behaviour the page relies on, settled first -----
 
-    // Settled: the DockPanel reads DockPanel.Dock from an inline ListBoxItem, so Settings sits at the foot of the list
-    // and the four pages stay stacked at the top with the list's 2 px spacing. The arrow keys needed a panel that
-    // implements INavigableContainer (NavItemsPanel): neither DockPanel nor Grid does, and without it Up and Down did
-    // nothing.
+    // Settled: the DockPanel reads DockPanel.Dock from an inline ListBoxItem. The arrow keys need a panel implementing
+    // INavigableContainer (NavItemsPanel): neither DockPanel nor Grid does, and without it Up and Down did nothing.
     [AvaloniaFact]
     public async Task TheSettingsNavItemSitsAtTheFootOfTheNavPane()
     {
@@ -764,7 +762,7 @@ public sealed class SettingsPageTests
             Assert.True(Math.Abs(frame.Extent.Height - frame.Viewport.Height) < 0.5,
                 $"The frame is {frame.Extent.Height} px high in a {frame.Viewport.Height} px viewport.");
             Assert.True(page.Extent.Height > page.Viewport.Height, "The Settings page does not scroll.");
-            Assert.Equal(738d, shown.Find<Border>("PageFrame").MinHeight);
+            Assert.Equal(755d, shown.Find<Border>("PageFrame").MinHeight);
         }
         finally
         {

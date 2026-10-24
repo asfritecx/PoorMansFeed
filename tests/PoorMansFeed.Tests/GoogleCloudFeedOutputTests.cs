@@ -124,7 +124,7 @@ public sealed class GoogleCloudFeedOutputTests : IDisposable
     public async Task With_IPv6_Off_The_Check_And_The_Files_Are_IPv4_Only()
     {
         (CheckResult check, GoogleCloudFeedService service, FakeIpInfoService ipinfo) =
-            await CheckAsync("us-central1", includeGlobal: true, settings: new UserSettings { IPv6Enabled = false });
+            await CheckAsync("us-central1", includeGlobal: true, settings: new UserSettings { IPv6Enabled = false, WriteFortigateFeeds = true });
 
         Assert.Equal(
             ["34.80.1.0/24", "35.191.1.0/24", "35.199.0.0/24"],
@@ -173,7 +173,7 @@ public sealed class GoogleCloudFeedOutputTests : IDisposable
         var ipinfo = new FakeIpInfoService
         {
             Dataset = Dataset,
-            Settings = settings ?? new UserSettings(),
+            Settings = settings ?? new UserSettings { WriteFortigateFeeds = true },
             OverlapFunc = blocks => new OverlapResult(
                 OverlapOutcome.Found,
                 blocks.Select(block => new NetworkOverlap(block, groups(block))).ToList(),
@@ -209,7 +209,7 @@ public sealed class GoogleCloudFeedOutputTests : IDisposable
         "# Confirmed against: IPinfo Lite dataset of 2026-10-08\n" +
         "# IP address data powered by IPinfo (https://ipinfo.io)\n";
 
-    private static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text.Replace("\n", Environment.NewLine));
+    private static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text);
 
     private static OverlapGroup Group(string domain) => new("US", "United States", "AS15169", "Google LLC", domain, 1);
 }

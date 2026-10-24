@@ -6,10 +6,8 @@ using PoorMansFeed.Core.Secrets;
 namespace PoorMansFeed.Core.AbuseIpDb;
 
 /// <summary>
-/// Saves the AbuseIPDB key, checks the address of an address search, and downloads the blacklist into the rolling list
-/// in <c>abuseipdb.db</c>. Only a public address is ever sent, the key is read only when a request will be made, a
-/// download is refused here while the list can't be used or no downloads are left, and every failure comes back as a
-/// result value.
+/// Only a public address is ever sent, and the key is read only when a request will be made: for a download, only
+/// after every local refusal has passed and the pre-send write has succeeded. Every failure is a result value.
 /// </summary>
 public sealed class AbuseIpDbService : IAbuseIpDbService
 {
@@ -28,9 +26,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     private readonly string _defaultExportFolder;
     private readonly SemaphoreSlim _downloadGate = new(1, 1);
 
-    // The accounting this session, set once a write of it to config.db has failed: every answer since the session began
-    // applied to the store's accounting, so it refuses at least as soon as the store would have. Written only under the
-    // download gate; the status reads it once, without the gate. It lives in memory only and goes with the instance
+    // Set once a write of the accounting to config.db has failed, with every answer of the session applied, so it
+    // refuses at least as soon as the store would. Written only under the download gate; the status reads it unguarded
     private volatile AbuseAccounting? _unrecorded;
 
     /// <summary>The service for the current user, with the key in the operating system's store and its own HTTP client.</summary>
@@ -353,21 +350,15 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         AbuseFetch fetch = await _client.GetBlacklistAsync(key!, ipv4Only: !settings.IPv6Enabled, ct);
         DateTimeOffset answeredAt = _time.GetUtcNow();
 
-        // Every answer from AbuseIPDB says what is left of the account's downloads, but only a 2xx answer is one of
-        // them. A rejected key's answer says nothing: the key doesn't identify the account
-        // The client has already put its times on this computer's clock, so they are stored as given
-        // Only a 2xx from the endpoint carries a rate limit with None or BadResponse; AbuseIPDB has counted it, so every
-        // result from here on says so, whatever stops the merge
+        // Only a 2xx is a download, and AbuseIPDB has counted it, so every result from here says so whatever stops the
+        // merge. A 401's headers are not recorded: a rejected key doesn't identify the account
         bool counted = fetch.RateLimit is not null && fetch.Failure is (AbuseIpDbFailure.None or AbuseIpDbFailure.BadResponse);
         DateTimeOffset? storedRefusal = null;
         if (fetch.RateLimit is { } rateLimit && fetch.Failure != AbuseIpDbFailure.KeyRejected)
         {
             AbuseRateLimit stored = rateLimit;
-            // A 429 that leaves nothing refuses until the later of the reset and Retry-After: both are already on this
-            // clock and each is null more than MaxResetAheadHours ahead, and RefusedBy bounds the stored time again on
-            // every read. The client never gives a retry time before now, so one not after the answer refuses nothing and
-            // leaves the reset as sent. A throttle that leaves downloads keeps the reset as sent too, because the facts
-            // line reads it as when the allowance renews
+            // A 429 that leaves nothing refuses until the later of the reset and Retry-After (RefusedBy bounds it).
+            // A throttle that leaves downloads keeps the reset as sent, because the facts line reads it as the renewal
             if (fetch.Failure == AbuseIpDbFailure.RateLimited)
             {
                 int remaining = stored.Remaining ?? 0;
@@ -399,10 +390,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
             return DownloadFailure(AbuseIpDbFailure.ClockWrong, null, counted);
         }
 
-        // From here the caller's token is not used: the download is spent once its answer is in, so a cancel now would
-        // only throw the answer away. The result comes back as usual even when the caller has cancelled meanwhile
-        // The generation time is AbuseIPDB's, so it is clamped on AbuseIPDB's clock: the guard above has accepted any
-        // Date that is left. The list's own times stay this computer's
+        // The download is spent, so the caller's token is no longer used. generatedAt is AbuseIPDB's time, so it is
+        // clamped on AbuseIPDB's clock (the guard above accepted any Date left); the list's times stay this computer's
         Blacklist? list = fetch.Body is { } body ? AbuseIpDbParser.TryParseBlacklist(body, fetch.ServerTime ?? answeredAt) : null;
         if (list is null)
             return DownloadFailure(AbuseIpDbFailure.BadResponse, null, counted);
@@ -426,6 +415,10 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     {
         // One read of the settings, so the keep days, the IPv6 switch and the folder come from the same snapshot
         UserSettings settings = _ipinfo.Settings;
+        // With no type ticked there is nowhere to write, so nothing is read, not even the exceptions or the list
+        if (!settings.TicksAnyFeedType())
+            return FeedFailure(AbuseFeedWriteFailure.NoFeedType);
+
         ExceptionList exceptions = _ipinfo.Exceptions;
         // A feed written as if there were no exceptions could block the operator's own networks, so nothing is read
         // or written while they can't be read
@@ -462,18 +455,31 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
             : new AbuseFeedFamily(true, [], 0, 0);
         int removed = ipv4.ExceptionRemovals + ipv6.ExceptionRemovals;
 
-        // A family with addresses is written. One with none is written header-only when its file exists, so FortiGate
-        // follows the list down to empty, and gets no file when it never had one
+        // In each ticked type a family with addresses is written; one with none is written header-only when that type's
+        // file exists, so the reader follows the list down to empty, and gets no file when it never had one
         string folder = ExportFolders.Resolve(settings, _defaultExportFolder);
-        AbuseFeedFamily[] toWrite = new[] { ipv4, ipv6 }
-            .Where(family => family.Addresses.Count > 0 || File.Exists(AbuseIpDbFeedWriter.PathFor(folder, family.IsIpv6)))
-            .ToArray();
-        if (toWrite.Length == 0)
+        var header = new AbuseFeedHeader(keepDays, now, list.LastDownloadAt, list.GeneratedAt);
+        // Rendered once per family, so the copies can differ only in their first line
+        AbuseFeedBody[] bodies = [AbuseFeedBody.Of(ipv4, header), AbuseFeedBody.Of(ipv6, header)];
+        var plan = new List<PlannedFeedFile>();
+        foreach (FeedType type in FeedTypes.Ticked(settings))
+        {
+            foreach (AbuseFeedBody body in bodies)
+            {
+                string path = AbuseIpDbFeedWriter.PathFor(folder, type, body.Family.IsIpv6);
+                if (body.Family.Addresses.Count == 0 && !File.Exists(path))
+                    continue;
+                plan.Add(new PlannedFeedFile(type, path, body));
+            }
+        }
+        if (plan.Count == 0)
             return new AbuseFeedWriteResult(AbuseFeedWriteFailure.NothingToWrite, [], 0, 0, 0, removed, []);
 
+        // Only the export folder is made here; a type's folder is made by its first file, so one that can't be made
+        // fails that file, and the FortiGate copies, written first, stay written when the ModSecurity folder fails
         try
         {
-            Directory.CreateDirectory(Path.Combine(folder, ExportWriter.FortigateFolderName));
+            Directory.CreateDirectory(folder);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -482,107 +488,100 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
                                             removed, []);
         }
 
-        var header = new AbuseFeedHeader(keepDays, now, list.LastDownloadAt, list.GeneratedAt);
-        var files = new List<string>();
-        var emptied = new List<string>();
-        var written = new List<AbuseFeedFamily>();
-        try
-        {
-            // A family written before a failure stays written, as the other feeds do, and the result names it
-            foreach (AbuseFeedFamily family in toWrite)
-            {
-                string path = AbuseIpDbFeedWriter.WriteFamily(folder, family, header);
-                files.Add(path);
-                if (family.Addresses.Count == 0)
-                    emptied.Add(path);
-                written.Add(family);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Trace.TraceError($"The feed could not be written: {ex.Message}");
-            // The failed file's earlier copy is whole, because the move never ran, and a family after it is never tried;
-            // FortiGate keeps reading both. A folder at a feed's path is not a file and isn't named
-            List<string> left = toWrite.Skip(written.Count)
-                .Select(family => AbuseIpDbFeedWriter.PathFor(folder, family.IsIpv6))
-                .Where(File.Exists)
-                .ToList();
-            return WrittenResult(AbuseFeedWriteFailure.WriteFailed, written, files, emptied, ipv4.LeftOut + ipv6.LeftOut, removed)
-                with
-                {
-                    FailedFile = AbuseIpDbFeedWriter.PathFor(folder, toWrite[written.Count].IsIpv6),
-                    OldFilesLeft = left.Count > 0 ? left : null,
-                };
-        }
-
         // Both families' removals and left-out counts, written or not: a family with no file still had them
-        return new AbuseFeedWriteResult(AbuseFeedWriteFailure.None, files, ipv4.Addresses.Count, ipv6.Addresses.Count,
-                                        ipv4.LeftOut + ipv6.LeftOut, removed, emptied);
+        return WritePlan(plan, ipv4.LeftOut + ipv6.LeftOut, removed, "The feed could not be written");
     }
 
     private AbuseFeedWriteResult EmptyFeedCore()
     {
-        // Only the settings are read, for the export folder: not the list, the exceptions or the key, so the feed can be
-        // retired while the list or the exceptions can't be read. A header-only file holds no address an exception could
-        // cover
+        // Only the settings are read, so the feed can be retired while the list or the exceptions can't be read.
+        // A header-only file holds no address an exception could cover
         UserSettings settings = _ipinfo.Settings;
         DateTimeOffset now = _time.GetUtcNow();
         string folder = ExportFolders.Resolve(settings, _defaultExportFolder);
 
-        // Both families whatever the IPv6 switch, so an IPv6 file left from before it was turned off is retired too.
-        // Only a path that exists is replaced: no folder is created and no file is made. A folder at a feed's path
-        // counts, so it fails the write rather than reading as nothing to empty
-        AbuseFeedFamily[] toEmpty = new[] { false, true }
-            .Where(ipv6 => Path.Exists(AbuseIpDbFeedWriter.PathFor(folder, ipv6)))
-            .Select(ipv6 => new AbuseFeedFamily(ipv6, [], 0, 0))
-            .ToArray();
-        if (toEmpty.Length == 0)
-            return FeedFailure(AbuseFeedWriteFailure.NothingToWrite);
-
         // No download line and no keep days: the file no longer holds anything from a download, and says it was
         // emptied by hand
         var header = new AbuseFeedHeader(null, now, null, null);
-        var files = new List<string>();
-        var written = new List<AbuseFeedFamily>();
+        // Both types whatever is ticked and both families whatever the IPv6 switch, so any file left is retired.
+        // A folder at a feed's path counts, so it fails the write rather than reading as nothing to empty
+        AbuseFeedBody[] bodies =
+        [
+            AbuseFeedBody.Of(new AbuseFeedFamily(false, [], 0, 0), header),
+            AbuseFeedBody.Of(new AbuseFeedFamily(true, [], 0, 0), header),
+        ];
+        var plan = new List<PlannedFeedFile>();
+        foreach (FeedType type in FeedTypes.All)
+        {
+            foreach (AbuseFeedBody body in bodies)
+            {
+                string path = AbuseIpDbFeedWriter.PathFor(folder, type, body.Family.IsIpv6);
+                if (!Path.Exists(path))
+                    continue;
+                plan.Add(new PlannedFeedFile(type, path, body));
+            }
+        }
+        if (plan.Count == 0)
+            return FeedFailure(AbuseFeedWriteFailure.NothingToWrite);
+
+        return WritePlan(plan, 0, 0, "The feed could not be emptied");
+    }
+
+    /// <summary>
+    /// Writes the planned files in order. A file written before a failure stays written, and the result names it, the
+    /// failed file and the planned files left as they were.
+    /// </summary>
+    private static AbuseFeedWriteResult WritePlan(IReadOnlyList<PlannedFeedFile> plan, int leftOut, int removed,
+                                                  string failureTrace)
+    {
+        var done = new List<PlannedFeedFile>();
         try
         {
-            // A file emptied before a failure stays emptied, and the result names it
-            foreach (AbuseFeedFamily family in toEmpty)
+            foreach (PlannedFeedFile file in plan)
             {
-                files.Add(AbuseIpDbFeedWriter.WriteFamily(folder, family, header));
-                written.Add(family);
+                AbuseIpDbFeedWriter.WriteFile(file.Path, file.Type, file.Body);
+                done.Add(file);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Trace.TraceError($"The feed could not be emptied: {ex.Message}");
-            // As for a write: the failed file's earlier copy and every file after it are left as they were
-            List<string> left = toEmpty.Skip(written.Count)
-                .Select(family => AbuseIpDbFeedWriter.PathFor(folder, family.IsIpv6))
-                .Where(File.Exists)
-                .ToList();
-            return WrittenResult(AbuseFeedWriteFailure.WriteFailed, written, files, files, 0, 0)
+            Trace.TraceError($"{failureTrace}: {ex.Message}");
+            // The failed file's earlier copy is whole, because the move never ran, and a file after it is never tried;
+            // the readers keep reading both. A folder at a feed's path is not a file and isn't named
+            List<string> left = plan.Skip(done.Count).Select(file => file.Path).Where(File.Exists).ToList();
+            return WrittenResult(AbuseFeedWriteFailure.WriteFailed, done, leftOut, removed)
                 with
                 {
-                    FailedFile = AbuseIpDbFeedWriter.PathFor(folder, toEmpty[written.Count].IsIpv6),
+                    FailedFile = plan[done.Count].Path,
                     OldFilesLeft = left.Count > 0 ? left : null,
                 };
         }
 
-        return new AbuseFeedWriteResult(AbuseFeedWriteFailure.None, files, 0, 0, 0, 0, files);
+        return WrittenResult(AbuseFeedWriteFailure.None, done, leftOut, removed);
     }
 
     /// <summary>
-    /// The result of a write that stopped at a file: the files and address counts of the families written before it,
-    /// and both families' left-out and removal totals, written or not, as a write that succeeded gives them.
+    /// The files written, the header-only and ModSecurity ones named again, and each family's addresses counted once
+    /// however many copies were written; the left-out and removal totals are both families', written or not.
     /// </summary>
-    private static AbuseFeedWriteResult WrittenResult(AbuseFeedWriteFailure failure, IReadOnlyList<AbuseFeedFamily> written,
-                                                      IReadOnlyList<string> files, IReadOnlyList<string> emptied,
-                                                      int leftOut, int removed) =>
-        new(failure, files,
-            written.Where(family => !family.IsIpv6).Sum(family => family.Addresses.Count),
-            written.Where(family => family.IsIpv6).Sum(family => family.Addresses.Count),
-            leftOut, removed, emptied);
+    private static AbuseFeedWriteResult WrittenResult(AbuseFeedWriteFailure failure,
+                                                      IReadOnlyList<PlannedFeedFile> done, int leftOut, int removed)
+    {
+        AbuseFeedFamily[] families = done.Select(file => file.Body.Family).DistinctBy(family => family.IsIpv6).ToArray();
+        List<string> modSecurity = done.Where(file => file.Type == FeedType.ModSecurity)
+                                       .Select(file => file.Path).ToList();
+        return new AbuseFeedWriteResult(failure, done.Select(file => file.Path).ToList(),
+            families.Where(family => !family.IsIpv6).Sum(family => family.Addresses.Count),
+            families.Where(family => family.IsIpv6).Sum(family => family.Addresses.Count),
+            leftOut, removed,
+            done.Where(file => file.Body.Family.Addresses.Count == 0).Select(file => file.Path).ToList())
+        {
+            ModSecurityFiles = modSecurity.Count > 0 ? modSecurity : null,
+        };
+    }
+
+    /// <summary>One file of a write, in write order: the feed types in turn, each with IPv4 then IPv6.</summary>
+    private readonly record struct PlannedFeedFile(FeedType Type, string Path, AbuseFeedBody Body);
 
     private async Task<AbuseNetworksResult> NetworksCoreAsync(IProgress<GroupingProgress>? progress, CancellationToken ct)
     {
@@ -627,10 +626,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         if (IsClockBehind(lastDownload, now))
             return NetworksFailure(AbuseNetworksFailure.ClockWrong, includeIPv6, keepDays, lastDownload);
 
-        // This is a report, like the ASN report, so the exceptions don't apply: they apply to feeds only. It keeps the
-        // newest addresses by the feed's ranking, at most 131,072 per family, so above the cap, or where exceptions
-        // cover listed addresses, it differs from the written feed. Each family comes back sorted by bytes, and the
-        // families are kept apart so no chunk mixes them. With IPv6 off the read holds no IPv6, so that family is empty
+        // A report, so no exceptions: above the cap, or where exceptions cover listed addresses, it differs from the
+        // written feed. The families are kept apart so no chunk mixes them
         AbuseReportFamily ipv4 = AbuseIpDbFeedWriter.SelectForReport(list.Entries, ipv6: false);
         AbuseReportFamily ipv6 = AbuseIpDbFeedWriter.SelectForReport(list.Entries, ipv6: true);
         int leftOut = ipv4.LeftOut + ipv6.LeftOut;
@@ -708,9 +705,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     }
 
     /// <summary>
-    /// Adds what the dataset holds for each block of a chunk to <paramref name="answers"/>, matched by block: each
-    /// block asked about must come back exactly once, and no other. A block missing from an IPv6 chunk because IPv6
-    /// has been turned off since the settings were read is DatasetChanged; any other mismatch is LookupFailed.
+    /// Each block asked about must come back exactly once. A block missing from an IPv6 chunk because IPv6 was
+    /// turned off since the settings were read is DatasetChanged; any other mismatch is LookupFailed.
     /// </summary>
     private AbuseNetworksFailure MatchChunk(CidrBlock[] chunk, IReadOnlyList<NetworkOverlap> overlaps,
                                             List<IReadOnlyList<OverlapGroup>> answers)
@@ -917,9 +913,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     }
 
     /// <summary>
-    /// The refusal a stored limit makes at <paramref name="now"/>: until its reset when nothing is left and the reset is
-    /// still ahead. A reset more than <see cref="AbuseIpDbLimits.MaxResetAheadHours"/> hours ahead is unknown and refuses
-    /// nothing, so a clock set back since the answer, or a list from another computer, can't refuse for days.
+    /// A reset more than <see cref="AbuseIpDbLimits.MaxResetAheadHours"/> hours ahead is unknown and refuses nothing,
+    /// so a clock set back since the answer, or a list from another computer, can't refuse for days.
     /// </summary>
     private static DateTimeOffset? RefusedBy(AbuseRateLimit limit, DateTimeOffset now) =>
         limit.Remaining is <= 0 && limit.ResetAt is DateTimeOffset reset && reset > now
@@ -934,11 +929,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     private static DateOnly UtcDay(DateTimeOffset time) => DateOnly.FromDateTime(time.UtcDateTime);
 
     /// <summary>
-    /// Whether this computer's clock is more than <see cref="AbuseIpDbLimits.MaxClockDifferenceHours"/> hours behind the
-    /// list's last download: the one rule the status, the download, the feed and the offending networks share. Counting
-    /// from now, the earlier time, would keep addresses for longer than the keep days. A clock ahead changes nothing,
-    /// because the cutoff never counts from after the last download. The difference of the two times is compared, so a
-    /// stored time at either end of the range can't overflow.
+    /// The one clock rule the status, the download, the feed and the offending networks share. Counting from now, the
+    /// earlier time, would keep addresses longer than the keep days; a clock ahead changes nothing.
     /// </summary>
     private static bool IsClockBehind(DateTimeOffset? lastDownload, DateTimeOffset now) =>
         lastDownload is { } last && last - now > TimeSpan.FromHours(AbuseIpDbLimits.MaxClockDifferenceHours);

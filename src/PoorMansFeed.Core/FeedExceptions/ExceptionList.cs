@@ -3,11 +3,8 @@ using System.Globalization;
 namespace PoorMansFeed.Core.FeedExceptions;
 
 /// <summary>
-/// The saved exceptions, ready to cut out of a feed. An unreadable list has IsReadable false: every feed writer
-/// refuses to write while it is, because a feed written as if there were no exceptions could block the operator's
-/// own networks. The writers refuse first, with their own typed failure, and branch on IsReadable, never on the
-/// number of entries. Entries, Cut and Covers throw InvalidOperationException on an unreadable list, so a writer that
-/// forgot to check fails instead of writing every line uncut; IsReadable is the one member that is always safe.
+/// A feed written as if there were no exceptions could block the operator's own networks, so writers refuse an
+/// unreadable list and branch on IsReadable; Entries, Cut and Covers throw on one, so a forgotten check fails.
 /// </summary>
 public sealed class ExceptionList
 {
@@ -109,9 +106,8 @@ public sealed class ExceptionList
 }
 
 /// <summary>
-/// What exceptions did to one feed, per family: ranges cut into smaller ones and ranges removed whole. A family's
-/// header gets an exceptions line only when its counts are not both zero, so a feed no exception touched is written
-/// byte for byte as before.
+/// A family's feed header gets an exceptions line only when its cut and removed counts aren't both zero, so a feed no
+/// exception touched is written byte for byte as before.
 /// </summary>
 internal sealed class ExceptionTally
 {

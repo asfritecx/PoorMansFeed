@@ -19,9 +19,8 @@ public sealed record ExceptionEntry
     public string Note { get; }
 
     /// <summary>
-    /// Reads a CIDR or a bare address (taken as /32 or /128). Host bits are cleared, and hostBitsCleared says whether
-    /// that changed the address, so the operator can be told. A bare IPv4-mapped address is read as its IPv4 address;
-    /// an IPv4-mapped CIDR is rejected, as CidrBlock rejects it.
+    /// A bare IPv4-mapped address is read as IPv4, but an IPv4-mapped CIDR is rejected, as CidrBlock rejects it.
+    /// hostBitsCleared says whether clearing the host bits changed the address, so the operator can be told.
     /// </summary>
     public static bool TryParseNetwork(string? text, [NotNullWhen(true)] out CidrBlock? network, out bool hostBitsCleared)
     {

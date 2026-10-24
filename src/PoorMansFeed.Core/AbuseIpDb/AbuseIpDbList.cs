@@ -13,11 +13,8 @@ namespace PoorMansFeed.Core.AbuseIpDb;
 internal readonly record struct ListRead<T>(AbuseListState State, T? Value) where T : class;
 
 /// <summary>
-/// The rolling list now: the addresses per family listed within the keep days (counted as
-/// <see cref="AbuseIpDbList.CutoffFor"/> says), and when the list now held was downloaded and generated. The download
-/// accounting (the rate limit and the day's count) is kept in config.db, not here. <see cref="NewCount"/> is the
-/// judged rows of the last download's new-address set (<see cref="AbuseIpDbList.ReadNew"/>), 0 when the set isn't
-/// known or wasn't asked for.
+/// The rolling list now, per family within the keep days (<see cref="AbuseIpDbList.CutoffFor"/>).
+/// <see cref="NewCount"/> is 0 when the last download's new-address set isn't known or wasn't asked for.
 /// </summary>
 internal sealed record ListFacts(int IPv4Count, int IPv6Count, DateTimeOffset? LastDownloadAt, DateTimeOffset? GeneratedAt,
                                  int NewCount = 0)
@@ -47,29 +44,14 @@ internal sealed record ListNew(IReadOnlyList<AbuseListEntry>? Entries, DateTimeO
 }
 
 /// <summary>
-/// One merge. <see cref="NewGeneration"/> is false when the list was generated no later than the newest one already
-/// merged; its addresses were still refreshed. <see cref="Added"/> and <see cref="Lapsed"/> compare the addresses within
-/// the keep days, with the cutoffs the status and the feed use: before the merge from the previous download
-/// (<see cref="AbuseIpDbList.CutoffFor"/>), after it from this one. They are counted over the rows in the file, both
-/// families together, before a read judges them, so a row a read leaves out (one changed outside the app) makes them
-/// differ from the status by that many, and the feed also follows the IPv6 switch, the exceptions and the cap. Added
-/// counts those after the merge that weren't before it: new addresses, and addresses listed again after dropping out of
-/// the keep days. Lapsed counts those before it that aren't after it, so over those rows the count before plus Added
-/// less Lapsed is the count after. <see cref="Expired"/> counts
-/// the addresses removed because no download had listed them for <see cref="AbuseIpDbLimits.MaxKeepDays"/> days,
-/// whatever the keep days; an address can be both Lapsed and Expired.
+/// <see cref="Added"/> and <see cref="Lapsed"/> count the file's rows of both families before a read judges them,
+/// so they can differ from the status and the feed. An address can be both Lapsed and <see cref="Expired"/>.
 /// </summary>
 internal sealed record ListMerge(bool NewGeneration, int Added, int Lapsed, int Expired);
 
 /// <summary>
-/// The AbuseIPDB rolling list in <c>abuseipdb.db</c>: every address a blacklist download listed, kept until no
-/// download has listed it for <see cref="AbuseIpDbLimits.MaxKeepDays"/> days (the horizon). The user's keep days are
-/// only a cutoff on what is read and counted, counted back from the earlier of now and the last download
-/// (<see cref="CutoffFor"/>), so a clock set ahead hides nothing. Nothing written depends on them, so lowering them
-/// hides rows and raising them again brings back what the file still holds, first sightings included. The file holds
-/// the user's data, so it is opened read-write (a crashed write's journal is rolled back at the next read, which needs
-/// write access), every write is one transaction, and a file this version can't use (also one with a damaged page,
-/// which every read and write checks for first) is reported and never written. Only <see cref="Delete"/> removes it.
+/// The user's rolling list in <c>abuseipdb.db</c>: rows go only at the horizon (the keep days only cut reads), the
+/// file only by <see cref="Delete"/>. Reads open it read-write: only a connection that can write rolls back a crash.
 /// </summary>
 internal sealed class AbuseIpDbList(string path)
 {
@@ -108,10 +90,8 @@ internal sealed class AbuseIpDbList(string path)
     internal Action? BeforeCommit { get; set; }
 
     /// <summary>
-    /// The start of the keep days: keep counted back from the earlier of now and the last download, or from now when the
-    /// list has no download. A clock set ahead of the last download changes nothing, so the list reads as that download
-    /// left it; a clock behind it counts from now, so a download stamped by a clock that was ahead can't move the cutoff
-    /// later. A start too early to count back from gives <see cref="DateTimeOffset.MinValue"/>.
+    /// From the earlier of now and the last download, so a clock set ahead hides nothing and a download stamped
+    /// ahead can't move the cutoff later. <see cref="DateTimeOffset.MinValue"/> when keep reaches past the calendar.
     /// </summary>
     public static DateTimeOffset CutoffFor(DateTimeOffset now, DateTimeOffset? lastDownload, TimeSpan keep)
     {
@@ -120,13 +100,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// The counts per family of the addresses <see cref="ReadCurrent"/> returns with IPv6 included (the same query and
-    /// the same judgement of each row), and the last download and generation times. The cutoff is
-    /// <see cref="CutoffFor"/> of now, the last download this read finds and keep. Metadata keys this version doesn't
-    /// use, such as the rate-limit and download-count keys earlier builds wrote here, are ignored. With
-    /// <paramref name="countNew"/> the judged rows of the new-address set are counted too (one join, with no sort and no
-    /// list); a set that isn't known, or can't be read, counts 0 and never fails the read. Without it the set isn't
-    /// touched.
+    /// Counts per family the rows <see cref="ReadCurrent"/> returns with IPv6, judged alike. With
+    /// <paramref name="countNew"/> it counts the new-address set too: 0 when not known or unreadable, never a failure.
     /// </summary>
     public ListRead<ListFacts> ReadFacts(DateTimeOffset now, TimeSpan keep, bool countNew = false)
     {
@@ -150,13 +125,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// Records that a download is about to be sent, as a real write (the time in <c>last_attempt_at</c>, which nothing
-    /// reads yet), so a list that can be read but not written is found before a download is spent on it. SQLite opens
-    /// a write-protected file read-only without an error, and a read or a begun transaction still works there, so only
-    /// a write shows it. Like every write it creates the file and schema when they are missing. A list that can't be
-    /// written now (write-protected, its folder not writable, a lock held past the busy wait) gives
-    /// <see cref="AbuseListState.StorageError"/>. It proves only that the file and its folder can be written: a nearly
-    /// full disk can still fail a later, larger write such as the merge.
+    /// The pre-send write: SQLite opens a write-protected file read-only with no error and reads still work, so only
+    /// a write shows it. It proves the file and folder can be written, not that the disk can take the larger merge.
     /// </summary>
     public AbuseListState RecordAttempt(DateTimeOffset at) =>
         Write("record a download attempt", (conn, tx, meta) =>
@@ -166,25 +136,8 @@ internal sealed class AbuseIpDbList(string path)
         });
 
     /// <summary>
-    /// Merges a downloaded blacklist into the list, in one transaction. Every listed address is stamped with the local
-    /// download time cut to the whole second (the stamp, which is also written as the last download), so the cutoffs
-    /// and the stamps share one clock. The horizon is the stamp minus
-    /// <see cref="AbuseIpDbLimits.MaxKeepDays"/> days, and it alone decides what is written: an address listed again
-    /// whose stored last sighting is before it starts again with this download as its first sighting (the upsert runs
-    /// before the expiry, so the row is kept), and then the addresses no download listed since it are removed. The
-    /// cutoff is the feed's (the stamp minus the keep days, the keep days being the download time less
-    /// <paramref name="cutoff"/>) and only counts: the addresses listed since it after the merge, against those the
-    /// previous download's cutoff (<see cref="CutoffFor"/> of the stamp, the last download and the same keep) listed
-    /// before it, give <see cref="ListMerge.Added"/> and <see cref="ListMerge.Lapsed"/>, so one the keep days hid and
-    /// that is listed again is added and keeps its first sighting. Both are counted over the rows in the file, both
-    /// families together, before a read judges them, and the count before plus Added less Lapsed is the count after
-    /// over those rows. Every download is merged, also one of a generation already merged; the
-    /// stored generation is only ever moved forward. A generation older than the newest merged refreshes its addresses
-    /// but leaves their score and country as the newer one gave them; the last report time only ever moves forward.
-    /// A cutoff later than the download time minus <see cref="AbuseIpDbLimits.MinKeepDays"/> days would remove the
-    /// merge's own rows, and one earlier than the horizon would show rows the merge removes, so either throws
-    /// <see cref="ArgumentOutOfRangeException"/> before the file is opened. A cancel
-    /// throws <see cref="OperationCanceledException"/> and changes nothing.
+    /// Only the horizon decides what is written; <paramref name="cutoff"/> only counts. One outside the keep-days
+    /// bounds throws before the file is opened: it would remove the merge's own rows or show rows the merge removes.
     /// </summary>
     public ListRead<ListMerge> Merge(Blacklist list, DateTimeOffset downloadedAt, DateTimeOffset cutoff, CancellationToken ct)
     {
@@ -285,14 +238,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// Records, before the upserts change any <c>last_seen</c>, the listed addresses that had no row last seen at or
-    /// after <paramref name="beforeSeconds"/>: exactly those <see cref="ListMerge.Added"/> counts. The table is made
-    /// again at every merge. The set is derived data and the download is already spent, so a statement that fails here
-    /// must not stop the merge: the statements run under a savepoint, and a SQLite error rolls back to it and gives
-    /// false. That covers statement-level errors only. A failure SQLite answers by rolling back the whole transaction
-    /// (ROLLBACK TO then throws, and the write is a storage error), or one at the commit, where most pages are written,
-    /// still fails the merge. That is why the set holds only the new addresses. A cancellation escapes, and it stops the
-    /// whole write.
+    /// The set is derived and the download already spent, so a statement error here rolls back to the savepoint and
+    /// gives false. A whole-transaction rollback or a failed commit still fails the merge; a cancel stops the write.
     /// </summary>
     private static bool TryRecordNew(SqliteConnection conn, SqliteTransaction tx, IReadOnlyList<BlacklistEntry> entries,
                                      long beforeSeconds, CancellationToken ct)
@@ -347,10 +294,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// The last download's new-address set, each row judged as <see cref="ReadCurrent"/> judges it (a row that fails is
-    /// left out and traced), with no keep-days cutoff. The entries are null when the set isn't known; a table of another
-    /// shape never makes the list unreadable, and the next merge replaces it. A SQLite error reading the set fails the
-    /// read as any other read's error does (<see cref="AbuseListState.StorageError"/>, or unreadable for a damaged file).
+    /// Rows judged as <see cref="ReadCurrent"/> does, with no cutoff; the entries are null when the set isn't known.
+    /// A table of another shape never makes the list unreadable, but a SQLite error reading the set fails the read.
     /// </summary>
     public ListRead<ListNew> ReadNew() =>
         Read(ListNew.Empty, "read the list's new addresses", conn =>
@@ -364,9 +309,8 @@ internal sealed class AbuseIpDbList(string path)
     private static readonly (string Name, string Type, long Pk)[] NewAddressColumns = [("ip", "BLOB", 1)];
 
     /// <summary>
-    /// The number of judged rows of the new-address set, adding each to <paramref name="into"/> when it is given (IPv4
-    /// first, then by bytes; without a list the rows are only counted, unsorted). Null when there is no such table of
-    /// this shape or when its stamp isn't the last download's. A SQLite error escapes.
+    /// Adds each judged row to <paramref name="into"/> when given (sorted), else only counts, unsorted. Null when the
+    /// table is missing, of another shape, or not stamped by the last download. A SQLite error escapes.
     /// </summary>
     private static int? ReadNewEntries(SqliteConnection conn, Dictionary<string, string> meta, List<AbuseListEntry>? into)
     {
@@ -423,18 +367,15 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// The addresses listed at or after the cutoff, IPv4 first and each family in byte order. With includeIPv6 false the
-    /// IPv6 addresses are left out. Every row is judged again on the way out, because the file can be changed outside
-    /// the app: a row whose address isn't public, or whose score, times or country code aren't ones a download stores,
-    /// is left out.
+    /// Every row is judged again on the way out, because the file can be changed outside the app; a row a download
+    /// wouldn't store is left out.
     /// </summary>
     public ListRead<IReadOnlyList<AbuseListEntry>> ReadCurrent(DateTimeOffset cutoff, bool includeIPv6) =>
         Read<IReadOnlyList<AbuseListEntry>>([], "read the list", conn => ReadEntries(conn, cutoff, includeIPv6));
 
     /// <summary>
-    /// The addresses <see cref="ReadCurrent"/> returns and the list's last download and generation times, in one read,
-    /// so the feed's header describes the rows it holds. The cutoff is <see cref="CutoffFor"/> of now, the last download
-    /// this read finds and keep.
+    /// The entries and the last download and generation times in one read, so the feed's header describes the rows
+    /// it holds. The cutoff is <see cref="CutoffFor"/> of now and the last download this read finds.
     /// </summary>
     public ListRead<ListFeed> ReadFeed(DateTimeOffset now, TimeSpan keep, bool includeIPv6)
     {
@@ -448,9 +389,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// The rows listed at or after the cutoff that <see cref="TryReadEntry"/> accepts, IPv4 first and each family in
-    /// byte order; the number left out is traced. <see cref="ReadCurrent"/> and <see cref="ReadFacts"/> both read
-    /// through it, so the feed and the status judge a row alike.
+    /// <see cref="ReadCurrent"/> and <see cref="ReadFacts"/> both read through it, so the feed and the status judge
+    /// a row alike. The number left out is traced.
     /// </summary>
     private static List<AbuseListEntry> ReadEntries(SqliteConnection conn, DateTimeOffset cutoff, bool includeIPv6)
     {
@@ -532,9 +472,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// Deletes the file, then any journal beside it. True when none is left (so a missing file is true); false when one
-    /// couldn't be deleted. When the database itself can't be deleted, the side files are left as they are, because a
-    /// <c>-journal</c> beside a database is what rolls back its unfinished write.
+    /// True when no file is left. When the database itself can't be deleted its side files stay, because a
+    /// <c>-journal</c> beside it is what rolls back its unfinished write.
     /// </summary>
     public bool Delete()
     {
@@ -598,9 +537,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// Runs one write in one transaction, begun before the file is classified. The schema is created when the database
-    /// has no tables. A file that is newer or unreadable is left as it was. The transaction is committed only when the
-    /// body returns true; otherwise, or on any failure, it is rolled back.
+    /// One transaction, begun before the file is classified and committed only when the body returns true. A newer or
+    /// unreadable file is left as it was.
     /// </summary>
     private AbuseListState Write(string operation, Func<SqliteConnection, SqliteTransaction, Dictionary<string, string>, bool> body)
     {
@@ -646,9 +584,8 @@ internal sealed class AbuseIpDbList(string path)
         try
         {
             conn.Open();
-            // The file can be changed outside the app, so nothing in its schema runs with trust, and a user table's
-            // foreign key into addresses never blocks the horizon's delete. foreign_keys is a no-op inside a
-            // transaction, so it is set here, before any write begins one
+            // The file can be changed outside the app, so nothing in its schema runs with trust. foreign_keys is a
+            // no-op inside a transaction, so it is set here; on, a user's foreign key would block the horizon delete
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "PRAGMA trusted_schema = OFF; PRAGMA foreign_keys = OFF;";
             cmd.ExecuteNonQuery();
@@ -662,16 +599,8 @@ internal sealed class AbuseIpDbList(string path)
     }
 
     /// <summary>
-    /// What the file is. No schema object at all is empty. Otherwise <c>metadata</c> and <c>addresses</c> must exist,
-    /// <c>metadata</c> must be exactly its two columns holding text, and <c>schema_version</c> an integer of at least 1;
-    /// above <see cref="SchemaVersion"/> the file is newer and nothing more is checked. At this version no trigger or
-    /// view may exist anywhere, because one would run inside a write, or make every merge fail after AbuseIPDB has
-    /// counted the download; <c>metadata</c> and <c>addresses</c> must have exactly the objects
-    /// <see cref="CreateSchema"/> makes, with its CREATE text (compared with SQLite's separators collapsed, so a build's
-    /// line ends don't matter); <c>addresses</c> must have its columns; and every page must pass <c>quick_check</c>.
-    /// Tables and indexes of other tables (<c>sqlite_stat1</c>, a user's own, <c>new_addresses</c> of any shape) aren't
-    /// checked here, though <c>quick_check</c> still reads them. The type and table of each row are SQLite's: it reads a
-    /// row whose CREATE text says otherwise as a malformed schema, which is unreadable.
+    /// At this version any trigger or view, or any change to the own objects or their CREATE text, is unreadable:
+    /// one could run inside a write, or fail every merge after AbuseIPDB has counted the download.
     /// </summary>
     private static FileKind Classify(SqliteConnection conn, SqliteTransaction? tx)
     {

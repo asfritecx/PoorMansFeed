@@ -1,0 +1,23 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:PoorMansFeed"
+        x:Class="PoorMansFeed.ConfigureFeedsDialog"
+        Title="{x:Static local:AppText.ConfigureFeedsTitle}"
+        Width="440"
+        SizeToContent="Height"
+        MinHeight="190"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="24" RowSpacing="16">
+    <TextBlock x:Name="TitleText" Classes="subtitle" Text="{x:Static local:AppText.ConfigureFeedsTitle}" />
+    <TextBlock x:Name="MessageText" Grid.Row="1" TextWrapping="Wrap" LineHeight="22"
+               Text="{x:Static local:AppText.ConfigureFeedsBody}" />
+    <!-- Esc closes. No button is the default, so Enter on its own opens nothing. -->
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button x:Name="CloseButton" Content="{x:Static local:AppText.Close}" MinWidth="88" IsCancel="True" Click="CloseClicked" />
+      <Button x:Name="OpenSettingsButton" Content="{x:Static local:AppText.ConfigureFeedsOpenSettings}" MinWidth="88"
+              Click="OpenSettingsClicked" />
+    </StackPanel>
+  </Grid>
+</Window>

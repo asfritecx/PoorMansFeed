@@ -129,9 +129,8 @@ public sealed partial class MainWindow : Window
             item.Focus();
     }
 
-    // The offending networks depend on the dataset, so the AbuseIPDB page on show is read again. Any other page leaves
-    // it to the next show: at a launch the dataset arrives while Lookup is on show, and a grouping then would run
-    // beside the user's searches. ActivateAsync never throws.
+    // Only the AbuseIPDB page on show groups again (ActivateAsync never throws): at a launch the dataset arrives while
+    // Lookup is on show, and a grouping then would run beside the user's searches.
     private void MainDatasetChanged(object? sender, EventArgs e)
     {
         if (_shownPage == WindowPage.AbuseIpDb)
@@ -197,8 +196,7 @@ public sealed partial class MainWindow : Window
     }
 
     // House convention, not an Avalonia rule: a small display (such as a 1024x768 server session) gets the largest
-    // size that fits its working area, re-centred, instead of a window that runs off the screen. The page
-    // ScrollViewer keeps everything reachable below the page's minimum height.
+    // size that fits its working area, re-centred, instead of a window that runs off the screen.
     private void FitToScreen()
     {
         if ((Screens.ScreenFromWindow(this) ?? Screens.Primary) is not { } screen)
@@ -249,10 +247,8 @@ public sealed partial class MainWindow : Window
         reason == WindowCloseReason.OSShutdown
         || (isWindows && reason == WindowCloseReason.ApplicationShutdown && !isProgrammatic);
 
-    // Whether a close is held, starting the wait or the question that closes the window later. The close is held while
-    // an update runs, the AbuseIPDB page has a call with the service or the Settings page has unsaved edits, and asked
-    // about first. While a start-up step runs it is held with no question, and the window closes itself once the step
-    // has returned. Tests call it with each reason, because Avalonia's WindowClosingEventArgs has no public constructor.
+    // Whether a close is held, starting the wait or the question that closes the window later. Tests call it with
+    // each reason, because Avalonia's WindowClosingEventArgs has no public constructor.
     internal bool HoldsClose(WindowCloseReason reason, bool isProgrammatic, bool isWindows)
     {
         if (!_closeApproved && DataContext is MainViewModel { IsStartStepRunning: true } starting)
@@ -398,11 +394,8 @@ public sealed partial class MainWindow : Window
         CloseApproved();
     }
 
-    // The unsaved edits are asked about first, then the AbuseIPDB page's work, then the update, because agreeing to the
-    // update's question cancels the update. The page's question cancels nothing: its work is stopped only once every
-    // question was agreed, so a no to the update's question leaves the page's work running. From the page's question
-    // agreed (or not needed) the page's runs are held off, so nothing starts on it while the update's question is open,
-    // the update winds down or the page's work is stopped; a later no releases the hold, and the close keeps it.
+    // The update is asked about last, because agreeing to its question cancels the update; the page's work is stopped
+    // only once every question was agreed, and its runs are held once its own question is agreed, until a later no.
     private async Task ConfirmCloseAsync(MainViewModel? viewModel)
     {
         IDisposable? runsHeld = null;

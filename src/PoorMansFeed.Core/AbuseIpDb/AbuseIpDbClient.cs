@@ -5,24 +5,15 @@ using System.Net;
 namespace PoorMansFeed.Core.AbuseIpDb;
 
 /// <summary>
-/// What one request came to. <see cref="Body"/> is set only when <see cref="Failure"/> is
-/// <see cref="AbuseIpDbFailure.None"/>; <see cref="RetryAt"/> only for <see cref="AbuseIpDbFailure.RateLimited"/>,
-/// when the server said when. <see cref="RateLimit"/> is set for every blacklist answer from the AbuseIPDB endpoint,
-/// success or failure (a 2xx whose body was cut short or timed out included, which is a
-/// <see cref="AbuseIpDbFailure.BadResponse"/>), and is null for a check, an answer from another host, and no connection
-/// or a timeout before the headers.
-/// <see cref="ServerTime"/> is the answer's <c>Date</c> header as sent, set under the same rule as <see cref="RateLimit"/>,
-/// and also null when the header is missing or can't be read. <see cref="RetryAt"/> and <see cref="RateLimit"/>'s
-/// <c>ResetAt</c> are on this computer's clock, and null when the time is more than
-/// <see cref="AbuseIpDbLimits.MaxResetAheadHours"/> hours ahead (see <c>OnThisClock</c>).
+/// <see cref="RateLimit"/> and <see cref="ServerTime"/> (the Date as sent) come only with a blacklist answer from
+/// AbuseIPDB's endpoint. <see cref="RetryAt"/> and the reset are on this clock, null past MaxResetAheadHours ahead.
 /// </summary>
 internal sealed record AbuseFetch(AbuseIpDbFailure Failure, byte[]? Body, DateTimeOffset? RetryAt, AbuseRateLimit? RateLimit = null,
                                   DateTimeOffset? ServerTime = null);
 
 /// <summary>
-/// The two AbuseIPDB requests: <c>GET /api/v2/check</c> for a public address and <c>GET /api/v2/blacklist</c>, sent
-/// with no query, or with <c>ipVersion=4</c> while IPv6 is off. The key travels only in the <c>Key</c> header, never in
-/// the address, and no trace names the address, the key, a header or the request URL.
+/// The key travels only in the <c>Key</c> header, never in the URL, and no trace names the address, the key, a header
+/// or the request URL.
 /// </summary>
 internal sealed class AbuseIpDbClient
 {
@@ -53,11 +44,8 @@ internal sealed class AbuseIpDbClient
     }
 
     /// <summary>
-    /// Downloads the blacklist at AbuseIPDB's defaults (confidence 100 and, with no limit in the query, up to 10,000
-    /// addresses). With <paramref name="ipv4Only"/> the query asks for IPv4 alone (<c>ipVersion=4</c>), so the whole
-    /// allowance is IPv4; otherwise there is no query and both families come. Only the caller's own cancellation escapes,
-    /// and only until a 2xx answer's headers are in: AbuseIPDB has counted the download then, so its body is read under
-    /// the request's timeout alone.
+    /// The caller's cancel applies only until a 2xx answer's headers are in: AbuseIPDB has counted the download then,
+    /// so its body is read under the request's timeout alone.
     /// </summary>
     public async Task<AbuseFetch> GetBlacklistAsync(string key, bool ipv4Only, CancellationToken ct)
     {
@@ -133,9 +121,8 @@ internal sealed class AbuseIpDbClient
             byte[]? body;
             if (keepRateLimit)
             {
-                // AbuseIPDB counts a blacklist download once it sends a 2xx, so from here the answer is in: the caller's
-                // cancel no longer applies, and a body cut short or too slow is a bad answer that still carries the rate
-                // limit, not no answer
+                // AbuseIPDB counts a blacklist download once it sends a 2xx, so the caller's cancel no longer applies,
+                // and a body cut short or too slow is a bad answer that still carries the rate limit
                 try
                 {
                     body = await ReadCappedAsync(response, maxBytes, timeout.Token);
@@ -225,11 +212,8 @@ internal sealed class AbuseIpDbClient
             : null;
 
     /// <summary>
-    /// When the daily limit lifts, on this computer's clock: <c>Retry-After</c> (seconds or a date), else
-    /// <c>X-RateLimit-Reset</c> (epoch seconds), never earlier than now. The reset is used when <c>Retry-After</c> is
-    /// missing, can't be read, or is more than <see cref="AbuseIpDbLimits.MaxResetAheadHours"/> hours ahead. Null when
-    /// the server said neither in a form that can be read, or only times too far ahead. <paramref name="now"/> is
-    /// called only when there is a time.
+    /// <c>Retry-After</c> (seconds or a date), else <c>X-RateLimit-Reset</c>, placed on this clock and never earlier
+    /// than now; the reset also stands in for a <c>Retry-After</c> more than MaxResetAheadHours ahead.
     /// </summary>
     private static DateTimeOffset? RetryAt(HttpResponseMessage response, DateTimeOffset? serverTime, Func<DateTimeOffset> now)
     {
@@ -250,12 +234,8 @@ internal sealed class AbuseIpDbClient
     }
 
     /// <summary>
-    /// A time from AbuseIPDB's answer moved onto this computer's clock. Its own clock is the answer's Date when that is
-    /// within <see cref="AbuseIpDbLimits.MaxClockDifferenceHours"/> hours of <paramref name="now"/>, else now, with the
-    /// time taken as sent. A time more than <see cref="AbuseIpDbLimits.MaxResetAheadHours"/> hours after its own clock is
-    /// unknown (null); one more than <see cref="AbuseIpDbLimits.MaxClockDifferenceHours"/> hours before it is in the past
-    /// on any clock the guard accepts and is kept as sent. Any other time is moved by now minus its clock. Everything is
-    /// compared as a difference, so no time near either end of the calendar can throw.
+    /// Moved by the answer's Date offset only when that Date is within MaxClockDifferenceHours of now, else taken as
+    /// sent. Everything is compared as a difference, so no time near either end of the calendar can throw.
     /// </summary>
     private static DateTimeOffset? OnThisClock(DateTimeOffset time, DateTimeOffset? serverTime, DateTimeOffset now)
     {

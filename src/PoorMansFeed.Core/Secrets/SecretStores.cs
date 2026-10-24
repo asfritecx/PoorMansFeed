@@ -17,10 +17,8 @@ internal static class SecretStores
     }
 
     /// <summary>
-    /// The AbuseIPDB key's store: DPAPI on Windows and its own account in the login Keychain on macOS, with
-    /// <see cref="AppPaths.AbuseIpDbKeyPath"/> as the DPAPI file or the Keychain marker. The path is taken here, not
-    /// from the caller, because on Windows the file is the only thing that tells the two secrets apart: any other path
-    /// could replace the IPinfo token. Any other system gets a store that saves nothing.
+    /// The AbuseIPDB key's store, on <see cref="AppPaths.AbuseIpDbKeyPath"/> and its own Keychain account. The path is
+    /// taken here because on Windows the file alone tells the secrets apart: any other path could replace the token.
     /// </summary>
     public static ISecretStore AbuseIpDbKeyForCurrentUser(AppPaths paths)
     {
@@ -34,10 +32,8 @@ internal static class SecretStores
     }
 
     /// <summary>
-    /// The config.db key's store: DPAPI on Windows and its own account in the login Keychain on macOS, with
-    /// <see cref="AppPaths.ConfigKeyPath"/> as the DPAPI file or the Keychain marker. The path is taken here, not from
-    /// the caller, because on Windows the file is the only thing that tells the three secrets apart: any other path
-    /// could replace the IPinfo token or the AbuseIPDB key. Any other system gets a store that saves nothing.
+    /// The config.db key's store, on <see cref="AppPaths.ConfigKeyPath"/> and its own Keychain account. The path is
+    /// taken here because on Windows the file alone tells the secrets apart: any other path could replace another one.
     /// </summary>
     internal static ISecretStore ConfigKeyForCurrentUser(AppPaths paths)
     {

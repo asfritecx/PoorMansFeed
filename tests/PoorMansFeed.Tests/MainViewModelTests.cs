@@ -1627,6 +1627,165 @@ public sealed class MainViewModelTests
         Assert.Equal(0, service.ExportCalls);
     }
 
+    // An ASN search ready to export, with no feed type ticked unless the test sets the settings again
+    private static async Task<MainViewModel> ReadyToExportWithNoFeedTypeAsync(
+        FakeIpInfoService service, FakeUi ui, WorkGate? gate = null)
+    {
+        service.Settings = new UserSettings();
+        var vm = gate is null ? await StartAsync(service, ui) : await StartOnGateAsync(service, ui, gate);
+        service.SearchFunc = (_, _) => FoundResult(AsnQuery(), 2, 2);
+        vm.SearchText = "AS15169";
+        await vm.SearchCommand.ExecuteAsync(null);
+        return vm;
+    }
+
+    [Fact]
+    public async Task ExportWithNoFeedTypeTickedAsksFirstAndCloseGoesOnToTheLargeRangesAndTheExport()
+    {
+        var service = WithDataset();
+        int asksAtLargeRangePrompt = -1;
+        var ui = new FakeUi { ConfigureFeedsAnswer = ConfigureFeedsChoice.Close };
+        ui.LargeRangeAnswer = prompt =>
+        {
+            asksAtLargeRangePrompt = ui.ConfigureFeedsAsks;
+            return new List<string> { prompt.Choices[0].Network };
+        };
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui);
+        service.ExportPlan = new ExportPlan(2, "Google LLC", [new LargeRange("10.0.0.0/8", false, 8, new BigInteger(16777216))]);
+        service.ExportResult = new ExportResult(ExportFailure.None, ["a.txt"], 2, 0);
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.Equal(1, asksAtLargeRangePrompt);
+        Assert.Single(ui.LargeRangePrompts);
+        Assert.Equal(1, service.ExportCalls);
+        Assert.Equal(new[] { "10.0.0.0/8" }, service.LastIncluded!.ToArray());
+        Assert.Equal(0, ui.SettingsPageShows);
+        Assert.Equal("Exported 2 networks to 1 file", vm.ResultsActionText);
+    }
+
+    [Fact]
+    public async Task ExportWithNoFeedTypeTickedAndOpenSettingsShowsTheSettingsPageAndExportsNothing()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi { ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings };
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui);
+        service.ExportPlan = new ExportPlan(2, "Google LLC", [new LargeRange("10.0.0.0/8", false, 8, new BigInteger(16777216))]);
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.Equal(1, ui.SettingsPageShows);
+        Assert.Empty(ui.LargeRangePrompts);
+        Assert.Equal(0, service.ExportCalls);
+        Assert.True(vm.ExportCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task ExportWithNoFeedTypeTickedAsksOnEveryPress()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui);
+
+        await vm.ExportCommand.ExecuteAsync(null);
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, ui.ConfigureFeedsAsks);
+        Assert.Equal(2, service.ExportCalls);
+    }
+
+    public static TheoryData<bool, bool, bool> SettingsThatNeedNoFeedQuestion => new()
+    {
+        // The feed switch, FortiGate, ModSecurity
+        { false, false, false },
+        { true, true, false },
+        { true, false, true },
+    };
+
+    [Theory]
+    [MemberData(nameof(SettingsThatNeedNoFeedQuestion))]
+    public async Task ExportAsksNothingWithTheFeedSwitchOffOrAFeedTypeTicked(bool feeds, bool fortigate, bool modSecurity)
+    {
+        var service = WithDataset();
+        var ui = new FakeUi { ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings };
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui);
+        service.Settings = new UserSettings
+        {
+            FortigateEnabled = feeds, WriteFortigateFeeds = fortigate, WriteModSecurityLists = modSecurity,
+        };
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, ui.ConfigureFeedsAsks);
+        Assert.Equal(0, ui.SettingsPageShows);
+        Assert.Equal(1, service.ExportCalls);
+    }
+
+    [Fact]
+    public async Task TheFeedQuestionHoldsTheGateWhileItIsOpen()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var gate = new WorkGate();
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui, gate);
+        bool heldWhileOpen = false;
+        bool searchWhileOpen = true;
+        ui.OnDialogOpen = () =>
+        {
+            heldWhileOpen = gate.IsHeld;
+            searchWhileOpen = vm.SearchCommand.CanExecute(null);
+        };
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.True(heldWhileOpen);
+        Assert.False(searchWhileOpen);
+        Assert.False(gate.IsHeld);
+        Assert.True(vm.SearchCommand.CanExecute(null));
+        Assert.True(vm.ExportCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task AFeedQuestionThatFailsToShowEndsTheExportWithTheGenericLine()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi { ConfigureFeedsException = new InvalidOperationException("no window") };
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui);
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.Equal(AppText.Generic, vm.ResultsActionText);
+        Assert.Equal(0, service.ExportCalls);
+        Assert.Equal(0, ui.SettingsPageShows);
+        Assert.True(vm.ExportCommand.CanExecute(null));
+    }
+
+    [Theory]
+    [InlineData(ConfigureFeedsChoice.Close)]
+    [InlineData(ConfigureFeedsChoice.OpenSettings)]
+    public async Task AWindowClosingWhileTheFeedQuestionIsOpenRunsNothingAfterIt(ConfigureFeedsChoice answer)
+    {
+        var service = WithDataset();
+        var ui = new FakeUi { ConfigureFeedsAnswer = answer };
+        var vm = await ReadyToExportWithNoFeedTypeAsync(service, ui);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ui.ConfigureFeedsGate = release;
+
+        Task export = vm.ExportCommand.ExecuteAsync(null);
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        await vm.CloseAfterStartStepAsync();
+        release.SetResult();
+        await export;
+
+        Assert.Equal(0, service.ExportCalls);
+        Assert.Empty(ui.LargeRangePrompts);
+        Assert.Equal(0, ui.SettingsPageShows);
+    }
+
     [Fact]
     public async Task EachExportOutcomeShowsItsExactLine()
     {
@@ -1651,10 +1810,28 @@ public sealed class MainViewModelTests
             (new ExportResult(ExportFailure.None, ["a", "b"], 4, 1, 1, 3),
              "Exported 4 networks to 2 files" + Dash + "1 large range left out" + Dash + "1 network cut and 3 removed by exceptions"),
             (new ExportResult(ExportFailure.None, ["/x/AS15169.txt"], 4, 0, 0, 2, ["/x/fortigate/AS15169_ipv6.txt"]),
-             "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash + "the old AS15169_ipv6.txt was left as it was"),
+             "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash + "the old "
+             + Path.Combine("fortigate", "AS15169_ipv6.txt") + " was left as it was"),
             (new ExportResult(ExportFailure.None, ["/x/AS15169.txt"], 4, 0, 0, 2, ["/x/fortigate/AS15169_ipv4.txt", "/x/fortigate/AS15169_ipv6.txt"]),
              "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash
-             + "the old AS15169_ipv4.txt and AS15169_ipv6.txt were left as they were"),
+             + "the old " + Path.Combine("fortigate", "AS15169_ipv4.txt") + " and " + Path.Combine("fortigate", "AS15169_ipv6.txt")
+             + " were left as they were"),
+            (new ExportResult(ExportFailure.None, ["a"], 4, 1) with { WholeRangesLeftOut = 1 },
+             "Exported 4 networks to 1 file" + Dash + "1 large range left out" + Dash
+             + "1 network covering every address left out of the feeds"),
+            (new ExportResult(ExportFailure.None, ["a"], 4, 0, 0, 2) with { WholeRangesLeftOut = 2 },
+             "Exported 4 networks to 1 file" + Dash + "2 networks covering every address left out of the feeds" + Dash
+             + "2 networks removed by exceptions"),
+            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt"], 4, 0, 0, 2, ["/x/fortigate/AS15169_ipv6.txt"]) with { NoFeedType = true },
+             "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash + "the old "
+             + Path.Combine("fortigate", "AS15169_ipv6.txt") + " was left as it was" + Dash
+             + "no feed was written, because no feed type is ticked in Settings"),
+            (new ExportResult(ExportFailure.None, ["a"], 1, 0) with { NoFeedType = true },
+             "Exported 1 network to 1 file" + Dash + "no feed was written, because no feed type is ticked in Settings"),
+            (new ExportResult(ExportFailure.NothingToExport, [], 0, 0) with { NoFeedType = true, WholeRangesLeftOut = 1 },
+             "Nothing was exported" + Dash + "every network is a large range that was left out"),
+            (new ExportResult(ExportFailure.FolderUnavailable, [], 0, 0) with { NoFeedType = true, WholeRangesLeftOut = 1 },
+             "The export folder couldn't be used. Choose another folder in Settings."),
         };
 
         foreach ((ExportResult result, string expected) in cases)
@@ -1689,6 +1866,13 @@ public sealed class MainViewModelTests
         await vm.ExportCommand.ExecuteAsync(null);
         Assert.Equal("Exported 4 networks to 1 file" + AppText.UnsavedSettingsNote, vm.ResultsActionText);
         Assert.Equal(Dash + "unsaved changes on the Settings page weren't used", AppText.UnsavedSettingsNote);
+
+        // The no-type text sits before the unsaved note
+        service.ExportResult = new ExportResult(ExportFailure.None, ["a"], 4, 0) with { NoFeedType = true };
+        await vm.ExportCommand.ExecuteAsync(null);
+        Assert.Equal("Exported 4 networks to 1 file" + Dash + "no feed was written, because no feed type is ticked in Settings"
+            + AppText.UnsavedSettingsNote, vm.ResultsActionText);
+        service.ExportResult = new ExportResult(ExportFailure.None, ["a"], 4, 0);
 
         unsaved.HasUnsavedChanges = false;
         await vm.ExportCommand.ExecuteAsync(null);
@@ -1748,9 +1932,8 @@ public sealed class MainViewModelTests
         }
     }
 
-    // A failed write names the failed file first, a feed file with its folder (the report and the combined feed share
-    // a name), then the files written before it and the old files left; the unsaved note only follows files that were
-    // written
+    // A feed file is named with its type's folder, because the report and the combined feed share a name; the unsaved
+    // note only follows files that were written
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1773,6 +1956,10 @@ public sealed class MainViewModelTests
         string named = Path.Combine(Path.GetTempPath(), "fortigate");
         string namedReport = Path.Combine(named, "AS15169.txt");
         string namedCombined = Path.Combine(named, "fortigate", "AS15169.txt");
+        string modSecurityIpv4 = Path.Combine(folder, "modsecurity", "AS15169_ipv4.txt");
+        string modSecurityNamed = Path.Combine(Path.GetTempPath(), "modsecurity");
+        string modSecurityNamedReport = Path.Combine(modSecurityNamed, "AS15169.txt");
+        string modSecurityNamedCombined = Path.Combine(modSecurityNamed, "modsecurity", "AS15169.txt");
 
         var cases = new (ExportResult Result, string Expected)[]
         {
@@ -1815,6 +2002,22 @@ public sealed class MainViewModelTests
              + " and " + Path.Combine("fortigate", "AS15169_ipv6.txt")
              + " were left as they were. Please try again or contact the Infra Team."),
             (new ExportResult(ExportFailure.WriteFailed, [], 0, 0), AppText.ExportWriteFailed),
+            // A ModSecurity copy is named with its own folder, never fortigate's
+            (new ExportResult(ExportFailure.WriteFailed, [report, ipv4], 0, 0, OldFilesLeft: [modSecurityIpv4],
+                              FailedFile: modSecurityIpv4),
+             Path.Combine("modsecurity", "AS15169_ipv4.txt") + " couldn't be written. AS15169.txt and "
+             + Path.Combine("fortigate", "AS15169_ipv4.txt") + " were written before the failure. The old "
+             + Path.Combine("modsecurity", "AS15169_ipv4.txt") + " was left as it was." + unsavedNote
+             + " Please try again or contact the Infra Team."),
+            // An export folder called modsecurity still names its report bare
+            (new ExportResult(ExportFailure.WriteFailed, [], 0, 0, FailedFile: modSecurityNamedReport),
+             "AS15169.txt couldn't be written. Please try again or contact the Infra Team."),
+            (new ExportResult(ExportFailure.WriteFailed, [modSecurityNamedReport], 0, 0, FailedFile: modSecurityNamedCombined),
+             Path.Combine("modsecurity", "AS15169.txt") + " couldn't be written. AS15169.txt was written "
+             + "before the failure." + unsavedNote + " Please try again or contact the Infra Team."),
+            // A failure line carries no counts and no no-type text
+            (new ExportResult(ExportFailure.WriteFailed, [], 0, 0, FailedFile: report) with { NoFeedType = true, WholeRangesLeftOut = 1 },
+             "AS15169.txt couldn't be written. Please try again or contact the Infra Team."),
         };
 
         foreach ((ExportResult result, string expected) in cases)

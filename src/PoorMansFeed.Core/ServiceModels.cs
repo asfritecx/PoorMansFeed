@@ -45,19 +45,13 @@ public enum ExportFailure { None, NothingToExport, FolderUnavailable, WriteFaile
 public enum ExceptionsSaveOutcome { Saved, Failed }
 
 /// <summary>
-/// ExceptionCuts counts feed networks an exception cut into smaller ranges, ExceptionRemovals the ones it removed
-/// whole. Exceptions change only the Fortigate feeds; the report lists every network. OldFilesLeft (null for none)
-/// lists the files from an earlier export left in place: the feeds whose every network exceptions removed, and on
-/// WriteFailed the failed file when its earlier copy is still there, whole, because each file is replaced by a move,
-/// then each feed after it that was never tried and has an earlier copy, in write order (after a failed report, every
-/// feed the export would have written or noted).
-/// FailedFile is set only on WriteFailed when one file's write failed, and Files then lists the files written before
-/// it. The report is always tried first and the feeds after it, so Files keeps that order. A folder that couldn't be
-/// made names the file it was made for. It is null for an unexpected failure.
+/// OldFilesLeft: empty or null for none; ModSecurityFiles: null for none. FailedFile is set only on WriteFailed when
+/// one file's write failed (a folder not made names its file); Files then lists those written before it, report first.
 /// </summary>
 public sealed record ExportResult(ExportFailure Failure, IReadOnlyList<string> Files, int NetworksWritten, int LargeRangesLeftOut,
                                   int ExceptionCuts = 0, int ExceptionRemovals = 0, IReadOnlyList<string>? OldFilesLeft = null,
-                                  string? FailedFile = null);
+                                  string? FailedFile = null, IReadOnlyList<string>? ModSecurityFiles = null, bool NoFeedType = false,
+                                  int WholeRangesLeftOut = 0);
 
 public static class IpInfoLimits { public const int DownloadsPerDay = 10; }
 

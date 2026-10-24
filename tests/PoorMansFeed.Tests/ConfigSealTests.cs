@@ -15,6 +15,7 @@ public sealed class ConfigSealTests
     [InlineData((int)ConfigSection.Settings)]
     [InlineData((int)ConfigSection.Exceptions)]
     [InlineData((int)ConfigSection.Accounting)]
+    [InlineData((int)ConfigSection.ModSecurityRuleIds)]
     public void Each_section_round_trips(int sectionValue)
     {
         // An int, because a public test method can't take the internal enum
@@ -106,6 +107,20 @@ public sealed class ConfigSealTests
         Assert.False(seal.TryOpen(ConfigSection.Accounting, 1, blob, out _));
         Assert.False(seal.TryOpen(ConfigSection.Settings, 2, blob, out _));
         Assert.True(seal.TryOpen(ConfigSection.Settings, 1, blob, out _));
+    }
+
+    [Fact]
+    public void Rule_ids_and_a_section_never_open_as_each_other()
+    {
+        using var seal = NewSeal();
+        byte[] ruleIds = seal.Seal(ConfigSection.ModSecurityRuleIds, 1, Plain);
+
+        foreach (ConfigSection section in new[] { ConfigSection.Settings, ConfigSection.Exceptions, ConfigSection.Accounting })
+        {
+            Assert.False(seal.TryOpen(section, 1, ruleIds, out _));
+            Assert.False(seal.TryOpen(ConfigSection.ModSecurityRuleIds, 1, seal.Seal(section, 1, Plain), out _));
+        }
+        Assert.True(seal.TryOpen(ConfigSection.ModSecurityRuleIds, 1, ruleIds, out _));
     }
 
     [Fact]
@@ -233,6 +248,7 @@ public sealed class ConfigSealTests
         Assert.Equal("settings", ConfigSeal.SectionName(ConfigSection.Settings));
         Assert.Equal("exceptions", ConfigSeal.SectionName(ConfigSection.Exceptions));
         Assert.Equal("accounting", ConfigSeal.SectionName(ConfigSection.Accounting));
+        Assert.Equal("modsecurity_rule_ids", ConfigSeal.SectionName(ConfigSection.ModSecurityRuleIds));
         Assert.Throws<ArgumentOutOfRangeException>(() => ConfigSeal.SectionName((ConfigSection)99));
     }
 }

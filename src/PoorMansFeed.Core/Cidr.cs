@@ -50,10 +50,8 @@ public static class Cidr
     }
 
     /// <summary>
-    /// The start of every CIDR that can hold the address, highest first: the address itself (/32 or /128), then the
-    /// address with its host bits cleared for each shorter prefix, without repeats, down to all zeros (/0). A CIDR's
-    /// start is any of its addresses with the host bits cleared, so only a network starting at one of these can hold
-    /// the address. There is one start for each set bit, plus the address itself: at most 33 for IPv4 and 129 for IPv6.
+    /// The start of every CIDR that can hold the address, highest first and without repeats: a CIDR's start is any of
+    /// its addresses with the host bits cleared. At most 33 for IPv4 and 129 for IPv6.
     /// </summary>
     public static List<byte[]> ContainingStarts(byte[] address)
     {

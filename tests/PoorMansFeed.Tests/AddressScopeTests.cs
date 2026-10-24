@@ -12,9 +12,8 @@ public sealed class AddressScopeTests
     private const string Outside2000 = "outside 2000::/3";
 
     /// <summary>
-    /// The first and last address of every deny block and of 2000::/3, and the address either side. The rule is the
-    /// deny block holding the address, "outside 2000::/3" or "public"; it is checked against the address as well, so
-    /// a wrong row cannot pass by agreeing with a wrong verdict.
+    /// The first and last address of every deny block and of 2000::/3, and the address either side. The rule is
+    /// checked against the address as well, so a wrong row cannot pass by agreeing with a wrong verdict.
     /// </summary>
     [Theory]
     [InlineData("0.0.0.0", false, "0.0.0.0/8")]

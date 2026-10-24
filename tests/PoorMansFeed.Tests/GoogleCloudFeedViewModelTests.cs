@@ -96,7 +96,7 @@ public sealed class GoogleCloudFeedViewModelTests : IDisposable
 
         Assert.Equal("Wrote 1 range to 1 file" + Dash + "1 range cut by exceptions", vm.ActionText);
         string feed = File.ReadAllText(Path.Combine(_folder, "fortigate", "GoogleCloud_us-central1_ipv4.txt"));
-        Assert.EndsWith(Environment.NewLine + "34.1.128.0/17" + Environment.NewLine, feed);
+        Assert.EndsWith("\n" + "34.1.128.0/17" + "\n", feed);
     }
 
     [Fact]
@@ -109,7 +109,8 @@ public sealed class GoogleCloudFeedViewModelTests : IDisposable
         await vm.WriteFeedCommand.ExecuteAsync(null);
 
         Assert.Equal(
-            "Nothing was written" + Dash + "exceptions cover every ticked range" + Dash + "the old GoogleCloud_us-central1_ipv4.txt was left as it was",
+            "Nothing was written" + Dash + "exceptions cover every ticked range" + Dash + "the old "
+            + Path.Combine("fortigate", "GoogleCloud_us-central1_ipv4.txt") + " was left as it was",
             vm.ActionText);
     }
 
@@ -251,6 +252,82 @@ public sealed class GoogleCloudFeedViewModelTests : IDisposable
         Assert.Equal(AppText.CloudAllLeftOutOrExcepted + AppText.UnsavedSettingsNote, vm.ActionText);
     }
 
+    // Each NothingToWrite is worded from what left the ranges out; only the exceptions' part takes the unsaved note
+    [Theory]
+    [InlineData(0, 0, 0, "no ranges were ticked")]
+    [InlineData(2, 0, 0, "every ticked range is a large range that was left out")]
+    [InlineData(0, 0, 3, "exceptions cover every ticked range")]
+    [InlineData(2, 0, 3, "every ticked range was left out as a large range or removed by exceptions")]
+    [InlineData(0, 1, 0, "every ticked range covers every address, which no feed takes")]
+    [InlineData(2, 1, 0, "every ticked range was left out as a large range or for covering every address")]
+    [InlineData(0, 1, 3, "every ticked range covers every address or was removed by exceptions")]
+    [InlineData(2, 1, 3, "every ticked range was left out as a large range or for covering every address, or removed by exceptions")]
+    public async Task Nothing_To_Write_Names_What_Left_The_Ranges_Out(int large, int whole, int removals, string reason)
+    {
+        var feeds = new FixedWriteFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), _folder));
+        GoogleCloudFeedViewModel vm = await CheckedAsync(unsaved: new FakeUnsavedSettings(hasUnsavedChanges: true), feeds: feeds);
+        string old = Path.Combine(_folder, "fortigate", "GoogleCloud_us-central1_ipv4.txt");
+        feeds.Result = new CloudFeedWriteResult(CloudFeedWriteFailure.NothingToWrite, [], 0, 0, large, 0, removals,
+            OldFilesLeft: [old], WholeRangesLeftOut: whole);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal("Nothing was written" + Dash + reason + Dash + "the old "
+            + Path.Combine("fortigate", "GoogleCloud_us-central1_ipv4.txt") + " was left as it was"
+            + (removals > 0 ? AppText.UnsavedSettingsNote : ""), vm.ActionText);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task No_Feed_Type_Gives_Its_Own_Line(bool unsavedEdits)
+    {
+        var feeds = new FixedWriteFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), _folder));
+        GoogleCloudFeedViewModel vm = await CheckedAsync(unsaved: new FakeUnsavedSettings(unsavedEdits), feeds: feeds);
+        feeds.Result = new CloudFeedWriteResult(CloudFeedWriteFailure.NoFeedType, [], 0, 0, 2, WholeRangesLeftOut: 1);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal("Nothing was written" + Dash + "no feed type is ticked in Settings"
+            + (unsavedEdits ? AppText.UnsavedSettingsNote : ""), vm.ActionText);
+    }
+
+    // The ranges covering every address follow the large ranges and come before the unconfirmed and the exceptions
+    [Fact]
+    public async Task A_Written_Feed_Names_The_Ranges_Covering_Every_Address_In_Order()
+    {
+        var feeds = new FixedWriteFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), _folder));
+        GoogleCloudFeedViewModel vm = await CheckedAsync(unsaved: new FakeUnsavedSettings(hasUnsavedChanges: true), feeds: feeds);
+        feeds.Result = new CloudFeedWriteResult(CloudFeedWriteFailure.None, ["a"], 3, 1, 2, 0, 1, WholeRangesLeftOut: 1);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+        Assert.Equal("Wrote 3 ranges to 1 file" + Dash + "2 large ranges left out" + Dash
+            + "1 range covering every address left out" + AppText.CloudUnconfirmed(1) + Dash + "1 range removed by exceptions"
+            + AppText.UnsavedSettingsNote, vm.ActionText);
+
+        feeds.Result = new CloudFeedWriteResult(CloudFeedWriteFailure.None, ["a"], 3, 0, 0, WholeRangesLeftOut: 2);
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+        Assert.Equal("Wrote 3 ranges to 1 file" + Dash + "2 ranges covering every address left out"
+            + AppText.UnsavedSettingsNote, vm.ActionText);
+    }
+
+    [Fact]
+    public async Task Every_Write_Failure_Has_A_Line_Of_Its_Own()
+    {
+        var feeds = new FixedWriteFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), _folder));
+        GoogleCloudFeedViewModel vm = await CheckedAsync(feeds: feeds);
+        var lines = new List<string>();
+        foreach (CloudFeedWriteFailure failure in Enum.GetValues<CloudFeedWriteFailure>().Where(f => f != CloudFeedWriteFailure.None))
+        {
+            feeds.Result = new CloudFeedWriteResult(failure, [], 0, 0, 0);
+            await vm.WriteFeedCommand.ExecuteAsync(null);
+            lines.Add(vm.ActionText);
+        }
+
+        Assert.DoesNotContain(AppText.Generic, lines);
+        Assert.Equal(lines.Count, lines.Distinct().Count());
+    }
+
     // A write that failed on one file names it first, then the files written before it and the old files left; with
     // nothing to name it is the plain line. The unsaved note follows only files that were written
     [Fact]
@@ -262,18 +339,20 @@ public sealed class GoogleCloudFeedViewModelTests : IDisposable
         string folder = Path.Combine(_folder, "fortigate");
         string ipv4 = Path.Combine(folder, "AWS_EC2_cn-north-1_ipv4.txt");
         string ipv6 = Path.Combine(folder, "AWS_EC2_cn-north-1_ipv6.txt");
+        string name4 = Path.Combine("fortigate", "AWS_EC2_cn-north-1_ipv4.txt");
+        string name6 = Path.Combine("fortigate", "AWS_EC2_cn-north-1_ipv6.txt");
 
         var cases = new (CloudFeedWriteResult Result, bool Unsaved, string Expected)[]
         {
             (new CloudFeedWriteResult(CloudFeedWriteFailure.WriteFailed, [ipv4], 0, 0, 0, FailedFile: ipv6), false,
-             "AWS_EC2_cn-north-1_ipv6.txt couldn't be written. AWS_EC2_cn-north-1_ipv4.txt was written before the failure. "
+             $"{name6} couldn't be written. {name4} was written before the failure. "
              + "Please try again or contact the Infra Team."),
             (new CloudFeedWriteResult(CloudFeedWriteFailure.WriteFailed, [], 0, 0, 0, OldFilesLeft: [ipv4], FailedFile: ipv6),
              true,
-             "AWS_EC2_cn-north-1_ipv6.txt couldn't be written. The old AWS_EC2_cn-north-1_ipv4.txt was left as it was. "
+             $"{name6} couldn't be written. The old {name4} was left as it was. "
              + "Please try again or contact the Infra Team."),
             (new CloudFeedWriteResult(CloudFeedWriteFailure.WriteFailed, [ipv4], 0, 0, 0, FailedFile: ipv6), true,
-             "AWS_EC2_cn-north-1_ipv6.txt couldn't be written. AWS_EC2_cn-north-1_ipv4.txt was written before the failure. "
+             $"{name6} couldn't be written. {name4} was written before the failure. "
              + "Unsaved changes on the Settings page weren't used. Please try again or contact the Infra Team."),
             (new CloudFeedWriteResult(CloudFeedWriteFailure.WriteFailed, [], 0, 0, 0), true,
              "The feed couldn't be written. Please try again or contact the Infra Team."),
@@ -288,7 +367,7 @@ public sealed class GoogleCloudFeedViewModelTests : IDisposable
         }
 
         Assert.Equal(AppText.CloudWriteFailed, AppText.CloudWriteFailedLine(null, [], null, unsaved: true));
-        Assert.Equal("The feed couldn't be written. The old AWS_EC2_cn-north-1_ipv4.txt and AWS_EC2_cn-north-1_ipv6.txt were "
+        Assert.Equal($"The feed couldn't be written. The old {name4} and {name6} were "
             + "left as they were. Please try again or contact the Infra Team.",
             AppText.CloudWriteFailedLine(null, [], [ipv4, ipv6], unsaved: false));
     }
@@ -397,6 +476,168 @@ public sealed class GoogleCloudFeedViewModelTests : IDisposable
         Assert.Single(ui.LargeRangePrompts);
         Assert.Equal("Wrote 1 range to 1 file", vm.ActionText);
         Assert.True(gate.CanStart);
+    }
+
+    // ----- the configure dialog, shown when no feed type is ticked -----
+
+    // Both ranges are large at 17, so the large-range question would follow if the dialog didn't end the press
+    [Fact]
+    public async Task With_No_Feed_Type_Ticked_Write_Feed_Asks_Before_The_Large_Range_Question_And_Writes_Nothing()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false, IPv4MinPrefix = 17 };
+        var ui = new FakeUi { LargeRangeAnswer = prompt => [prompt.Choices[0].Network] };
+        var feeds = new HeldFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), _folder));
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui, feeds: feeds);
+        string before = vm.ActionText;
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.Empty(ui.LargeRangePrompts);
+        Assert.False(feeds.WriteStarted.Task.IsCompleted);
+        Assert.Equal(before, vm.ActionText);
+        Assert.Equal(0, ui.SettingsPageShows);
+        Assert.False(vm.IsWorking);
+        Assert.False(Directory.EnumerateFiles(_folder, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public async Task Open_Settings_From_The_Configure_Dialog_Shows_The_Settings_Page_And_Writes_Nothing()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        var ui = new FakeUi { ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings };
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.Equal(1, ui.SettingsPageShows);
+        Assert.False(Directory.EnumerateFiles(_folder, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public async Task The_Configure_Dialog_Shows_On_Every_Press()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        var ui = new FakeUi();
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, ui.ConfigureFeedsAsks);
+        Assert.False(Directory.EnumerateFiles(_folder, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public async Task Any_Ticked_Feed_Type_Writes_Without_The_Configure_Dialog()
+    {
+        var ui = new FakeUi();
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui);
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+        Assert.Equal("Wrote 1 range to 1 file", vm.ActionText);
+
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false, WriteModSecurityLists = true };
+        vm = await CheckedAsync(ui);
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, ui.ConfigureFeedsAsks);
+        Assert.Equal("Wrote 1 range to 1 file", vm.ActionText);
+    }
+
+    // Not asked while something else holds the gate, as the large-range question isn't; the line stays after a Close
+    [Fact]
+    public async Task The_Configure_Dialog_Is_Not_Shown_While_Something_Else_Holds_The_Gate()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        var ui = new FakeUi();
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui, gate);
+        IDisposable other = gate.Hold();
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(AppText.ConfigureFeedsBusy, vm.ActionText);
+        Assert.Equal(0, ui.ConfigureFeedsAsks);
+        Assert.False(vm.IsWorking);
+        Assert.False(Directory.EnumerateFiles(_folder, "*", SearchOption.AllDirectories).Any());
+
+        other.Dispose();
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.Equal(AppText.ConfigureFeedsBusy, vm.ActionText);
+        Assert.True(gate.CanStart);
+    }
+
+    [Fact]
+    public async Task The_Configure_Dialog_Holds_The_Gate_And_The_Page_Works_Throughout()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        var ui = new FakeUi();
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui, gate);
+        bool? heldDuringDialog = null;
+        bool? workingDuringDialog = null;
+        bool? canWriteDuringDialog = null;
+        ui.OnDialogOpen = () =>
+        {
+            heldDuringDialog = gate.IsHeld;
+            workingDuringDialog = vm.IsWorking;
+            canWriteDuringDialog = vm.WriteFeedCommand.CanExecute(null);
+        };
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        Assert.True(heldDuringDialog);
+        Assert.True(workingDuringDialog);
+        Assert.False(canWriteDuringDialog);
+        Assert.False(gate.IsHeld);
+        Assert.True(gate.CanStart);
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
+    public async Task A_Configure_Dialog_That_Fails_To_Show_Says_So_And_Frees_The_Gate()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        var ui = new FakeUi
+        {
+            ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings,
+            ConfigureFeedsException = new InvalidOperationException("dialog"),
+        };
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui, gate);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(AppText.Generic, vm.ActionText);
+        Assert.Equal(0, ui.SettingsPageShows);
+        Assert.False(gate.IsHeld);
+        Assert.False(vm.IsWorking);
+        Assert.True(vm.WriteFeedCommand.CanExecute(null));
+        Assert.False(Directory.EnumerateFiles(_folder, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public async Task A_Page_Disposed_While_The_Configure_Dialog_Is_Open_Shows_No_Settings_Page()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ui = new FakeUi { ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings, ConfigureFeedsGate = release };
+        GoogleCloudFeedViewModel vm = await CheckedAsync(ui);
+
+        Task write = vm.WriteFeedCommand.ExecuteAsync(null);
+        Assert.Equal(1, ui.ConfigureFeedsAsks);
+        vm.Dispose();
+        release.SetResult();
+        await write;
+
+        Assert.Equal(0, ui.SettingsPageShows);
+        Assert.False(Directory.EnumerateFiles(_folder, "*", SearchOption.AllDirectories).Any());
     }
 
     // The us-central1 check, with only the confirmed range ticked

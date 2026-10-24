@@ -106,9 +106,8 @@ public sealed partial class HouseStyleTests
     [Fact]
     public void SourceStatesTheRuleNotAnOrderNumber()
     {
-        // The numbered instructions a change was made under stay out of the published files: an order's number means
-        // nothing to a reader of the code, the tests or the readme, so the text states the rule itself. A number
-        // wrapped onto the next line isn't seen
+        // An order's number means nothing to a reader of the published code, tests or readme, so the text states the
+        // rule itself. A number wrapped onto the next line isn't seen
         string solution = SolutionDirectory();
         var offenders = new[] { "src", "tests" }
             .SelectMany(folder => Directory.EnumerateFiles(Path.Combine(solution, folder), "*", SearchOption.AllDirectories))
@@ -124,6 +123,99 @@ public sealed partial class HouseStyleTests
 
         Assert.True(offenders.Count == 0, "Order numbers in: " + string.Join(", ", offenders) +
             ". State the rule itself instead of the number it was given.");
+    }
+
+    // A doc comment's line holding only tags, such as <summary> or </summary>, isn't a line of its text
+    [GeneratedRegex(@"^(?:\s*</?[A-Za-z][^>]*>)*\s*$")]
+    private static partial Regex TagsOnly();
+
+    [GeneratedRegex("<!--(.*?)-->", RegexOptions.Singleline)]
+    private static partial Regex XmlComment();
+
+    [Fact]
+    public void CommentsAreAtMostTwoLines()
+    {
+        string solution = SolutionDirectory();
+        var offenders = new[] { "src", "tests" }
+            .SelectMany(folder => Directory.EnumerateFiles(Path.Combine(solution, folder), "*", SearchOption.AllDirectories))
+            .Where(file => Path.GetExtension(file) is ".cs" or ".axaml" or ".csproj" or ".manifest")
+            .Append(Path.Combine(solution, "Directory.Build.props"))
+            .Select(file => Path.GetRelativePath(solution, file))
+            .Where(file => !file.Split(Path.DirectorySeparatorChar).Any(part => part is "bin" or "obj" || part.StartsWith('.')))
+            .SelectMany(file => LongComments(file, File.ReadAllLines(Path.Combine(solution, file))))
+            .ToList();
+
+        Assert.True(offenders.Count == 0, "Comments longer than two lines at: " + string.Join(", ", offenders) +
+            ". Keep only the nuance the code can't show, in at most two lines.");
+    }
+
+    [Fact]
+    public void TheCommentCheckCountsTextLinesNotTags()
+    {
+        string[] lines =
+        [
+            "/// <summary>", "/// One.", "/// Two.", "/// </summary>",
+            "// One.", "// Two.",
+            "",
+            "/// <summary>One.</summary>", "/// <param name=\"a\">Two.</param>", "/// <returns>Three.</returns>",
+            "    // One.", "    // Two.", "    // Three.",
+            "/* One.", "Two.", "Three. */",
+        ];
+
+        Assert.Equal(["Sample.cs:8", "Sample.cs:11", "Sample.cs:14"], LongComments("Sample.cs", lines));
+        Assert.Equal(["Sample.axaml:2"], LongComments("Sample.axaml", ["<!-- One. -->", "<!-- One.", "", "Two.", "Three. -->"]));
+    }
+
+    // Each comment with more than two lines of text, as file:line
+    private static IEnumerable<string> LongComments(string file, string[] lines)
+    {
+        if (Path.GetExtension(file) != ".cs")
+        {
+            string text = string.Join('\n', lines);
+            foreach (Match comment in XmlComment().Matches(text))
+            {
+                if (comment.Groups[1].Value.Split('\n').Count(line => line.Trim().Length > 0) > 2)
+                    yield return $"{file}:{text[..comment.Index].Count(character => character == '\n') + 1}";
+            }
+
+            yield break;
+        }
+
+        for (int start = 0; start < lines.Length;)
+        {
+            string first = lines[start].TrimStart();
+            int end = start + 1;
+            int textLines;
+            if (first.StartsWith("///", StringComparison.Ordinal))
+            {
+                while (end < lines.Length && lines[end].TrimStart().StartsWith("///", StringComparison.Ordinal))
+                    end++;
+                textLines = lines[start..end].Count(line => !TagsOnly().IsMatch(line.TrimStart()[3..]));
+            }
+            else if (first.StartsWith("//", StringComparison.Ordinal))
+            {
+                while (end < lines.Length && lines[end].TrimStart() is var next
+                    && next.StartsWith("//", StringComparison.Ordinal) && !next.StartsWith("///", StringComparison.Ordinal))
+                    end++;
+                textLines = end - start;
+            }
+            else if (first.StartsWith("/*", StringComparison.Ordinal))
+            {
+                end = start;
+                while (end < lines.Length - 1 && !lines[end].Contains("*/", StringComparison.Ordinal))
+                    end++;
+                end++;
+                textLines = lines[start..end].Count(line => line.Trim().Length > 0);
+            }
+            else
+            {
+                textLines = 0;
+            }
+
+            if (textLines > 2)
+                yield return $"{file}:{start + 1}";
+            start = end;
+        }
     }
 
     [AvaloniaFact]
@@ -239,6 +331,10 @@ public sealed partial class HouseStyleTests
             "8.8.8.8", "Copied 1 address"),
             _ => Task.CompletedTask, _ => Task.CompletedTask);
         yield return new HelpDialog();
+        yield return new ConfigureFeedsDialog();
+        yield return new ModSecurityRulesDialog(new ModSecurityRulesModel(new ModSecurityRulesPrompt(
+            ["AS15169_ipv4.txt", "AS15169_ipv6.txt"], [10000, 10001], "AS15169", "/etc/modsecurity/lists",
+            PoorMansFeed.Core.ModSecurity.ModSecurityAction.LogOnly), TimeProvider.System, _ => Task.CompletedTask));
     }
 
     // x:Name lives in the XAML namespace, so it has to be looked up as a namespaced name: Attribute("x:Name") throws an

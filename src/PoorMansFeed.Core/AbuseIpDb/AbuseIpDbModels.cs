@@ -34,38 +34,21 @@ public static class AbuseIpDbLimits
     public const int MaxClockDifferenceHours = 24;
 
     /// <summary>
-    /// How many hours ahead a reset or retry time may be. A later time can't be the reset and is taken as unknown:
-    /// stored, it would refuse every download until then, and nothing sent could correct it. AbuseIPDB's documented
-    /// reset is midnight US Eastern, so the time between two resets is 25 hours on the autumn clock change; the extra
-    /// hour is margin. A reset or a <c>Retry-After</c> date is measured from its own clock (the answer's <c>Date</c> when
-    /// the clock guard accepts it, else now), and a <c>Retry-After</c> delta from now. A stored reset is held to the same
-    /// bound again each time it is read, from the reading clock.
+    /// A later reset or retry time is taken as unknown: stored, it would refuse every download until then. A reset at
+    /// midnight US Eastern can be 25 hours away on the autumn clock change; the extra hour is margin.
     /// </summary>
     public const int MaxResetAheadHours = 26;
 
     /// <summary>
-    /// The free space a download needs on the data folder's disk, beyond the rolling list's current size, before it is
-    /// sent: the 16 MiB answer, the merge's journal and the list growing by it, with margin. With less, the download is
-    /// refused here, so none is spent on a list that couldn't take it.
+    /// Free space a download needs beyond the list's size: the 16 MiB answer, the merge's journal and the list's
+    /// growth, with margin. With less it is refused unsent, so none is spent on a list that can't take it.
     /// </summary>
     public const long MinFreeBytesForDownload = 64L * 1024 * 1024;
 }
 
 /// <summary>
-/// Why a check gave no score, or a blacklist download or list operation didn't complete. <see cref="None"/> means it
-/// did. <see cref="NoKey"/>: no key is saved, or the saved text is not a key. <see cref="KeyUnavailable"/>: a key is
-/// saved but can't be read now (a locked keychain or a denied prompt); it is kept. <see cref="NotPublic"/>: there is no
-/// public address to send: the query is not an address search, or its address is private, reserved or outside global
-/// unicast. <see cref="LimitReached"/>: refused here, with nothing sent, because no downloads are left until the
-/// result's retry time. <see cref="ListUnreadable"/>: <c>abuseipdb.db</c> isn't a database, is damaged, or isn't this
-/// application's list. <see cref="ListNewer"/>: it was written by a newer version. <see cref="StorageError"/>: it
-/// couldn't be read or written now. A list file the application can't use is left as it is.
-/// <see cref="ClockWrong"/>: the computer's clock is more than <see cref="AbuseIpDbLimits.MaxClockDifferenceHours"/>
-/// hours from AbuseIPDB's, so the downloaded list was not merged. <see cref="DiskNearlyFull"/>: refused here, with
-/// nothing written or sent, because the data folder's disk has less free space than
-/// <see cref="AbuseIpDbLimits.MinFreeBytesForDownload"/> beyond the list's size. <see cref="ClockBehind"/>: refused
-/// here, with nothing written, read or sent and nothing counted, because this computer's clock is more than
-/// <see cref="AbuseIpDbLimits.MaxClockDifferenceHours"/> hours behind the list's last download.
+/// <see cref="ClockWrong"/>: an answer's <c>Date</c> was too far from this clock: counted, not merged.
+/// <see cref="ClockBehind"/>: refused before sending, because this clock is too far behind the last download.
 /// </summary>
 public enum AbuseIpDbFailure
 {

@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed;
 
@@ -22,6 +23,14 @@ public sealed record SecretPrompt(string Title, string Body, string BoxName, str
         AbuseKeyAsk.Replace => new(AppText.AbuseKeySetTitle, AppText.AbuseKeySetBody, AppText.AbuseKeyBoxName, AppText.ShowKey, AppText.SaveKey),
         _ => new(AppText.AbuseKeyFirstTitle, AppText.AbuseKeyBody, AppText.AbuseKeyBoxName, AppText.ShowKey, AppText.SaveKey),
     };
+}
+
+/// <summary>How the configure dialog closed. Esc and the window's own close button are Close.</summary>
+public enum ConfigureFeedsChoice
+{
+    // First, so a dialog closed without a result, which gives the default value, reads as Close
+    Close,
+    OpenSettings,
 }
 
 /// <summary>What the large-range dialog shows. Built by the view model; the dialog returns the networks ticked.</summary>
@@ -71,4 +80,33 @@ public sealed class LargeRangeChoice : ObservableObject
             : AppText.Addresses(range.AddressCount);
         return new LargeRangeChoice(range.Network, size);
     }
+}
+
+/// <summary>What the rules dialog starts from: a class, so no generated ToString prints the location.</summary>
+public sealed class ModSecurityRulesPrompt
+{
+    public ModSecurityRulesPrompt(IReadOnlyList<string> fileNames, IReadOnlyList<int> ruleIds, string feedLabel,
+                                  string location, ModSecurityAction action)
+    {
+        ArgumentNullException.ThrowIfNull(fileNames);
+        ArgumentNullException.ThrowIfNull(ruleIds);
+        ArgumentNullException.ThrowIfNull(feedLabel);
+        ArgumentNullException.ThrowIfNull(location);
+        if (fileNames.Count != ruleIds.Count)
+        {
+            throw new ArgumentException("Each file needs one rule id.", nameof(ruleIds));
+        }
+
+        FileNames = [.. fileNames];
+        RuleIds = [.. ruleIds];
+        FeedLabel = feedLabel;
+        Location = location;
+        Action = action;
+    }
+
+    public IReadOnlyList<string> FileNames { get; }
+    public IReadOnlyList<int> RuleIds { get; }
+    public string FeedLabel { get; }
+    public string Location { get; }
+    public ModSecurityAction Action { get; }
 }

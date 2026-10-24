@@ -7,21 +7,13 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Core.Config;
 
 /// <summary>
-/// The owner of config.db, the one store for the settings, the feed exceptions and the AbuseIPDB download accounting.
-/// It opens the file under SQLite's exclusive lock and holds it until <see cref="Dispose"/>, so no other program can
-/// write it while the app runs. The file is classified in plain text before the key is read; then each of its three
-/// sections is opened with <see cref="ConfigSeal"/> and its value checked. The last committed values are kept in
-/// memory (<see cref="Snapshot"/>), and each save is one transaction that changes one section's row.
-/// <para>
-/// Nothing here opens config.db or a side file with System.IO while a connection to it is open: on macOS a failed
-/// same-process open of the locked file drops SQLite's locks for the whole process. Start fresh copies and deletes only
-/// when no connection is open. Traces carry fixed texts, SQLite error codes and exception types, never a path, a
-/// message from SQLite, the key, a blob or a value.
-/// </para>
+/// Holds config.db under SQLite's exclusive lock until <see cref="Dispose"/>. Nothing opens it or a side file with
+/// System.IO while connected: on macOS a failed same-process open of the locked file drops the process's SQLite locks.
 /// </summary>
 internal sealed class ConfigStore : IAbuseAccounting, IDisposable
 {
@@ -37,6 +29,10 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
 
     private const string SchemaVersionKey = "schema_version", FileIdKey = "file_id", CreatedKey = "created_utc",
         ImportedFromKey = "imported_from", ImportedKey = "imported_utc", OpenedKey = "opened_utc";
+
+    // A metadata value, not a fourth row, because older builds read a fourth row as a changed file and offer
+    // Start fresh
+    private const string RuleIdsKey = "modsecurity_rule_ids";
 
     private static readonly ConfigSection[] Sections = [ConfigSection.Settings, ConfigSection.Exceptions, ConfigSection.Accounting];
 
@@ -99,25 +95,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     internal Action? BeforeCommit { get; set; }
 
     /// <summary>
-    /// Opens config.db, importing settings.json and exceptions.json when it is missing or empty. <paramref name="store"/>
-    /// is non-null only for <see cref="ConfigOpenState.Opened"/>. The steps, which the comments below name:
-    /// <list type="number">
-    /// <item>With <paramref name="withoutOldExceptions"/>, exceptions.json is first moved to exceptions.unreadable.json,
-    /// so an empty list is imported.</item>
-    /// <item>With no config.db: when an earlier launch made one (the config_made marker or a *.migrated file is there),
-    /// it is <see cref="ConfigOpenState.Missing"/> whatever settings.json or exceptions.json say, and nothing is made or
-    /// imported; otherwise step 9.</item>
-    /// <item>The file is opened and the exclusive lock taken and held.</item>
-    /// <item>It is classified in plain text, the schema version first. An empty file follows step 2's rule on this
-    /// connection. The journal mode is set only on a file this version can use.</item>
-    /// <item>The key is read.</item>
-    /// <item>Exactly the three sections are opened with it.</item>
-    /// <item>Their values are read.</item>
-    /// <item>One real write; then the config_made marker is written when it is absent, and any settings.json or
-    /// exceptions.json is renamed to a free *.migrated name.</item>
-    /// <item>Create: the old files are read, a new key is saved, and the tables and sections are made in one
-    /// transaction; then step 8.</item>
-    /// </list>
+    /// Opens config.db, importing settings.json and exceptions.json when it is missing or empty and no earlier launch
+    /// made one. <paramref name="store"/> is non-null only for <see cref="ConfigOpenState.Opened"/>.
     /// </summary>
     internal static ConfigOpenState TryOpen(AppPaths paths, ConfigKeyStore keys, TimeProvider time,
                                             bool withoutOldExceptions, out ConfigStore? store)
@@ -127,13 +106,13 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         ArgumentNullException.ThrowIfNull(time);
         store = null;
 
-        // Step 1: before anything else, so the import below finds no exceptions file
+        // Before anything else, so the import below finds no exceptions file
         if (withoutOldExceptions && !SetOldExceptionsAside(paths))
             return ConfigOpenState.ExceptionsImportUnreadable;
 
         try
         {
-            // Step 2: File.Exists doesn't open the file
+            // File.Exists doesn't open the file
             if (!File.Exists(paths.ConfigPath))
             {
                 if (GoneSinceAnEarlierLaunch(paths))
@@ -141,7 +120,6 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
                 return ImportAndCreate(paths, keys, time, null, out store);
             }
 
-            // Step 3
             ConfigOpenState opened = OpenLocked(paths, out SqliteConnection? conn);
             if (conn is null)
                 return opened;
@@ -154,20 +132,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Replaces a config.db that is <see cref="ConfigOpenState.Newer"/>, <see cref="ConfigOpenState.Unreadable"/>,
-    /// <see cref="ConfigOpenState.KeyMismatch"/> or <see cref="ConfigOpenState.Missing"/> by a fresh one holding the
-    /// defaults, keeping a copy of the old file as config.unreadable.db (not for Missing, which has nothing to keep).
-    /// Any other <paramref name="failed"/> is returned as it is and nothing changes. First config.db is opened again, as
-    /// <see cref="TryOpen"/> opens it, because it may have changed since the launch stopped: when it opens now, that
-    /// store is the result and nothing is replaced, and any failure other than <paramref name="failed"/> is returned as a
-    /// launch would give it, with nothing replaced (with no evidence of an earlier launch, that open may import the old
-    /// files and save a new key, as a first launch does). Then the key is settled before anything is touched: it is
-    /// kept whenever it can still be read, a mismatch included, so the copy can still be opened with it, and a new one
-    /// is saved only when there is none or it can never be read; a key that can't be read or saved now gives
-    /// <see cref="ConfigOpenState.KeyUnavailable"/> or <see cref="ConfigOpenState.NoKeyStore"/> with every file as it
-    /// was. A new key, when one is made, is saved before the copy, so a copy or delete that then fails leaves the old
-    /// file beside a new key. Returns <paramref name="failed"/> itself when the copy or the delete of config.db failed (the
-    /// old file is then as it was). The config_made marker is never deleted.
+    /// Replaces a config.db that stopped the launch as Newer, Unreadable, KeyMismatch or Missing by one with the
+    /// defaults, keeping a copy. A failed copy or delete gives <paramref name="failed"/> back, the file as it was.
     /// </summary>
     internal static ConfigOpenState StartFresh(AppPaths paths, ConfigKeyStore keys, TimeProvider time,
                                                ConfigOpenState failed, out ConfigStore? store)
@@ -214,7 +180,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             if (conn is null)
                 return opened;
             // Opened came with the key
-            return Create(conn, paths, time, key!, new UserSettings(), ExceptionList.Empty, "", out store);
+            return Create(conn, paths, time, key!, new UserSettings { WriteFortigateFeeds = ShowsEarlierInstall(paths) },
+                          ExceptionList.Empty, "", out store);
         }
         catch (Exception ex) when (IsStorageFailure(ex))
         {
@@ -276,9 +243,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     // ----- Opening -----
 
     /// <summary>
-    /// Steps 4 to 8 on a connection that holds the lock: an empty file is created in place, under the lock already
-    /// held, unless step 2's rule makes it Missing; any other is checked. The connection is the caller's no longer: it is
-    /// disposed unless a store comes back.
+    /// Classifies the file under the lock already held: an empty one is imported in place unless an earlier launch made
+    /// it (Missing). The connection is the caller's no longer: it is disposed unless a store comes back.
     /// </summary>
     private static ConfigOpenState OpenOrImport(SqliteConnection conn, AppPaths paths, ConfigKeyStore keys, TimeProvider time,
                                                 out ConfigStore? store)
@@ -286,7 +252,6 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         store = null;
         try
         {
-            // Step 4
             FileKind kind = Classify(conn, out string? fileId);
             if (kind == FileKind.Empty)
             {
@@ -303,7 +268,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         }
     }
 
-    /// <summary>Steps 5 to 8 for a classified file that has tables. Disposes the connection unless a store comes back.</summary>
+    /// <summary>The key, the sections and the first write for a classified file that has tables. Disposes the
+    /// connection unless a store comes back.</summary>
     private static ConfigOpenState OpenExisting(SqliteConnection conn, FileKind kind, string? fileId, AppPaths paths,
                                                 ConfigKeyStore keys, TimeProvider time, out ConfigStore? store)
     {
@@ -319,11 +285,10 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
                     return ConfigOpenState.Unreadable;
             }
 
-            // The end of step 4: only a file this version can use is ever written
+            // Only after the classify, so a file this version can't use is never written
             if (!TrySetJournalMode(conn))
                 return ConfigOpenState.StorageError;
 
-            // Step 5
             switch (keys.TryLoad(out byte[]? key))
             {
                 case KeyState.Read:
@@ -338,13 +303,12 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
                     return ConfigOpenState.KeyMismatch;
             }
 
-            // Steps 6 and 7
             ConfigOpenState read = ReadSections(conn, seal, out ConfigSnapshot? snapshot);
             if (read != ConfigOpenState.Opened)
                 return read;
 
-            // Step 8
-            return Finish(conn, seal, snapshot!, paths, time, out store);
+            snapshot = snapshot! with { RuleIds = ReadRuleIds(conn, seal) };
+            return Finish(conn, seal, snapshot, paths, time, out store);
         }
         finally
         {
@@ -357,9 +321,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Step 9: reads the old settings.json and exceptions.json, saves a new key, then creates the file. With no
-    /// connection (no config.db) the file is opened only after the key is saved, and one that has tables by then is
-    /// checked from step 4 on. Disposes the connection unless a store comes back.
+    /// Imports the old files under a new key, saved before any table is made. A file another process gave tables in the
+    /// meantime is checked as an existing one. Disposes the connection unless a store comes back.
     /// </summary>
     private static ConfigOpenState ImportAndCreate(AppPaths paths, ConfigKeyStore keys, TimeProvider time,
                                                    SqliteConnection? conn, out ConfigStore? store)
@@ -371,7 +334,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             var importedFrom = new List<string>(2);
             if (File.Exists(paths.SettingsPath))
                 importedFrom.Add(Path.GetFileName(paths.SettingsPath));
-            UserSettings settings = new SettingsStore(paths.SettingsPath).Load();
+            UserSettings settings = new SettingsStore(paths.SettingsPath).Load() with { WriteFortigateFeeds = ShowsEarlierInstall(paths) };
 
             bool hadExceptions = File.Exists(paths.ExceptionsPath);
             ExceptionList exceptions = new ExceptionListStore(paths.ExceptionsPath).Load();
@@ -426,13 +389,14 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         ConfigSeal? seal = null;
         try
         {
-            // The end of step 4 for an empty file, and the fresh file of Start fresh
+            // Set only on a file known to be empty: one the classify found empty, or the new file Start fresh makes
+            // after deleting the old one
             if (!TrySetJournalMode(conn))
                 return ConfigOpenState.StorageError;
 
             string fileId = ConfigSeal.NewFileId();
             seal = new ConfigSeal(key, fileId);
-            var snapshot = new ConfigSnapshot(settings, exceptions, AbuseAccounting.Empty);
+            var snapshot = new ConfigSnapshot(settings, exceptions, AbuseAccounting.Empty, ModSecurityRuleIds.Empty);
             string now = Stamp(time);
 
             using (SqliteTransaction tx = conn.BeginTransaction())
@@ -470,9 +434,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Step 8: one real write, because a file in a folder that can't be written passes every read; then the usual busy
-    /// timeout, the store, the config_made marker when it is absent, and the old files renamed to a free *.migrated
-    /// name. A failed marker write or rename is traced only.
+    /// One real write first, because a file in a folder that can't be written passes every read. A failed marker write
+    /// or rename is traced only.
     /// </summary>
     private static ConfigOpenState Finish(SqliteConnection conn, ConfigSeal seal, ConfigSnapshot snapshot, AppPaths paths,
                                           TimeProvider time, out ConfigStore? store)
@@ -496,11 +459,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Opens the file, takes the exclusive lock before anything reads it, and keeps it until the connection is
-    /// disposed. <paramref name="conn"/> is null for any result but <see cref="ConfigOpenState.Opened"/>. A SQLite or
-    /// IO failure is thrown, with the connection disposed: a half-opened exclusive-mode connection keeps a SHARED lock,
-    /// and every later attempt from this process would get BUSY. The journal mode isn't set here, because the file
-    /// isn't classified yet (<see cref="TrySetJournalMode"/>).
+    /// A failure disposes the connection before it is thrown: a half-opened exclusive-mode connection keeps a SHARED
+    /// lock, and every later attempt from this process gets BUSY. No journal mode yet: the file isn't classified.
     /// </summary>
     private static ConfigOpenState OpenLocked(AppPaths paths, out SqliteConnection? conn)
     {
@@ -555,11 +515,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Step 2's rule: config.db is gone (or empty) though an earlier launch made one. An earlier launch that opened it
-    /// left the config_made marker, or a *.migrated file when it imported. Then a settings.json or exceptions.json
-    /// beside it doesn't count: it may be one an older version wrote since, or one a rename missed, and importing it
-    /// would start with no feed exceptions. The config key isn't evidence, because it is saved before the file is made.
-    /// Only those names are checked, never config.db itself.
+    /// Evidence an earlier launch made config.db: the marker or a *.migrated name, never config.db itself, which the
+    /// connection may hold. The config key isn't evidence, because it is saved before the file is made.
     /// </summary>
     private static bool GoneSinceAnEarlierLaunch(AppPaths paths)
     {
@@ -571,16 +528,24 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Any file an earlier install leaves, never config.db or its side files, which the connection may hold. The lock and
+    /// the config key aren't evidence, because a first launch makes them before config.db.
+    /// </summary>
+    private static bool ShowsEarlierInstall(AppPaths paths) =>
+        new[]
+        {
+            paths.DatabasePath, paths.NextDatabasePath, paths.DownloadPath, paths.TokenPath, paths.LegacyTokenPath,
+            paths.SettingsPath, paths.ExceptionsPath, paths.UnreadableExceptionsPath, paths.ConfigMadePath,
+            paths.UnreadableConfigPath, paths.AbuseIpDbKeyPath, paths.AzureServiceTagsPath,
+            paths.AzureServiceTagsSourcePath, paths.AwsIpRangesPath, paths.AwsIpRangesSourcePath,
+        }.Concat(MigratedNames(paths.SettingsPath)).Concat(MigratedNames(paths.ExceptionsPath)).Any(File.Exists);
+
     private enum FileKind { Empty, Current, Newer, Unreadable }
 
     /// <summary>
-    /// Step 4, in plain text. No object at all is empty. Otherwise the version comes first: <c>metadata</c> with exactly
-    /// its columns, declared types and primary key, holding text only, and an integer schema version (above
-    /// <see cref="SchemaVersion"/> is newer, and nothing more is read, so a later layout is never called damaged). At
-    /// this version the file must hold exactly the objects <see cref="Create"/> makes (a trigger or view could change
-    /// what a save writes), each table's stored text exactly the statement Create runs (a constraint added outside the
-    /// app would make every save fail) and no text for the indexes, <c>sections</c> with its columns, one <c>ok</c>
-    /// from <c>quick_check</c> and a file id.
+    /// In plain text, the version first, so a later layout is never called damaged. Exactly Create's objects and text,
+    /// because a trigger or view could change what a save writes and an added constraint could make every save fail.
     /// </summary>
     private static FileKind Classify(SqliteConnection conn, out string? fileId)
     {
@@ -643,9 +608,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Steps 6 and 7: exactly the three rows, each opened with the key, then each value read. A row missing, extra,
-    /// not a blob or not opening is a change made outside the app (<see cref="ConfigOpenState.KeyMismatch"/>); a
-    /// value that opens but can't be read is <see cref="ConfigOpenState.Unreadable"/>.
+    /// A row missing, extra, not a blob or not opening is a change made outside the app
+    /// (<see cref="ConfigOpenState.KeyMismatch"/>); a value that opens but can't be read is Unreadable.
     /// </summary>
     private static ConfigOpenState ReadSections(SqliteConnection conn, ConfigSeal seal, out ConfigSnapshot? snapshot)
     {
@@ -701,7 +665,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             return ConfigOpenState.Unreadable;
         }
 
-        snapshot = new ConfigSnapshot(SettingsStore.Normalise(settings), exceptions, accounting);
+        snapshot = new ConfigSnapshot(SettingsStore.Normalise(settings), exceptions, accounting, ModSecurityRuleIds.Empty);
         return ConfigOpenState.Opened;
     }
 
@@ -714,13 +678,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     };
 
     /// <summary>
-    /// Start fresh's key, settled before any file is touched, whatever stopped the launch. A key that reads is kept, even
-    /// after a mismatch: a mismatch is most often a section changed or a row missing, which the key may still open in the
-    /// copy kept as config.unreadable.db, and a new key would make that copy and every backup unreadable for good. Keeping
-    /// it loses nothing, because the new file has a new random file id and every section is sealed under a fresh nonce
-    /// with the file id bound in. A new key is saved only when there is none or it can never be read. A key that can't be
-    /// read now, or a store that can't keep one, is the failure. <see cref="ConfigOpenState.Opened"/> with the key, or the
-    /// failure with <paramref name="key"/> null.
+    /// A key that reads is kept, even after a mismatch: a new one would make the copy kept as config.unreadable.db and
+    /// every backup unreadable for good. The new file's random file id and fresh nonces mean keeping it loses nothing.
     /// </summary>
     private static ConfigOpenState SettleFreshKey(ConfigKeyStore keys, out byte[]? key)
     {
@@ -750,9 +709,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     // ----- Saving -----
 
     /// <summary>
-    /// Seals the section's new plaintext and replaces its row in one transaction that must change exactly one row,
-    /// then swaps the snapshot. The change is worked out under the gate from the snapshot then current. False, with
-    /// the snapshot unchanged, when the write fails or the store is disposed.
+    /// The change is worked out under the gate from the snapshot then current, and the snapshot swapped only after the
+    /// commit. False, with the snapshot unchanged, when the write fails or the store is disposed.
     /// </summary>
     private bool Save(ConfigSection section, string operation, Func<ConfigSnapshot, (byte[] Plaintext, ConfigSnapshot Next)> change)
     {
@@ -792,6 +750,67 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         }
     }
 
+    /// <summary>
+    /// The kept id for each name, and a new one above every kept id for a new name, saved before it is returned.
+    /// Nothing is written when no name is new or on a failure.
+    /// </summary>
+    internal ModSecurityRuleIdsResult AssignRuleIds(IReadOnlyList<string> fileNames, int firstId)
+    {
+        ArgumentNullException.ThrowIfNull(fileNames);
+        ArgumentOutOfRangeException.ThrowIfLessThan(firstId, ModSecurityLimits.RuleIdMin);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(firstId, ModSecurityLimits.RuleIdMax);
+
+        lock (_gate)
+        {
+            if (_disposed)
+                return new ModSecurityRuleIdsResult(ModSecurityRuleIdsFailure.StorageError, []);
+
+            ModSecurityRuleIds current = _snapshot.RuleIds;
+            (ModSecurityRuleIdsResult result, ModSecurityRuleIds next) = current.Assign(fileNames, firstId);
+            if (result.Failure != ModSecurityRuleIdsFailure.None || ReferenceEquals(next, current))
+                return result;
+
+            byte[] blob = _seal.Seal(ConfigSection.ModSecurityRuleIds, SchemaVersion, next.ToJson());
+            string value = Convert.ToBase64String(blob);
+            try
+            {
+                using SqliteTransaction tx = _conn.BeginTransaction();
+                SetMetadata(_conn, tx, RuleIdsKey, value);
+                BeforeCommit?.Invoke();
+                tx.Commit();
+            }
+            catch (Exception ex) when (IsStorageFailure(ex))
+            {
+                StateOf(ex, "save the ModSecurity rule ids");
+                return new ModSecurityRuleIdsResult(ModSecurityRuleIdsFailure.StorageError, []);
+            }
+
+            _snapshot = _snapshot with { RuleIds = next };
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// A value this build can't open or fully read is left as it is and gives Unavailable; the launch goes on.
+    /// </summary>
+    private static ModSecurityRuleIds ReadRuleIds(SqliteConnection conn, ConfigSeal seal)
+    {
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = $key;";
+        cmd.Parameters.Add("$key", SqliteType.Text).Value = RuleIdsKey;
+        if (cmd.ExecuteScalar() is not string value)
+            return ModSecurityRuleIds.Empty;
+
+        var blob = new byte[value.Length * 3 / 4 + 3];
+        if (Convert.TryFromBase64String(value, blob, out int length)
+            && seal.TryOpen(ConfigSection.ModSecurityRuleIds, SchemaVersion, blob.AsSpan(0, length), out byte[]? json)
+            && ModSecurityRuleIds.TryRead(json) is { } ruleIds)
+            return ruleIds;
+
+        Trace.TraceWarning("config.db: its ModSecurity rule ids can't be read, so they are left as they are.");
+        return ModSecurityRuleIds.Unavailable;
+    }
+
     private static byte[] Plaintext(ConfigSection section, ConfigSnapshot snapshot) => section switch
     {
         ConfigSection.Settings => SettingsStore.ToJson(snapshot.Settings),
@@ -802,11 +821,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
 
     // ----- The accounting section -----
 
-    /// <summary>
-    /// The accounting in JSON web casing:
-    /// <c>{"rateLimit":{"limit":5,"remaining":4,"resetAt":1792195200},"downloadsDay":"2026-10-19","downloadsCount":1}</c>.
-    /// <c>rateLimit</c> is null when no limit is stored, and <c>resetAt</c> is in Unix seconds.
-    /// </summary>
+    /// <summary>Web casing; <c>resetAt</c> is Unix seconds and <c>rateLimit</c> null when no limit is stored.</summary>
     private static byte[] AccountingToJson(AbuseAccounting accounting)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -843,9 +858,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// Reads the accounting. A bad field reads as absent: a limit with no <c>remaining</c> is no limit, a
-    /// <c>resetAt</c> outside <see cref="DateTimeOffset"/>'s range is null, a day that isn't <c>yyyy-MM-dd</c> is
-    /// none, and with no day, or a negative count, the count is 0. False when the JSON doesn't parse or isn't an object.
+    /// A bad field reads as absent, not as a damaged file (a limit with no <c>remaining</c> is no limit). False only
+    /// when the JSON doesn't parse or isn't an object.
     /// </summary>
     private static bool TryReadAccounting(ReadOnlySpan<byte> json, [NotNullWhen(true)] out AbuseAccounting? accounting)
     {
@@ -948,9 +962,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     internal const int MigratedNameCount = 99;
 
     /// <summary>
-    /// Renames an imported file to the first free *.migrated name. An earlier import's file is never replaced, and none
-    /// is deleted. With every name taken the file is left where it is and traced; it is never imported again, because
-    /// config.db exists from here on.
+    /// An earlier import's file is never replaced, and none is deleted. With every name taken the file is left and
+    /// traced; it is never imported again, because config.db exists from here on.
     /// </summary>
     private static void RenameMigrated(string path)
     {
@@ -983,11 +996,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     }
 
     /// <summary>
-    /// With no connection open: copies config.db to config.unreadable.db through a .tmp file and a move,
-    /// and a journal beside it as config.unreadable.db-journal the same way, so a hot journal stays with its database.
-    /// An older copy's journal is deleted before the new copy is moved into place, whether or not there is a journal
-    /// now, so a stop between the two moves can't pair the new copy with it and roll it back into the new copy. False,
-    /// with the .tmp files deleted, on failure.
+    /// The journal is copied with config.db, so a hot one stays with its database. An older copy's journal is deleted
+    /// first, even with no journal now, so a stop between the two moves can't roll it back into the new copy.
     /// </summary>
     private static bool KeepCopy(AppPaths paths)
     {
@@ -1124,11 +1134,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     private static bool IsStorageFailure(Exception ex) =>
         ex is SqliteException or IOException or UnauthorizedAccessException;
 
-    /// <summary>
-    /// BUSY is <see cref="ConfigOpenState.Locked"/>; NOTADB and CORRUPT are <see cref="ConfigOpenState.Unreadable"/>;
-    /// CANTOPEN, READONLY (READONLY_DIRECTORY included), any other SQLite error and an IO failure are a
-    /// <see cref="ConfigOpenState.StorageError"/>. The trace names the error code or type, never the path or a message.
-    /// </summary>
+    /// <summary>The trace names the error code or type, never the path or a message.</summary>
     private static ConfigOpenState StateOf(Exception ex, string operation)
     {
         if (ex is SqliteException sqlite)

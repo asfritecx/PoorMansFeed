@@ -1,20 +1,19 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed;
 
 /// <summary>
-/// The editable copy of <see cref="UserSettings"/> behind the Settings page's options. It holds no Avalonia types, so its rules
-/// are tested without a window. <see cref="ToSettings"/> returns the record with the edits applied. The settings are
-/// invalid while a prefix the large-range check uses is blank, while Fortigate is on with no address family, while the
-/// AbuseIPDB keep days are blank, or while a number box in use holds a fraction. <see cref="Load"/> takes saved settings again,
-/// and <see cref="HasChanges"/> says whether the form differs from them.
+/// The editable copy of <see cref="UserSettings"/> behind the Settings page's options. It holds no Avalonia types,
+/// so its rules are tested without a window.
 /// </summary>
 public sealed class SettingsFormModel : ObservableObject
 {
     private UserSettings _current;
     private UserSettings _baseline;
     private readonly string _defaultFolder;
+    private readonly TimeProvider _time;
 
     private string _exportFolder;
     private bool _ipv6Enabled;
@@ -26,10 +25,16 @@ public sealed class SettingsFormModel : ObservableObject
     private decimal? _ipv4MinPrefix;
     private decimal? _ipv6MinPrefix;
     private decimal? _abuseIpDbKeepDays;
+    private bool _writeFortigateFeeds;
+    private bool _writeModSecurityLists;
+    private ModSecurityAction _modSecurityAction;
+    private decimal? _firstRuleId;
+    private string _modSecurityLocation = "";
 
-    public SettingsFormModel(UserSettings current, string defaultExportFolder)
+    public SettingsFormModel(UserSettings current, string defaultExportFolder, TimeProvider? time = null)
     {
         _defaultFolder = defaultExportFolder;
+        _time = time ?? TimeProvider.System;
         _current = current;
         _baseline = current;
         _exportFolder = "";
@@ -51,8 +56,14 @@ public sealed class SettingsFormModel : ObservableObject
         _ipv4MinPrefix = current.IPv4MinPrefix;
         _ipv6MinPrefix = current.IPv6MinPrefix;
         _abuseIpDbKeepDays = current.AbuseIpDbKeepDays;
+        _writeFortigateFeeds = current.WriteFortigateFeeds;
+        _writeModSecurityLists = current.WriteModSecurityLists;
+        _modSecurityAction = current.ModSecurityAction;
+        _firstRuleId = current.ModSecurityFirstRuleId;
+        _modSecurityLocation = current.ModSecurityLocation ?? "";
         // What an unedited form saves, so a saved folder that is the default's path doesn't count as a change
         _baseline = ToSettings();
+        UpdateLocationNote();
         OnPropertyChanged(string.Empty);
     }
 
@@ -181,69 +192,175 @@ public sealed class SettingsFormModel : ObservableObject
         }
     }
 
+    public bool WriteFortigateFeeds
+    {
+        get => _writeFortigateFeeds;
+        set
+        {
+            if (SetProperty(ref _writeFortigateFeeds, value))
+            {
+                OnPropertyChanged(nameof(HasChanges));
+            }
+        }
+    }
+
+    public bool WriteModSecurityLists
+    {
+        get => _writeModSecurityLists;
+        set
+        {
+            if (SetProperty(ref _writeModSecurityLists, value))
+            {
+                UpdateLocationNote();
+                RevalidateInputs();
+            }
+        }
+    }
+
+    /// <summary>The actions are radio buttons, so only a press that ticks one acts; unticking does nothing.</summary>
+    public bool IsLogOnly
+    {
+        get => _modSecurityAction == ModSecurityAction.LogOnly;
+        set
+        {
+            if (value)
+            {
+                ChooseAction(ModSecurityAction.LogOnly);
+            }
+        }
+    }
+
+    public bool IsDeny
+    {
+        get => _modSecurityAction == ModSecurityAction.Deny;
+        set
+        {
+            if (value)
+            {
+                ChooseAction(ModSecurityAction.Deny);
+            }
+        }
+    }
+
+    public bool IsClose
+    {
+        get => _modSecurityAction == ModSecurityAction.Close;
+        set
+        {
+            if (value)
+            {
+                ChooseAction(ModSecurityAction.Close);
+            }
+        }
+    }
+
+    /// <summary>The rule id new ModSecurity lists start from. Null while the field is blank.</summary>
+    public decimal? ModSecurityFirstRuleId
+    {
+        get => _firstRuleId;
+        set
+        {
+            if (SetProperty(ref _firstRuleId, value))
+            {
+                RevalidateInputs();
+            }
+        }
+    }
+
+    /// <summary>The ModSecurity location as typed; it is trimmed only when checked and saved.</summary>
+    public string ModSecurityLocation
+    {
+        get => _modSecurityLocation;
+        set
+        {
+            if (SetProperty(ref _modSecurityLocation, value ?? ""))
+            {
+                UpdateLocationNote();
+                RevalidateInputs();
+            }
+        }
+    }
+
+    public bool CanEditModSecurity => _writeModSecurityLists;
+
+    /// <summary>The note under the location box, its own object, so a clock change is never a form edit.</summary>
+    public LocationNote LocationNote { get; } = new();
+
+    /// <summary>Reads the clock again for the expiry; the note raises only what changed.</summary>
+    public void RefreshExpiry() => UpdateLocationNote();
+
     /// <summary>The Fortigate IPv6 box can be changed only while Fortigate is on and IPv6 is on.</summary>
     public bool CanEditFortigateIPv6 => _fortigateEnabled && _ipv6Enabled;
 
     /// <summary>The IPv6 prefix can be changed only while the large-range check is on and IPv6 is on.</summary>
     public bool CanEditIPv6Prefix => _largeRangeCheckEnabled && _ipv6Enabled;
 
-    /// <summary>False when Save must be disabled: a blank prefix while the large-range check is on, Fortigate on with no usable address family, or blank keep days.</summary>
+    /// <summary>False when Save must be disabled: <see cref="ValidationText"/> names a problem.</summary>
     public bool IsValid => ValidationText.Length == 0;
 
     /// <summary>
-    /// True when Save would change the saved settings. An invalid form always counts, because a saved value is never
-    /// blank or a fraction.
+    /// True when Save would change the saved settings, or the form has a problem: a saved value is never blank or a
+    /// fraction. A saved location this build refuses counts only once the box no longer holds it.
     /// </summary>
-    public bool HasChanges => !IsValid || ToSettings() != _baseline;
+    public bool HasChanges => Problem(exemptSavedLocation: true).Length > 0 || ToSettings() != _baseline;
 
     /// <summary>
     /// The message for the first problem found, or empty when the settings are valid. A blank or a fraction counts only
     /// in a box in use, and the whole-number rule comes after every other rule.
     /// </summary>
-    public string ValidationText
+    public string ValidationText => Problem(exemptSavedLocation: false);
+
+    private string Problem(bool exemptSavedLocation)
     {
-        get
+        // A blank prefix matters only while the check uses it; with the check off the saved prefixes are kept.
+        // The IPv6 prefix is not used while IPv6 is off, so a blank one is not a problem then.
+        if (_largeRangeCheckEnabled && (_ipv4MinPrefix is null || (_ipv6Enabled && _ipv6MinPrefix is null)))
         {
-            // A blank prefix matters only while the check uses it; with the check off the saved prefixes are kept.
-            // The IPv6 prefix is not used while IPv6 is off, so a blank one is not a problem then.
-            if (_largeRangeCheckEnabled && (_ipv4MinPrefix is null || (_ipv6Enabled && _ipv6MinPrefix is null)))
-            {
-                return AppText.EnterBothPrefixes;
-            }
-
-            // An IPv6 box that is ticked but switched off by IPv6 is not an address family
-            if (_fortigateEnabled && !_fortigateIncludeIPv4 && !EffectiveFortigateIPv6)
-            {
-                return AppText.ChooseAddressFamily;
-            }
-
-            if (_abuseIpDbKeepDays is null)
-            {
-                return AppText.EnterKeepDays;
-            }
-
-            // A box shows a fraction rounded, so the value saved would not be the one shown. Only a box in use counts:
-            // the IPv4 prefix while the check is on, the IPv6 prefix while the check and IPv6 are on, and the keep days
-            // always. A box not in use keeps its saved value instead (ToSettings).
-            if ((_largeRangeCheckEnabled && (IsFraction(_ipv4MinPrefix) || (_ipv6Enabled && IsFraction(_ipv6MinPrefix))))
-                || IsFraction(_abuseIpDbKeepDays))
-            {
-                return AppText.WholeNumberRequired;
-            }
-
-            return "";
+            return AppText.EnterBothPrefixes;
         }
+
+        // An IPv6 box that is ticked but switched off by IPv6 is not an address family
+        if (_fortigateEnabled && !_fortigateIncludeIPv4 && !EffectiveFortigateIPv6)
+        {
+            return AppText.ChooseAddressFamily;
+        }
+
+        if (_abuseIpDbKeepDays is null)
+        {
+            return AppText.EnterKeepDays;
+        }
+
+        if (_writeModSecurityLists && _firstRuleId is null)
+        {
+            return AppText.EnterFirstRuleId;
+        }
+
+        string location = _modSecurityLocation.Trim();
+        bool savedLocation = string.Equals(location, SavedLocation, StringComparison.Ordinal);
+        if (_writeModSecurityLists && AppText.ModSecurityLocationIsRefused(location)
+            && !(exemptSavedLocation && savedLocation))
+        {
+            return AppText.FixModSecurityLocation;
+        }
+
+        // A box shows a fraction rounded, so the value saved would not be the one shown. Only a box in use counts;
+        // a box not in use keeps its saved value instead (ToSettings).
+        if ((_largeRangeCheckEnabled && (IsFraction(_ipv4MinPrefix) || (_ipv6Enabled && IsFraction(_ipv6MinPrefix))))
+            || IsFraction(_abuseIpDbKeepDays)
+            || (_writeModSecurityLists && IsFraction(_firstRuleId)))
+        {
+            return AppText.WholeNumberRequired;
+        }
+
+        return "";
     }
 
     /// <summary>Goes back to the default folder, which is saved as an empty value.</summary>
     public void UseDefaultFolder() => ExportFolder = _defaultFolder;
 
     /// <summary>
-    /// The edited settings. The export folder is saved as empty when it is the default, so a later change to the
-    /// default still applies. A number box that is blank or holds a fraction keeps the saved value. That can happen only
-    /// in a box not in use (the IPv4 prefix while the large-range check is off, the IPv6 prefix while the check or IPv6
-    /// is off), because ValidationText refuses a blank or a fraction in a box in use. A whole number is saved whether
-    /// the box is in use or not. The store clamps the result to its range.
+    /// The default export folder is saved as empty, so a later change to the default still applies. A blank or a
+    /// fraction keeps the saved value; ValidationText allows one only in a box not in use.
     /// </summary>
     public UserSettings ToSettings() => _current with
     {
@@ -257,7 +374,16 @@ public sealed class SettingsFormModel : ObservableObject
         IPv4MinPrefix = WholeOrSaved(_ipv4MinPrefix, _current.IPv4MinPrefix),
         IPv6MinPrefix = WholeOrSaved(_ipv6MinPrefix, _current.IPv6MinPrefix),
         AbuseIpDbKeepDays = WholeOrSaved(_abuseIpDbKeepDays, _current.AbuseIpDbKeepDays),
+        WriteFortigateFeeds = _writeFortigateFeeds,
+        WriteModSecurityLists = _writeModSecurityLists,
+        ModSecurityAction = _modSecurityAction,
+        ModSecurityFirstRuleId = WholeOrSaved(_firstRuleId, _current.ModSecurityFirstRuleId),
+        ModSecurityLocation = AppText.ModSecurityLocationIsRefused(_modSecurityLocation)
+            ? SavedLocation
+            : _modSecurityLocation.Trim(),
     };
+
+    private string SavedLocation => (_current.ModSecurityLocation ?? "").Trim();
 
     // A blank box or a fraction is never saved, not even truncated: the saved value stays
     private static int WholeOrSaved(decimal? value, int saved) => value is { } v && !IsFraction(v) ? (int)v : saved;
@@ -267,12 +393,87 @@ public sealed class SettingsFormModel : ObservableObject
     // The Fortigate IPv6 box counts only while IPv6 is on
     private bool EffectiveFortigateIPv6 => _ipv6Enabled && _fortigateIncludeIPv6;
 
+    private void ChooseAction(ModSecurityAction action)
+    {
+        if (_modSecurityAction == action)
+        {
+            return;
+        }
+
+        _modSecurityAction = action;
+        OnPropertyChanged(nameof(IsLogOnly));
+        OnPropertyChanged(nameof(IsDeny));
+        OnPropertyChanged(nameof(IsClose));
+        OnPropertyChanged(nameof(HasChanges));
+    }
+
+    private void UpdateLocationNote()
+    {
+        ModSecurityLocationNote note = AppText.ModSecurityLocationNoteFor(_modSecurityLocation, _time.GetUtcNow());
+        bool error = note.IsRefused || note.Nearness == SasExpiryNearness.Passed;
+        bool caution = note.Nearness == SasExpiryNearness.Soon;
+        // An unticked location is never used, so its note is shown without a tone
+        LocationNote.Set(note.Text, error && _writeModSecurityLists, caution && _writeModSecurityLists);
+    }
+
     private void RevalidateInputs()
     {
         OnPropertyChanged(nameof(IsValid));
         OnPropertyChanged(nameof(ValidationText));
         OnPropertyChanged(nameof(CanEditFortigateIPv6));
         OnPropertyChanged(nameof(CanEditIPv6Prefix));
+        OnPropertyChanged(nameof(CanEditModSecurity));
         OnPropertyChanged(nameof(HasChanges));
+    }
+}
+
+/// <summary>The line under the ModSecurity location box: why it is refused, or when its SAS expires.</summary>
+public sealed class LocationNote : ObservableObject
+{
+    private string _text = "";
+    private bool _isError;
+    private bool _isCaution;
+
+    /// <summary>Empty when there is no note.</summary>
+    public string Text => _text;
+
+    public bool HasNote => _text.Length > 0;
+
+    /// <summary>A refused location, or a SAS already expired, while ModSecurity is ticked.</summary>
+    public bool IsError => _isError;
+
+    /// <summary>A SAS that expires within the warning days, while ModSecurity is ticked.</summary>
+    public bool IsCaution => _isCaution;
+
+    /// <summary>Takes the note's new state whole, then raises each property that changed.</summary>
+    internal void Set(string text, bool isError, bool isCaution)
+    {
+        bool hadNote = HasNote;
+        bool textChanged = _text != text;
+        bool errorChanged = _isError != isError;
+        bool cautionChanged = _isCaution != isCaution;
+        _text = text;
+        _isError = isError;
+        _isCaution = isCaution;
+
+        if (textChanged)
+        {
+            OnPropertyChanged(nameof(Text));
+        }
+
+        if (hadNote != HasNote)
+        {
+            OnPropertyChanged(nameof(HasNote));
+        }
+
+        if (errorChanged)
+        {
+            OnPropertyChanged(nameof(IsError));
+        }
+
+        if (cautionChanged)
+        {
+            OnPropertyChanged(nameof(IsCaution));
+        }
     }
 }

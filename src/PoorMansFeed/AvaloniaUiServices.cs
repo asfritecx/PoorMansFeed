@@ -6,8 +6,10 @@ using GraphiteUi;
 
 namespace PoorMansFeed;
 
-internal sealed class AvaloniaUiServices(Window owner) : IUiServices
+internal sealed class AvaloniaUiServices(Window owner, TimeProvider? time = null) : IUiServices
 {
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+
     public async Task<bool> ConfirmAsync(string title, string message, string confirmText)
     {
         var dialog = new ConfirmationDialog(title, message, confirmText);
@@ -114,5 +116,26 @@ internal sealed class AvaloniaUiServices(Window owner) : IUiServices
         // Copy goes through the same clipboard path as Lookup's Copy
         var dialog = new NewAddressesDialog(prompt, CopyTextAsync, OpenWebPageAsync);
         await dialog.ShowDialog(owner);
+    }
+
+    public async Task ShowModSecurityRulesAsync(ModSecurityRulesPrompt prompt)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+        var dialog = new ModSecurityRulesDialog(new ModSecurityRulesModel(prompt, _time, CopyTextAsync));
+        await dialog.ShowDialog(owner);
+    }
+
+    public async Task<ConfigureFeedsChoice> AskToConfigureFeedsAsync()
+    {
+        var dialog = new ConfigureFeedsDialog();
+        return await dialog.ShowDialog<ConfigureFeedsChoice>(owner);
+    }
+
+    public void ShowSettingsPage()
+    {
+        if (owner is MainWindow main)
+        {
+            main.ShowSettingsPage();
+        }
     }
 }

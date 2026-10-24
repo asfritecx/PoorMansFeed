@@ -8,9 +8,8 @@
     <!-- "Default" follows the system light/dark setting; the Graphite theme defines both -->
     <Application.Styles>
         <FluentTheme>
-            <!-- Graphite's accent and primary text, fixed so the accent does not follow the macOS highlight colour and the
-                 colours Fluent derives at load (focus ring, control text) match. The accent shades and the Fluent keys
-                 Graphite changes are pinned in GraphiteUi/Theme.axaml. -->
+            <!-- Graphite's accent and primary text, fixed so the accent does not follow the macOS highlight colour
+                 and the colours Fluent derives at load (focus ring, control text) match. -->
             <FluentTheme.Palettes>
                 <ColorPaletteResources x:Key="Light" Accent="#1767D0" BaseHigh="#16191E" />
                 <ColorPaletteResources x:Key="Dark" Accent="#7AB4FF" BaseHigh="#F2F4F7" />

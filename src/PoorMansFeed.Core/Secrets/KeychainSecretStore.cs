@@ -5,11 +5,8 @@ using Microsoft.Identity.Client.Extensions.Msal;
 namespace PoorMansFeed.Core.Secrets;
 
 /// <summary>
-/// macOS: the secret as a generic password in the user's login Keychain, through the Keychain storage of the MSAL
-/// extensions (Microsoft.Identity.Client.Extensions.Msal). The Keychain encrypts it with the login keychain's key, and
-/// an app other than the one that saved it has to be allowed by the user first. The file at the given path is only a
-/// marker: it is empty, exists while a secret is saved, and lets Exists answer without asking the Keychain, which can
-/// prompt.
+/// macOS: the secret as a generic password in the login Keychain, through MSAL's Keychain storage. The file at the
+/// path is only an empty marker, so Exists answers without asking the Keychain, which can prompt.
 /// </summary>
 [SupportedOSPlatform("macos")]
 internal sealed class KeychainSecretStore : ISecretStore

@@ -4,9 +4,8 @@ using System.Security.Cryptography;
 namespace PoorMansFeed.Core.Secrets;
 
 /// <summary>
-/// Windows: the secret protected with DPAPI for the current user (ProtectedData, CurrentUser scope), in one file. Only
-/// the same Windows account can unprotect it. No extra entropy is passed: a constant in the source would add nothing,
-/// because anyone able to read the source could pass it too.
+/// Windows: the secret protected with DPAPI for the current user, in one file. No extra entropy: a constant in the
+/// source adds nothing, because anyone who can read the source can pass it too.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal sealed class DpapiSecretStore(string path) : ISecretStore

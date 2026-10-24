@@ -6,8 +6,7 @@ using PoorMansFeed.Core.Secrets;
 namespace PoorMansFeed.Tests;
 
 /// <summary>
-/// DPAPI exists only on Windows, so these run there and are skipped elsewhere. Each test uses its own file: DPAPI keys
-/// belong to the Windows account, so nothing here reaches the app's saved token. The platform attribute is for the
+/// Each test uses its own file, so nothing here reaches the app's saved token. The platform attribute is for the
 /// analyzer, which doesn't follow the skip guard into a lambda; the guard is what skips the tests elsewhere.
 /// </summary>
 [SupportedOSPlatform("windows")]

@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:PoorMansFeed"
+             x:Class="PoorMansFeed.FeedTypesSection"
+             x:DataType="vm:SettingsPageViewModel">
+  <StackPanel Spacing="8">
+    <TextBlock Text="{x:Static vm:AppText.FeedTypesHeader}" Classes="body-strong" />
+    <TextBlock Text="{x:Static vm:AppText.FeedTypesCaption}" Classes="caption" TextWrapping="Wrap" />
+    <CheckBox x:Name="WriteFortigateFeedsBox" Content="{x:Static vm:AppText.WriteFortigateFeedsLabel}"
+              IsChecked="{Binding Settings.WriteFortigateFeeds}" />
+    <CheckBox x:Name="WriteModSecurityListsBox" Content="{x:Static vm:AppText.WriteModSecurityListsLabel}"
+              IsChecked="{Binding Settings.WriteModSecurityLists}" />
+
+    <!-- The ModSecurity defaults: each input is off while ModSecurity is unticked, and the texts stay readable -->
+    <StackPanel Spacing="8" Margin="24,0,0,0">
+      <TextBlock Text="{x:Static vm:AppText.ModSecurityLocationLabel}" TextWrapping="Wrap" />
+      <!-- Twice the longest location, so a long paste is kept long enough to be refused, not cut to a valid link -->
+      <TextBox x:Name="ModSecurityLocationBox" Classes="mono" MaxLength="4096"
+               PlaceholderText="{x:Static vm:AppText.ModSecurityLocationPlaceholder}"
+               Text="{Binding Settings.ModSecurityLocation}" IsEnabled="{Binding Settings.CanEditModSecurity}"
+               AutomationProperties.Name="{x:Static vm:AppText.ModSecurityLocationName}" />
+      <!-- As tall as the longest note at the smallest width, so the page doesn't move as the note changes -->
+      <TextBlock x:Name="ModSecurityLocationNote" Classes="small secondary" Height="80" TextWrapping="Wrap"
+                 Text="{Binding Settings.LocationNote.Text}"
+                 Classes.critical="{Binding Settings.LocationNote.IsError}"
+                 Classes.caution="{Binding Settings.LocationNote.IsCaution}"
+                 Classes.placeholder="{Binding !Settings.LocationNote.HasNote}"
+                 AutomationProperties.LiveSetting="Polite" />
+      <TextBlock x:Name="ModSecurityLocationWarning" Text="{x:Static vm:AppText.ModSecurityLocationWarning}"
+                 Classes="caption" TextWrapping="Wrap" />
+      <TextBlock Text="{x:Static vm:AppText.ModSecurityActionLabel}" />
+      <!-- Grouped by their shared parent, so no radio may be wrapped in a panel of its own -->
+      <StackPanel Orientation="Horizontal" Spacing="16">
+        <RadioButton x:Name="ModSecurityLogOnlyButton" Content="{x:Static vm:AppText.ModSecurityLogOnly}"
+                     IsChecked="{Binding Settings.IsLogOnly}" IsEnabled="{Binding Settings.CanEditModSecurity}" />
+        <RadioButton x:Name="ModSecurityDenyButton" Content="{x:Static vm:AppText.ModSecurityDeny}"
+                     IsChecked="{Binding Settings.IsDeny}" IsEnabled="{Binding Settings.CanEditModSecurity}" />
+        <RadioButton x:Name="ModSecurityCloseButton" Content="{x:Static vm:AppText.ModSecurityClose}"
+                     IsChecked="{Binding Settings.IsClose}" IsEnabled="{Binding Settings.CanEditModSecurity}" />
+      </StackPanel>
+      <Grid ColumnDefinitions="*,120" ColumnSpacing="12">
+        <TextBlock Text="{x:Static vm:AppText.ModSecurityFirstRuleIdLabel}" VerticalAlignment="Center" TextWrapping="Wrap" />
+        <NumericUpDown x:Name="ModSecurityFirstRuleIdBox" Grid.Column="1" Minimum="1" Maximum="99999" Increment="1"
+                       FormatString="0" Value="{Binding Settings.ModSecurityFirstRuleId}"
+                       IsEnabled="{Binding Settings.CanEditModSecurity}"
+                       AutomationProperties.Name="{x:Static vm:AppText.ModSecurityFirstRuleIdName}" />
+      </Grid>
+      <TextBlock Text="{x:Static vm:AppText.ModSecurityFirstRuleIdCaption}" Classes="caption" TextWrapping="Wrap" />
+    </StackPanel>
+  </StackPanel>
+</UserControl>

@@ -7,9 +7,8 @@ using PoorMansFeed.Core.CloudFeeds;
 namespace PoorMansFeed;
 
 /// <summary>
-/// What every cloud feed page shares: the list of checked ranges, the Check, Write feed and Open folder commands,
-/// the large-range question, and the guard that drops the answer of a check the operator has moved on from. A page
-/// supplies how its pick is loaded and checked. It never reads or sets MainViewModel.IsBusy.
+/// What every cloud feed page shares, including the guard that drops the answer of a check the operator has moved on
+/// from. A page supplies how its pick is loaded and checked. It never reads or sets MainViewModel.IsBusy.
 /// </summary>
 public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
 {
@@ -20,6 +19,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
     private readonly IUnsavedSettings? _unsaved;
     private readonly string _defaultExportFolder;
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly ModSecurityRulesPress _rulesPress;
+    private readonly ModSecurityRulesFiles _rulesFiles = new();
 
     private CloudFeedCheck? _check;
     private int _checkVersion;
@@ -40,6 +41,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         _ui = ui ?? throw new ArgumentNullException(nameof(ui));
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _unsaved = unsaved;
+        _rulesPress = new ModSecurityRulesPress(ipinfo, ui, gate);
+        _rulesFiles.ShowsChanged += RulesFilesShowsChanged;
         _defaultExportFolder = defaultExportFolder ?? Path.Combine(ipinfo.DataFolder, "exports");
         _emptyText = initialEmptyText ?? throw new ArgumentNullException(nameof(initialEmptyText));
         Rows = [];
@@ -47,6 +50,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         CheckCommand = new AsyncRelayCommand(CheckAsync, () => !_disposed && !IsWorking && CanStartCheck);
         WriteFeedCommand = new AsyncRelayCommand(WriteAsync, CanWrite);
         OpenFeedFolderCommand = new AsyncRelayCommand(OpenFolderAsync, () => !_disposed);
+        ModSecurityRulesCommand = new AsyncRelayCommand(ShowModSecurityRulesAsync,
+            () => !_disposed && !IsWorking && ShowsModSecurityRules);
     }
 
     public IAsyncRelayCommand CheckCommand { get; }
@@ -54,6 +59,11 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
     public IAsyncRelayCommand WriteFeedCommand { get; }
 
     public IAsyncRelayCommand OpenFeedFolderCommand { get; }
+
+    public IAsyncRelayCommand ModSecurityRulesCommand { get; }
+
+    /// <summary>The last write succeeded and wrote ModSecurity copies.</summary>
+    public bool ShowsModSecurityRules => _rulesFiles.Shows;
 
     public bool IsWorking
     {
@@ -145,6 +155,7 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
     {
         _checkVersion++;
         _check = null;
+        _rulesFiles.Clear();
         Rows.Clear();
         HasRows = false;
         SummaryText = AppText.CloudSummaryInitial;
@@ -159,6 +170,7 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
     protected void ShowNoRows(string emptyText)
     {
         _check = null;
+        _rulesFiles.Clear();
         Rows.Clear();
         HasRows = false;
         SummaryText = AppText.CloudSummaryInitial;
@@ -171,6 +183,33 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         CheckCommand.NotifyCanExecuteChanged();
         WriteFeedCommand.NotifyCanExecuteChanged();
         OpenFeedFolderCommand.NotifyCanExecuteChanged();
+        ModSecurityRulesCommand.NotifyCanExecuteChanged();
+    }
+
+    private void RulesFilesShowsChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(ShowsModSecurityRules));
+        RefreshCommands();
+    }
+
+    // Working for the whole press: that turns off Check, Write feed, the pickers and the page's update or reload
+    private async Task ShowModSecurityRulesAsync()
+    {
+        if (_disposed || IsWorking || _rulesFiles.Files is not { Count: > 0 } files)
+            return;
+
+        IsWorking = true;
+        try
+        {
+            string? line = await _rulesPress.RunAsync(files, () => !_disposed, _lifetime.Token);
+            if (line is not null && !_disposed)
+                ActionText = line;
+        }
+        finally
+        {
+            if (!_disposed)
+                IsWorking = false;
+        }
     }
 
     private bool CanWrite() => !_disposed && !IsWorking && HasRows && _check is not null;
@@ -180,6 +219,7 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         if (_disposed || IsWorking)
             return;
 
+        _rulesFiles.Clear();
         Func<CancellationToken, Task<CheckResult>>? start = await PrepareCheckAsync();
         if (_disposed || start is null)
             return;
@@ -214,6 +254,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         if (_disposed || IsWorking || _check is null)
             return;
 
+        int rulesMark = _rulesFiles.Clear();
+
         if (!_check.MatchesWriteSettings(_ipinfo.Settings))
         {
             ActionText = AppText.CloudSettingsChanged;
@@ -232,6 +274,12 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         IsWorking = true;
         try
         {
+            if (!_ipinfo.Settings.TicksAnyFeedType())
+            {
+                await AskToConfigureFeedsAsync();
+                return;
+            }
+
             IReadOnlyCollection<CidrBlock> large = [];
             if (plan.LargeRanges.Count > 0)
             {
@@ -266,6 +314,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
             CloudFeedWriteResult written = await _feeds.WriteAsync(plan, large, _lifetime.Token);
             if (!_disposed)
             {
+                if (written.Failure == CloudFeedWriteFailure.None)
+                    _rulesFiles.Set(rulesMark, written.ModSecurityFiles);
                 ActionText = WriteMessage(written, unsaved);
             }
         }
@@ -284,10 +334,8 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         }
     }
 
-    // The question holds the shared gate like every other dialog, so nothing on another page (the macOS menu's Reset
-    // API token) opens over it. Write feed itself doesn't wait on the gate: holding is enough, as dialogs are modal.
-    // It isn't asked while something else holds the gate, because that holder may show its own dialog later (Reset token
-    // holds it while the token is removed, then asks for a new one)
+    // Not asked while something else holds the gate, because that holder may show its own dialog later (Reset token
+    // holds it while the token is removed, then asks for a new one). Write feed itself doesn't wait on the gate
     private async Task<IReadOnlyList<string>?> ChooseLargeRangesAsync(LargeRangePrompt prompt)
     {
         if (_gate.IsHeld)
@@ -307,6 +355,35 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
                 ActionText = AppText.Generic;
             return null;
         }
+    }
+
+    // Not shown while something else holds the gate, for the large-range question's reason; Close leaves the line
+    // as it is
+    private async Task AskToConfigureFeedsAsync()
+    {
+        if (_gate.IsHeld)
+        {
+            ActionText = AppText.ConfigureFeedsBusy;
+            return;
+        }
+
+        ConfigureFeedsChoice choice;
+        using (IDisposable hold = _gate.Hold())
+        {
+            try
+            {
+                choice = await _ui.AskToConfigureFeedsAsync();
+            }
+            catch (Exception)
+            {
+                if (!_disposed)
+                    ActionText = AppText.Generic;
+                return;
+            }
+        }
+
+        if (choice == ConfigureFeedsChoice.OpenSettings && !_disposed)
+            _ui.ShowSettingsPage();
     }
 
     private async Task OpenFolderAsync()
@@ -367,13 +444,19 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
                 return AppText.CloudSettingsChanged;
             case CloudFeedWriteFailure.ExceptionsUnreadable:
                 return AppText.ExceptionsUnreadable;
+            case CloudFeedWriteFailure.NoFeedType:
+                return AppText.NothingWrittenNoFeedType + (unsaved ? AppText.UnsavedSettingsNote : "");
             case CloudFeedWriteFailure.NothingToWrite:
                 // The exceptions decided this line, so it names the unsaved changes as a written feed's line does
-                return (result.LargeRangesLeftOut > 0, result.ExceptionRemovals > 0) switch
+                return (result.LargeRangesLeftOut > 0, result.WholeRangesLeftOut > 0, result.ExceptionRemovals > 0) switch
                 {
-                    (true, true) => AppText.CloudAllLeftOutOrExcepted,
-                    (true, false) => AppText.CloudAllLeftOut,
-                    (false, true) => AppText.CloudAllExcepted,
+                    (true, true, true) => AppText.CloudAllLeftOutWholeOrExcepted,
+                    (true, true, false) => AppText.CloudAllLeftOutOrWhole,
+                    (true, false, true) => AppText.CloudAllLeftOutOrExcepted,
+                    (true, false, false) => AppText.CloudAllLeftOut,
+                    (false, true, true) => AppText.CloudAllWholeOrExcepted,
+                    (false, true, false) => AppText.CloudAllWhole,
+                    (false, false, true) => AppText.CloudAllExcepted,
                     _ => AppText.CloudNothingTicked,
                 } + AppText.OldFeedFilesLeft(result.OldFilesLeft)
                     + (unsaved && result.ExceptionRemovals > 0 ? AppText.UnsavedSettingsNote : "");
@@ -382,6 +465,9 @@ public abstract class CloudFeedPageViewModel : ObservableObject, IDisposable
         string text = AppText.CloudFeedWritten(result.RangesWritten, result.Files.Count);
         if (result.LargeRangesLeftOut > 0)
             text += AppText.LargeRangesLeftOut(result.LargeRangesLeftOut);
+
+        if (result.WholeRangesLeftOut > 0)
+            text += AppText.CloudWholeRangesLeftOut(result.WholeRangesLeftOut);
 
         if (result.UnconfirmedWritten > 0)
             text += AppText.CloudUnconfirmed(result.UnconfirmedWritten);

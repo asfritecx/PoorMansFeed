@@ -39,6 +39,22 @@
           <TextBlock Text="{x:Static vm:AppText.HelpAbuseHeading}" Classes="card-title" />
           <TextBlock x:Name="AbuseText" TextWrapping="Wrap" />
         </StackPanel>
+
+        <StackPanel Spacing="4">
+          <TextBlock x:Name="ModSecurityHeading" Text="{x:Static vm:AppText.HelpModSecurityHeading}" Classes="card-title" />
+          <ItemsControl x:Name="HelpModSecurityList" ItemsSource="{x:Static vm:AppText.HelpModSecurityTexts}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Spacing="8" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
 

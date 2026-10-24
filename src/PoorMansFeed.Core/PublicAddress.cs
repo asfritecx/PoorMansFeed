@@ -4,9 +4,8 @@ using System.Net;
 namespace PoorMansFeed.Core;
 
 /// <summary>
-/// An address <see cref="AddressScope"/> judged public: the only form the AbuseIPDB check sends (and, later, its feed
-/// writes). The bytes are copied in and out, so nothing outside can change them after the check, and the text is
-/// formatted once from those checked bytes.
+/// An address <see cref="AddressScope"/> judged public. The bytes are copied in and out, so nothing outside can change
+/// them after the check, and the text is formatted once from them.
 /// </summary>
 public sealed class PublicAddress
 {

@@ -1,9 +1,8 @@
 namespace PoorMansFeed.Core;
 
 /// <summary>
-/// Decides whether an address may leave the machine (the AbuseIPDB check and feed). The blocks come from the IANA
-/// IPv4 and IPv6 Special-Purpose Address Registries and Address Space registries. A false "not public" only skips an
-/// address and a false "public" leaks a private one, so a block is denied whole when only part of it is reachable.
+/// Blocks from the IANA special-purpose and address space registries. A false "public" leaks a private address and a
+/// false "not public" only skips one, so a block only partly reachable is denied whole.
 /// </summary>
 public static class AddressScope
 {

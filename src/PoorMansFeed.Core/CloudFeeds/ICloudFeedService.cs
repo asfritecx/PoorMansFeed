@@ -12,9 +12,8 @@ public interface ICloudFeedService
     CloudFeedPlan PlanWrite(CloudFeedCheck check, IReadOnlyCollection<CidrBlock> ticked);
 
     /// <summary>
-    /// Writes {export folder}/fortigate/{FileStem}_ipv4.txt and _ipv6.txt, overwriting, via a temp file in that
-    /// directory. A family with no rows writes no file. Large ranges not in includedLargeRanges are left out.
-    /// SettingsChanged writes nothing.
+    /// Writes {export folder}/fortigate/{FileStem}_ipv4.txt and _ipv6.txt through a temp file and a move; a family with
+    /// no rows writes no file. Large ranges not in includedLargeRanges are left out; SettingsChanged writes nothing.
     /// </summary>
     Task<CloudFeedWriteResult> WriteAsync(CloudFeedPlan plan, IReadOnlyCollection<CidrBlock> includedLargeRanges,
                                           CancellationToken ct);

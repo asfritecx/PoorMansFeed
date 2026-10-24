@@ -10,9 +10,8 @@ internal interface ISecretStore
     bool Exists { get; }
 
     /// <summary>
-    /// The saved secret, or null when none is saved. Throws CryptographicException when a saved secret can never be
-    /// read (protected for another account, or damaged), and SecretStoreException, IOException or
-    /// UnauthorizedAccessException when the store can't be reached now.
+    /// The saved secret, or null when none. Throws CryptographicException when it can never be read, and
+    /// SecretStoreException, IOException or UnauthorizedAccessException when the store can't be reached now.
     /// </summary>
     byte[]? Read();
 

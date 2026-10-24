@@ -8,9 +8,8 @@ using PoorMansFeed.Core;
 namespace PoorMansFeed;
 
 /// <summary>
-/// Shows the addresses the last download added. The rows come capped and ready-made from the prompt; Copy puts the
-/// prompt's CopyText, every address, on the clipboard through the copy it is given and keeps the dialog open. A row's
-/// menu opens that row's ipinfo.io or AbuseIPDB page through the openPage it is given. Close or Escape closes it.
+/// The rows come capped and ready-made from the prompt, but Copy puts the prompt's CopyText, every address, on the
+/// clipboard and keeps the dialog open.
 /// </summary>
 public sealed partial class NewAddressesDialog : Window
 {

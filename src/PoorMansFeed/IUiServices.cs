@@ -41,4 +41,13 @@ public interface IUiServices
     /// Shows the new addresses until the user closes the dialog. Copy, inside the dialog, puts CopyText on the clipboard
     /// </summary>
     Task ShowNewAddressesAsync(NewAddressesPrompt prompt);
+
+    /// <summary>Shows the rules for the prompt's files until the dialog is closed; nothing in it is saved.</summary>
+    Task ShowModSecurityRulesAsync(ModSecurityRulesPrompt prompt);
+
+    /// <summary>Says no feed type is ticked and offers the Settings page. Completes however it is dismissed.</summary>
+    Task<ConfigureFeedsChoice> AskToConfigureFeedsAsync();
+
+    /// <summary>Shows the Settings page, as its nav item does; while start-up has stopped it does nothing.</summary>
+    void ShowSettingsPage();
 }

@@ -53,9 +53,8 @@ internal static class AbuseIpDbNetworks
     }
 
     /// <summary>
-    /// Groups what IPinfo holds for each address (one list of groups per address, in any order) by ASN. An address
-    /// with no group is not in IPinfo; one whose groups have no ASN that reads goes in the no-ASN bucket; one under
-    /// several ASNs is counted under each.
+    /// One list of groups per address, in any order. An address with no group is not in IPinfo; one whose groups have
+    /// no ASN that reads goes in the no-ASN bucket.
     /// </summary>
     public static AbuseNetworksGrouping Group(IReadOnlyList<IReadOnlyList<OverlapGroup>> perAddress)
     {

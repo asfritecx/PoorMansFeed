@@ -150,7 +150,7 @@ public sealed class GoogleCloudFeedTests : IDisposable
             path);
         Assert.False(File.Exists(Path.Combine(_temp.ExportFolder, "fortigate", "GoogleCloud_us-central1_global_ipv6.txt")));
 
-        string nl = Environment.NewLine;
+        string nl = "\n";
         string expected =
             "# PoorMansFeed - Fortigate Threat Feed" + nl +
             "# Ranges: Google Cloud, https://www.gstatic.com/ipranges/cloud.json (created 2026-01-15T00:00:00Z)" + nl +

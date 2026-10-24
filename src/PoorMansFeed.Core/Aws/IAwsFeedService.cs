@@ -13,17 +13,14 @@ public interface IAwsFeedService : ICloudFeedService
     Task<AwsRangeCatalogue?> LoadCachedAsync(CancellationToken ct);
 
     /// <summary>
-    /// Asks AWS whether the file changed. When the saved file's ETag still matches (304), or the new file is
-    /// identical to current, nothing is replaced (UpToDate). Otherwise the new file is checked, saved and returned
-    /// (Updated). Any failure leaves current and the saved file untouched: CheckFailed, or Unavailable when there
-    /// was no current file.
+    /// Nothing is replaced (UpToDate) on a 304 for the saved ETag or a file identical to current. Any failure leaves
+    /// current and the saved file untouched: CheckFailed, or Unavailable when there was no current file.
     /// </summary>
     Task<AwsLoadResult> CheckForUpdateAsync(AwsRangeCatalogue? current, CancellationToken ct);
 
     /// <summary>
-    /// Confirms every range of the picked service and region (every region when Region is null) against the
-    /// dataset. Drops IPv6 when IPv6Enabled is off. NothingSelected when the pick is not in the catalogue.
-    /// NoDataset when there is no usable database.
+    /// Confirms every range of the picked service and region (every region when Region is null). Drops IPv6 when
+    /// IPv6Enabled is off; NothingSelected when the pick isn't in the catalogue, NoDataset with no usable database.
     /// </summary>
     Task<CheckResult> CheckAsync(AwsRangeCatalogue catalogue, AwsSelection selection, CancellationToken ct);
 }

@@ -1,5 +1,6 @@
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Core.Config;
 
@@ -35,11 +36,11 @@ internal enum ConfigOpenState
     /// <summary>The exceptions.json to import can't be read, or couldn't be set aside. Nothing was written.</summary>
     ExceptionsImportUnreadable,
 
-    /// <summary>config.db is gone or empty though an earlier launch made one (the config_made marker or a *.migrated file
-    /// is there), whatever settings.json or exceptions.json are beside it. Nothing was made or imported: a new file would
-    /// silently drop the exceptions.</summary>
+    /// <summary>config.db is gone or empty though the config_made marker or a *.migrated file shows an earlier launch
+    /// made one. Nothing was made or imported, because a new file would silently drop the exceptions.</summary>
     Missing,
 }
 
 /// <summary>The values config.db holds, as last committed.</summary>
-internal sealed record ConfigSnapshot(UserSettings Settings, ExceptionList Exceptions, AbuseAccounting Accounting);
+internal sealed record ConfigSnapshot(UserSettings Settings, ExceptionList Exceptions, AbuseAccounting Accounting,
+                                      ModSecurityRuleIds RuleIds);

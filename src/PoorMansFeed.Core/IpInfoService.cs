@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.Config;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 using PoorMansFeed.Core.Secrets;
 
 namespace PoorMansFeed.Core;
@@ -263,6 +264,33 @@ public sealed class IpInfoService : IIpInfoService
         });
     }
 
+    public Task<ModSecurityRuleIdsResult> AssignModSecurityRuleIdsAsync(IReadOnlyList<string> fileNames, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(fileNames);
+        return Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            // The store and the first id are read together, so neither a Settings save nor Start fresh can race them
+            lock (_saveGate)
+            {
+                try
+                {
+                    ConfigStore? config = _config;
+                    if (config is null)
+                        return new ModSecurityRuleIdsResult(ModSecurityRuleIdsFailure.StorageError, []);
+
+                    return config.AssignRuleIds(fileNames, _settings.ModSecurityFirstRuleId);
+                }
+                catch (Exception ex)
+                {
+                    // By type alone: a message could quote a file name the caller passed
+                    Trace.TraceError($"{nameof(AssignModSecurityRuleIdsAsync)} failed unexpectedly ({ex.GetType().FullName})");
+                    return new ModSecurityRuleIdsResult(ModSecurityRuleIdsFailure.StorageError, []);
+                }
+            }
+        }, ct);
+    }
+
     public void Dispose()
     {
         // After any start-up step still running, so the instance lock never goes while config.db is being opened.
@@ -372,9 +400,8 @@ public sealed class IpInfoService : IIpInfoService
     }
 
     /// <summary>
-    /// Takes what opening config.db gave. Opened puts the store and its values in use and gives null, so start-up goes
-    /// on; any other state gives its failure, with the instance lock still held, no store, the default settings and an
-    /// unreadable exceptions list.
+    /// Takes what opening config.db gave: Opened puts the store in use and gives null; any other state gives its
+    /// failure, with the instance lock still held, no store, the default settings and an unreadable exceptions list.
     /// </summary>
     private StartupResult? OpenConfig(ConfigOpenState state, ConfigStore? store)
     {
@@ -663,15 +690,18 @@ public sealed class IpInfoService : IIpInfoService
         if (query.Kind != SearchKind.Asn)
             return new ExportResult(ExportFailure.NothingToExport, [], 0, 0);
 
+        bool noFeedType = false;
         try
         {
             ct.ThrowIfCancellationRequested();
             UserSettings settings = _settings;
+            noFeedType = settings.FortigateEnabled && !settings.TicksAnyFeedType();
+            bool feedsWanted = settings.FortigateEnabled && settings.TicksAnyFeedType();
 
             // Exceptions change only the feeds, but a feed must never be written as if there were none
             ExceptionList exceptions = _exceptions;
-            if (settings.FortigateEnabled && !exceptions.IsReadable)
-                return new ExportResult(ExportFailure.ExceptionsUnreadable, [], 0, 0);
+            if (feedsWanted && !exceptions.IsReadable)
+                return new ExportResult(ExportFailure.ExceptionsUnreadable, [], 0, 0, NoFeedType: noFeedType);
 
             List<NetworkRecord> rows = _database.QueryAsn(query.Asn, null, settings.IPv6Enabled);
             ct.ThrowIfCancellationRequested();
@@ -691,9 +721,9 @@ public sealed class IpInfoService : IIpInfoService
             }
 
             if (toWrite.Count == 0)
-                return new ExportResult(ExportFailure.NothingToExport, [], 0, leftOut.Count);
+                return new ExportResult(ExportFailure.NothingToExport, [], 0, leftOut.Count, NoFeedType: noFeedType);
 
-            string folder = ExportFolder;
+            string folder = ExportFolders.Resolve(settings, _paths.DefaultExportFolder);
             try
             {
                 Directory.CreateDirectory(folder);
@@ -701,44 +731,47 @@ public sealed class IpInfoService : IIpInfoService
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
                 Trace.TraceError($"The export folder could not be created: {ex.Message}");
-                return new ExportResult(ExportFailure.FolderUnavailable, [], 0, leftOut.Count);
+                return new ExportResult(ExportFailure.FolderUnavailable, [], 0, leftOut.Count, NoFeedType: noFeedType);
             }
 
             string asName = AsNameOf(rows);
             DateTimeOffset nowUtc = _time.GetUtcNow();
             var files = new List<string>();
-            FortigateFeedWrite feeds;
+            FeedWrite feeds;
             try
             {
                 files.Add(ExportWriter.WriteAsnReport(folder, query.Text, asName, toWrite, nowUtc));
-                feeds = ExportWriter.WriteFortigateFeeds(folder, query.Text, asName, toWrite, settings, nowUtc, exceptions);
+                feeds = ExportWriter.WriteFeeds(folder, query.Text, asName, toWrite, settings, nowUtc, exceptions);
                 files.AddRange(feeds.Files);
             }
             catch (ExportFileException ex)
             {
                 Trace.TraceError($"The export could not be written: {ex.Message}");
                 // The report failed when nothing was written before the feeds, so no feed was tried: every earlier feed
-                // this export would have written or noted is still there, and FortiGate keeps reading it
+                // this export would have written or noted is still there, and its reader keeps reading it
                 IReadOnlyList<string> oldFilesLeft = files.Count == 0
                     ? [.. ex.OldFilesLeft, .. ExportWriter.ExistingFeedFiles(folder, query.Text, toWrite, settings)]
                     : ex.OldFilesLeft;
                 files.AddRange(ex.WrittenBefore);
                 return new ExportResult(ExportFailure.WriteFailed, files, 0, leftOut.Count,
-                                        OldFilesLeft: oldFilesLeft.Count > 0 ? oldFilesLeft : null, FailedFile: ex.FilePath);
+                                        OldFilesLeft: oldFilesLeft.Count > 0 ? oldFilesLeft : null, FailedFile: ex.FilePath,
+                                        ModSecurityFiles: ex.ModSecurityWrittenBefore.Count > 0 ? ex.ModSecurityWrittenBefore : null,
+                                        NoFeedType: noFeedType);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 Trace.TraceError($"The export could not be written: {ex.Message}");
-                return new ExportResult(ExportFailure.WriteFailed, [], 0, leftOut.Count);
+                return new ExportResult(ExportFailure.WriteFailed, [], 0, leftOut.Count, NoFeedType: noFeedType);
             }
 
             return new ExportResult(ExportFailure.None, files, toWrite.Count, leftOut.Count, feeds.ExceptionCuts, feeds.ExceptionRemovals,
-                                    feeds.OldFilesLeft);
+                                    feeds.OldFilesLeft, ModSecurityFiles: feeds.ModSecurityFiles.Count > 0 ? feeds.ModSecurityFiles : null,
+                                    NoFeedType: noFeedType, WholeRangesLeftOut: feeds.WholeRangesLeftOut);
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
             TraceUnexpected(nameof(ExportAsync), ex);
-            return new ExportResult(ExportFailure.WriteFailed, [], 0, 0);
+            return new ExportResult(ExportFailure.WriteFailed, [], 0, 0, NoFeedType: noFeedType);
         }
     }
 
@@ -837,9 +870,8 @@ public sealed class IpInfoService : IIpInfoService
     }
 
     /// <summary>
-    /// The download accounting over whichever config store is open. It is made with the service, before start-up, so it
-    /// never throws for a missing store: it reads Empty, is not available, and every write fails until a launch has
-    /// opened config.db.
+    /// Made with the service, before start-up, so it never throws for a missing store: until a launch has opened
+    /// config.db it reads Empty, is not available, and every write fails.
     /// </summary>
     private sealed class ConfigAccounting(IpInfoService owner) : IAbuseAccounting
     {

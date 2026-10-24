@@ -10,7 +10,7 @@ namespace PoorMansFeed;
 /// Every user-visible string of the main window, its view model and the dialogs (DESIGN section 4). Non-ASCII is
 /// written as escapes so the source stays ASCII. Numbers use the invariant culture.
 /// </summary>
-public static class AppText
+public static partial class AppText
 {
     private const string Ellipsis = "\u2026";
 
@@ -209,11 +209,8 @@ public static class AppText
     public const string ExportWriteFailed = "The export couldn't be written. Please try again or contact the Infra Team.";
 
     /// <summary>
-    /// An export whose write of one file failed, named first, then the files written before it and the old files left.
-    /// Each ASN file is replaced by a move, so a failed file keeps its earlier copy whole, and the old files left can
-    /// name it. A feed file is named with its folder, because the report and the combined feed share a file name. The
-    /// report is always tried first, so the first file tried is the report and every later one a feed; the order, not a
-    /// folder's name, tells them apart, so an export folder named like the feed folder changes nothing.
+    /// The report is named bare and every feed file with its type's folder. The report is always tried first, so the
+    /// order tells them apart, not a folder's name: the export folder itself may be called modsecurity.
     /// </summary>
     public static string ExportFileFailed(string failedFile, IReadOnlyList<string> writtenBefore,
                                           IReadOnlyList<string>? oldFilesLeft, bool unsaved)
@@ -229,10 +226,9 @@ public static class AppText
                 : "")
             + (unsaved && writtenBefore.Count > 0 ? UnsavedSettingsSentence : "") + TryAgain;
 
-        // The folder is joined by the separator, as these texts name paths and build none
         string Name(string path) => string.Equals(path, report, StringComparison.Ordinal)
             ? Path.GetFileName(path)
-            : ExportWriter.FortigateFolderName + Path.DirectorySeparatorChar + Path.GetFileName(path);
+            : FeedFileName(path);
     }
     public const string CopyFailed = "The results couldn't be copied.";
     public const string FolderOpenFailed = "The folder couldn't be opened.";
@@ -258,7 +254,7 @@ public static class AppText
 
     // Settings page: exceptions
     public const string ExceptionsTitle = "Exceptions";
-    public const string ExceptionsMessage = "Networks listed here are cut out of every Fortigate feed before it's written, so no feed blocks them. The ASN report still lists every network.";
+    public const string ExceptionsMessage = "Networks listed here are cut out of every feed before it's written, so no feed blocks them. The ASN report still lists every network.";
     public const string ExceptionNetworkName = "Network or address";
     public const string ExceptionNetworkPlaceholder = "Network or address";
     public const string ExceptionNoteName = "Note";
@@ -298,9 +294,7 @@ public static class AppText
     public const string ResetTokenButton = "Reset token";
 
     // Settings page: the heading, the sections and their buttons
-    public const string SettingsCaption = "Export folder, feeds, API keys and the networks no feed blocks";
     public const string OptionsHeader = "Options";
-    public const string OptionsCaption = "The export folder, IPv6, Fortigate feeds, large ranges and AbuseIPDB";
     public const string KeysHeader = "API keys";
     public const string KeysCaption = "Kept in this computer's key store for your account, never in the app's files";
     public const string SaveSettings = "Save settings";
@@ -350,11 +344,6 @@ public static class AppText
     public const string IPv6Header = "IPv6";
     public const string IPv6Enabled = "Include IPv6 networks";
     public const string IPv6Caption = "When off, IPv6 networks are left out of the dataset, searches and exports. Turning it back on needs a dataset update.";
-    public const string FortigateHeader = "Fortigate threat feed";
-    public const string FortigateEnabled = "Write a Fortigate threat feed with each export";
-    public const string IncludeIPv4 = "Include IPv4 networks";
-    public const string IncludeIPv6 = "Include IPv6 networks";
-    public const string SplitByFamily = "Write IPv4 and IPv6 to separate files";
     public const string LargeRangesHeader = "Large ranges";
     public const string AskLargeRanges = "Ask before exporting large ranges";
     public const string IPv4PrefixLabel = "IPv4 \u2014 ask when the prefix is shorter than";
@@ -391,13 +380,13 @@ public static class AppText
     public const string HelpDatasetHeading = "2. Dataset";
     public const string HelpSearchHeading = "3. Search";
     public const string HelpExportHeading = "4. Export";
-    public const string HelpExportText = "Export writes every network for the ASN to the export folder, with a Fortigate threat feed if that is turned on in Settings. Large ranges are left out unless you tick them. Google Cloud Lookup, Azure Lookup and AWS Lookup, in the list on the left, write a Fortigate feed of the Google Cloud ranges for one region, of the Azure ranges for one service tag, or of the AWS ranges for one service and region. Networks listed under Exceptions in Settings are cut out of every Fortigate feed.";
+    public const string HelpExportText = "Export writes every network for the ASN to the export folder. When Settings writes the ticked feed types with each ASN export, it also writes a feed of each type ticked, FortiGate or ModSecurity. Large ranges are left out unless you tick them. Google Cloud Lookup, Azure Lookup and AWS Lookup, in the list on the left, write a feed of the Google Cloud ranges for one region, of the Azure ranges for one service tag, or of the AWS ranges for one service and region. Networks listed under Exceptions in Settings are cut out of every feed.";
 
     public const string HelpAbuseHeading = "5. AbuseIPDB";
 
     // AbuseIPDB Blacklist page
     public const string AbuseIpDbTitle = "AbuseIPDB Blacklist";
-    public const string AbuseIpDbCaption = "Download AbuseIPDB's blacklist and write a Fortigate threat feed from it";
+    public const string AbuseIpDbCaption = "Download AbuseIPDB's blacklist and write a threat feed from it";
     public const string DownloadBlacklist = "Download blacklist";
     public const string DownloadBlacklistTooltip = "Download AbuseIPDB's blacklist into the rolling list on this computer";
     public const string ClearList = "Clear list";
@@ -424,7 +413,7 @@ public static class AppText
     public const string ClearAbuseListBody = "Every downloaded address is removed from this computer. The download count, the AbuseIPDB key and the feed files are kept; choose Empty feed to empty the files. This cannot be undone.";
     public const string EmptyAbuseFeedTitle = "Empty the AbuseIPDB feed?";
     public const string EmptyAbuseFeedButton = "Empty feed";
-    public const string EmptyAbuseFeedBody = "Each AbuseIPDB feed file in the export folder's fortigate folder is rewritten with no addresses, so a FortiGate that reads it blocks none. The AbuseIPDB list is kept, and the next Write feed fills the files again.";
+    public const string EmptyAbuseFeedBody = "Each AbuseIPDB feed file in the export folder's fortigate and modsecurity folders, whatever is ticked, is rewritten with no addresses, so a FortiGate or ModSecurity server matches none of them once it reads the file again. The AbuseIPDB list is kept, and the next Write feed fills the files again.";
 
     // The download after the key prompt was cancelled or couldn't be shown
     public const string AbuseDownloadKeyCancelled = "Nothing was downloaded" + Dash + "AbuseIPDB needs an API key";
@@ -463,11 +452,11 @@ public static class AppText
 
     // Tools: Google Cloud feed
     public const string GoogleCloudTitle = "Google Cloud Lookup";
-    public const string GoogleCloudCaption = "Build a Fortigate threat feed from Google Cloud ranges";
+    public const string GoogleCloudCaption = "Build a threat feed from Google Cloud ranges";
     public const string AddGlobalRanges = "Add global ranges";
     public const string CheckRanges = "Check ranges";
     public const string WriteFeed = "Write feed";
-    public const string WriteFeedTooltip = "Write the ticked ranges to a Fortigate threat feed";
+    public const string WriteFeedTooltip = "Write the ticked ranges to a threat feed of each type ticked in Settings";
     public const string CloudResultsHeader = "Ranges";
     public const string ColumnRegion = "Region";
     public const string ColumnStatus = "Status";
@@ -498,7 +487,7 @@ public static class AppText
     }
     public const string CloudLargeRangesTitle = "Write the feed?";
     public const string AzureTitle = "Azure Lookup";
-    public const string AzureCaption = "Build a Fortigate threat feed from Azure service tags";
+    public const string AzureCaption = "Build a threat feed from Azure service tags";
     public const string CheckForUpdates = "Check for updates";
     public const string CheckForUpdatesTooltip = "Look for a newer Azure service tags file";
     public const string ColumnService = "Service";
@@ -511,7 +500,7 @@ public static class AppText
     public const string AzureNothingSelected = "No ranges are listed for this service tag.";
     public const string AzureStatusUnavailable = "No Azure service tags are available.";
     public const string AwsTitle = "AWS Lookup";
-    public const string AwsCaption = "Build a Fortigate threat feed from AWS IP ranges";
+    public const string AwsCaption = "Build a threat feed from AWS IP ranges";
     public const string AwsCheckForUpdatesTooltip = "Look for a newer AWS IP ranges file";
     public const string AwsAllRegions = "All regions";
     public const string AwsGlobalRegion = "Global";
@@ -529,6 +518,10 @@ public static class AppText
     public const string CloudAllLeftOut = "Nothing was written" + Dash + "every ticked range is a large range that was left out";
     public const string CloudAllExcepted = "Nothing was written" + Dash + "exceptions cover every ticked range";
     public const string CloudAllLeftOutOrExcepted = "Nothing was written" + Dash + "every ticked range was left out as a large range or removed by exceptions";
+    public const string CloudAllWhole = "Nothing was written" + Dash + "every ticked range covers every address, which no feed takes";
+    public const string CloudAllLeftOutOrWhole = "Nothing was written" + Dash + "every ticked range was left out as a large range or for covering every address";
+    public const string CloudAllWholeOrExcepted = "Nothing was written" + Dash + "every ticked range covers every address or was removed by exceptions";
+    public const string CloudAllLeftOutWholeOrExcepted = "Nothing was written" + Dash + "every ticked range was left out as a large range or for covering every address, or removed by exceptions";
 
     // Menus
     public const string MenuSettings = "Settings" + Ellipsis;
@@ -558,6 +551,15 @@ public static class AppText
     public static string LargeRangesLeftOut(int count) =>
         Dash + Count(count, "large range", "large ranges") + " left out";
 
+    public static string CloudWholeRangesLeftOut(int count) =>
+        Dash + Count(count, "range", "ranges") + " covering every address left out";
+
+    public static string ExportWholeRangesLeftOut(int count) =>
+        Dash + Count(count, "network", "networks") + " covering every address left out of the feeds";
+
+    public const string ExportNoFeedType = Dash + "no feed was written, because no feed type is ticked in Settings";
+    public const string NothingWrittenNoFeedType = "Nothing was written" + Dash + "no feed type is ticked in Settings";
+
     public static string Copied(int count) => "Copied " + Count(count, "result", "results");
 
     // After a feed's result line while the Settings page holds edits: the write used what was saved
@@ -582,8 +584,7 @@ public static class AppText
         if (paths is not { Count: > 0 })
             return "";
 
-        string names = NameList(paths.Select(Path.GetFileName));
-        return Dash + "the old " + names + (paths.Count == 1 ? " was left as it was" : " were left as they were");
+        return Dash + "the old " + FileNames(paths) + (paths.Count == 1 ? " was left as it was" : " were left as they were");
     }
 
     // The same as a sentence, on a failure line
@@ -745,11 +746,11 @@ public static class AppText
         + ", Download blacklist adds AbuseIPDB's blacklist to a rolling list on this computer; the free plan allows "
         + $"{AbuseIpDbLimits.FreeBlacklistDownloadsPerDay} downloads a day. "
         + "New addresses lists the addresses the last download added. Right-click an offending network to open its ASN "
-        + "on ipinfo.io, or a new address to open it on ipinfo.io or AbuseIPDB's website. Write feed writes a Fortigate threat feed of the "
+        + "on ipinfo.io, or a new address to open it on ipinfo.io or AbuseIPDB's website. Write feed writes a threat feed of the "
         + "addresses listed in the days before the last download, as many days as Settings sets, leaving out the networks "
         + "under Exceptions. "
         + "With IPv6 off, the download asks for IPv4 addresses only, and an existing IPv6 feed file is emptied. Empty feed rewrites the feed files with no addresses, so a "
-        + "FortiGate that reads them blocks none. " + FortiOsPool;
+        + "FortiGate or ModSecurity server that reads them blocks none. " + FortiOsPool;
 
     // From FortiOS 7.4.4 the threat feed entries are counted per device, across every IP address feed
     private static string FortiOsPool =>
@@ -757,7 +758,7 @@ public static class AppText
         + "and two full rolling files hold " + Number(2L * AbuseIpDbLimits.MaxFeedEntries) + " addresses.";
 
     public static string WriteAbuseFeedTooltip(bool ipv6Enabled) =>
-        "Write a Fortigate threat feed of the addresses listed in the days before the last download, as many days as "
+        "Write a threat feed of the addresses listed in the days before the last download, as many days as "
         + "Settings sets."
         + (ipv6Enabled ? "" : " With IPv6 off, an existing IPv6 feed file is emptied.") + " " + FortiOsPool;
 
@@ -782,10 +783,8 @@ public static class AppText
     }
 
     /// <summary>
-    /// The facts row's first line: the last download, or "Not downloaded yet", which follows the last download, not the
-    /// file, so a cleared list says it too. A list that is newer, unreadable or can't be read now gives only the
-    /// downloads left, because the status line names its state. <paramref name="now"/> tells a stored limit whose reset
-    /// has passed from one still in force.
+    /// "Not downloaded yet" follows the last download, not the file, so a cleared list says it too. A list that is
+    /// newer, unreadable or can't be read now gives only the downloads left, because the status line names its state.
     /// </summary>
     public static string AbuseFactsHead(AbuseListStatus status, DateTimeOffset now)
     {
@@ -799,10 +798,8 @@ public static class AppText
     }
 
     /// <summary>
-    /// The facts row's second line: the downloads left first, so they show in a narrow window, then the addresses within
-    /// the keep days once there was a download. Empty while this computer's clock is behind the last download, because
-    /// the counts are withheld then and the downloads left are judged by that clock; the status line says why. Empty for
-    /// a list that is newer, unreadable or can't be read now, whose first line already gives the downloads left.
+    /// The downloads left come first, so they show in a narrow window. Empty while the clock is behind the last
+    /// download, because both parts are judged by that clock, and empty when the first line gives the downloads left.
     /// </summary>
     public static string AbuseFactsDetail(AbuseListStatus status, int keepDays, DateTimeOffset now)
     {
@@ -820,9 +817,8 @@ public static class AppText
             + " in the last " + Count(keepDays, "day", "days");
     }
 
-    // AbuseIPDB's own remaining count while it is current: no reset, or a reset still ahead and no further than the
-    // service believes. A stored limit whose reset has passed (or is too far ahead to trust) is a new day's allowance
-    // when its total is known; otherwise, as with no remaining count, the 2xx answers this UTC day of the free limit.
+    // A stored limit whose reset has passed, or is too far ahead to trust, is a new day's allowance when its total is
+    // known; otherwise, as with no remaining count, the 2xx answers this UTC day count against the free limit.
     private static string DownloadsLeft(AbuseListStatus status, DateTimeOffset now)
     {
         if (status.RateLimit is { Remaining: { } remaining } limit)
@@ -887,9 +883,7 @@ public static class AppText
     }
 
     /// <summary>
-    /// A download that failed, or the one download sent again after a key was saved; a prompt that was cancelled or
-    /// couldn't open uses <see cref="AbuseDownloadKeyCancelled"/> or <see cref="AbuseDownloadKeyReplaceCancelled"/>
-    /// instead. <paramref name="at"/> is the refusal or retry time the view model chose. <paramref name="counted"/> says
+    /// <paramref name="at"/> is the refusal or retry time the view model chose. <paramref name="counted"/> says
     /// AbuseIPDB answered with a 2xx, so a list that went wrong after it still names the download as one of today's.
     /// </summary>
     public static string AbuseDownloadFailure(AbuseIpDbFailure failure, DateTimeOffset? at, bool counted = false)
@@ -938,12 +932,17 @@ public static class AppText
         }
     }
 
-    /// <summary>A written feed: the counts and the export folder, then the exceptions, the cap and each emptied file when there are any.</summary>
-    public static string AbuseFeedWritten(AbuseFeedWriteResult result, string folder)
+    /// <summary>A written feed: counts and type folders, then the exceptions, the cap and any emptied file.</summary>
+    public static string AbuseFeedWritten(AbuseFeedWriteResult result, string exportFolder)
     {
         ArgumentNullException.ThrowIfNull(result);
+        List<string> folders = result.Files.Select(ParentFolderName).Where(n => n.Length > 0)
+            .Distinct(StringComparer.Ordinal).ToList();
+        string where = folders.Count == 0
+            ? exportFolder
+            : "the " + NameList(folders) + (folders.Count == 1 ? " folder of " : " folders of ") + exportFolder;
         string line = "Feed written: " + Number(result.IPv4Written) + " IPv4 and "
-            + Count(result.IPv6Written, "IPv6 address", "IPv6 addresses") + " to " + folder;
+            + Count(result.IPv6Written, "IPv6 address", "IPv6 addresses") + " to " + where;
         if (result.ExceptionRemovals > 0)
             line += Dash + Count(result.ExceptionRemovals, "address", "addresses") + " removed by exceptions";
         if (result.LeftOut > 0)
@@ -958,9 +957,8 @@ public static class AppText
     }
 
     /// <summary>
-    /// A feed write that failed. With IPv6 off only IPv4 addresses are counted, so nothing to write names the family;
-    /// a failed write names the failed file first, when it is known, then the files written and emptied before it, the
-    /// old files it left, and the unsaved Settings edits when it had done any.
+    /// With IPv6 off only IPv4 addresses are counted, so nothing to write names the family. The unsaved Settings edits
+    /// are named only when a file was written or emptied before the failure.
     /// </summary>
     public static string AbuseFeedWriteFailureLine(AbuseFeedWriteResult result, int keepDays, bool ipv6Enabled,
                                                    bool unsaved = false)
@@ -971,6 +969,7 @@ public static class AppText
         return result.Failure switch
         {
             AbuseFeedWriteFailure.ExceptionsUnreadable => ExceptionsUnreadable,
+            AbuseFeedWriteFailure.NoFeedType => NothingWrittenNoFeedType + (unsaved ? UnsavedSettingsNote : ""),
             AbuseFeedWriteFailure.ListNewer => AbuseListNewer,
             AbuseFeedWriteFailure.ListUnreadable => AbuseListUnreadable,
             AbuseFeedWriteFailure.StorageError => AbuseListReadFailed,
@@ -994,22 +993,23 @@ public static class AppText
         bool IsEmptied(string file) => result.EmptiedFiles.Contains(file, StringComparer.Ordinal);
     }
 
-    public static string AbuseFeedEmptied(AbuseFeedWriteResult result, string folder)
+    public static string AbuseFeedEmptied(AbuseFeedWriteResult result, string exportFolder)
     {
         ArgumentNullException.ThrowIfNull(result);
-        return "Feed emptied: " + FileNames(result.Files) + " in " + folder;
+        return "Feed emptied: " + FileNames(result.Files) + " in " + exportFolder;
     }
 
     /// <summary>
     /// An Empty feed that failed; a failed write names the failed file first, when it is known, then the files emptied
     /// before it and the old files it left. Like the Empty feed line it has no unsaved note: Empty feed writes no address.
     /// </summary>
-    public static string AbuseFeedEmptyFailureLine(AbuseFeedWriteResult result, string folder)
+    public static string AbuseFeedEmptyFailureLine(AbuseFeedWriteResult result, string exportFolder)
     {
         ArgumentNullException.ThrowIfNull(result);
         return result.Failure switch
         {
-            AbuseFeedWriteFailure.NothingToWrite => "Nothing was emptied" + Dash + "there's no AbuseIPDB feed file in " + folder,
+            AbuseFeedWriteFailure.NothingToWrite => "Nothing was emptied" + Dash
+                + "there's no AbuseIPDB feed file in the fortigate or modsecurity folder of " + exportFolder,
             AbuseFeedWriteFailure.WriteFailed =>
                 (result.FailedFile is { } failed ? FailedFileLead(failed, "emptied") : "The feed couldn't be emptied.")
                 + DoneBeforeFailure(result.Files, "emptied") + OldFilesLeftSentence(result.OldFilesLeft) + TryAgain,
@@ -1020,21 +1020,19 @@ public static class AppText
     private const string TryAgain = " Please try again or contact the Infra Team.";
 
     // The files a failed write or empty had already replaced, or nothing when it had replaced none; name gives each
-    // file's name in the line, its file name unless the caller says otherwise
+    // file's name in the line, its feed file name unless the caller says otherwise
     private static string DoneBeforeFailure(IReadOnlyList<string> files, string verb, Func<string, string>? name = null) =>
         files.Count == 0
             ? ""
-            : " " + NameList(files.Select(name ?? (f => Path.GetFileName(f))))
+            : " " + NameList(files.Select(name ?? FeedFileName))
                 + (files.Count == 1 ? " was " : " were ") + verb + " before the failure.";
 
     // A failure line's opening when the failed file is known: its name, then what couldn't be done to it
     private static string FailedFileLead(string failedFile, string verb) =>
-        Path.GetFileName(failedFile) + " couldn't be " + verb + ".";
+        FeedFileName(failedFile) + " couldn't be " + verb + ".";
 
     /// <summary>
-    /// The offending networks' summary: first that it is a report, which the exceptions don't cut, so the note shows
-    /// whenever the line trims; then the networks (and the rows shown when capped) for the addresses grouped, the two
-    /// buckets and the addresses the cap left out.
+    /// Opens with the note that the exceptions don't cut a report, so the note shows even when the line trims.
     /// </summary>
     public static string AbuseNetworksSummary(AbuseNetworksResult result, int shown, bool ipv6Enabled)
     {
@@ -1127,7 +1125,17 @@ public static class AppText
         return utc.AddTicks(-(utc.Ticks % TimeSpan.TicksPerMinute)).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
     }
 
-    private static string FileNames(IReadOnlyList<string> paths) => NameList(paths.Select(Path.GetFileName));
+    private static string FileNames(IReadOnlyList<string> paths) => NameList(paths.Select(FeedFileName));
+
+    // A feed file always sits in its type's folder, so the parent's name is shown and never matched; the separator
+    // joins them, as these texts name paths and build none
+    private static string FeedFileName(string path)
+    {
+        string folder = ParentFolderName(path);
+        return folder.Length == 0 ? Path.GetFileName(path) : folder + Path.DirectorySeparatorChar + Path.GetFileName(path);
+    }
+
+    private static string ParentFolderName(string path) => Path.GetFileName(Path.GetDirectoryName(path)) ?? "";
 
     // Names in a line: "X", "X and Y", or "X, Y and Z" for three or more, with no comma before the "and"
     private static string NameList(IEnumerable<string?> names)

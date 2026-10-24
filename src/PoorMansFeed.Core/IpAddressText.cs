@@ -5,16 +5,14 @@ using System.Net.Sockets;
 namespace PoorMansFeed.Core;
 
 /// <summary>
-/// Reads an address only in its plain form. IPAddress.TryParse also reads legacy and decorated forms that name a
-/// different address or carry extra text: "010.0.0.1" is 8.0.0.1 (octal), "10.1" is 10.0.0.1, "1.2.3" is 1.2.0.3,
-/// "0x7f.0.0.1" is 127.0.0.1, and "[::1]:80" and "fe80::1%5" have a port or a zone. Every one of those is rejected.
+/// IPAddress.TryParse reads legacy forms as other addresses ("010.0.0.1" is 8.0.0.1, "10.1" is 10.0.0.1, "0x7f.0.0.1"
+/// is 127.0.0.1) and accepts a port or zone ("[::1]:80", "fe80::1%5"); this reads only the plain form.
 /// </summary>
 public static class IpAddressText
 {
     /// <summary>
-    /// IPv4 is exactly four parts of decimal digits, each 0 to 255 with no leading zero. IPv6 is hex digits and colons,
-    /// optionally ending in an IPv4 part held to the same rule. Text with a ':' is IPv6, so the family always matches
-    /// the text. No whitespace, brackets, port or zone is accepted.
+    /// IPv4 is four decimal parts, each 0 to 255 with no leading zero; IPv6 is hex and colons, with an optional IPv4
+    /// tail held to that rule. A ':' means IPv6, so the family matches the text. No whitespace, bracket, port or zone.
     /// </summary>
     public static bool TryParse(ReadOnlySpan<char> text, [NotNullWhen(true)] out IPAddress? address)
     {

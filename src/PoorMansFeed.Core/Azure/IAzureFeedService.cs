@@ -13,9 +13,8 @@ public interface IAzureFeedService : ICloudFeedService
     Task<AzureTagCatalogue?> LoadCachedAsync(CancellationToken ct);
 
     /// <summary>
-    /// Reads the download page. When it names the file that is already in current, nothing is downloaded
-    /// (UpToDate). Otherwise the new file is downloaded, checked, saved and returned (Updated). Any failure
-    /// leaves current and the saved file untouched: CheckFailed, or Unavailable when there was no current file.
+    /// Downloads nothing when the download page names the file already in current (UpToDate). Any failure leaves
+    /// current and the saved file untouched: CheckFailed, or Unavailable when there was no current file.
     /// </summary>
     Task<AzureLoadResult> CheckForUpdateAsync(AzureTagCatalogue? current, CancellationToken ct);
 

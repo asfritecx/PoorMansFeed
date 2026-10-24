@@ -5,21 +5,21 @@ using System.Text;
 
 namespace PoorMansFeed.Core.Config;
 
-/// <summary>A section of config.db, sealed on its own. Each has its own row, named by <see cref="ConfigSeal.SectionName"/>.</summary>
+/// <summary>
+/// A section of config.db, sealed on its own. Each has its own row, named by <see cref="ConfigSeal.SectionName"/>,
+/// except the ModSecurity rule ids, sealed as a metadata value so that older builds still open the file.
+/// </summary>
 internal enum ConfigSection
 {
     Settings,
     Exceptions,
     Accounting,
+    ModSecurityRuleIds,
 }
 
 /// <summary>
-/// Seals and opens config.db's sections with AES-GCM. This is the one file that may name AesGcm or
-/// RandomNumberGenerator: the sections are sealed under a random key kept in the operating system's store, so there is
-/// no key in the source and none derived from a passphrase. A blob is the format version, a fresh random nonce, the
-/// tag and the ciphertext. The associated data binds it to its file, section and schema version, and is rebuilt for
-/// every call, never stored. Nothing here traces: a blob that doesn't open is a false, and the caller traces a fixed
-/// text. One instance isn't documented as safe across threads, so its caller serialises every call.
+/// Seals config.db's sections; the associated data binds each to its file, section and schema version. Nothing here
+/// traces. AesGcm isn't documented as safe across threads, so the caller serialises every call.
 /// </summary>
 internal sealed class ConfigSeal : IDisposable
 {
@@ -32,9 +32,8 @@ internal sealed class ConfigSeal : IDisposable
     private readonly string _fileId;
 
     /// <summary>
-    /// Takes the key into the AES-GCM instance and zeroes the caller's array, whether or not the key is accepted, so
-    /// no copy of it stays here. Throws ArgumentException when the key isn't 32 bytes or the file id isn't 32
-    /// lower-case hex digits.
+    /// Zeroes the caller's key array whether or not the key is accepted, so no copy of it stays here. Throws
+    /// ArgumentException when the key isn't 32 bytes or the file id isn't 32 lower-case hex digits.
     /// </summary>
     internal ConfigSeal(byte[] key, string fileId)
     {
@@ -75,6 +74,7 @@ internal sealed class ConfigSeal : IDisposable
         ConfigSection.Settings => "settings",
         ConfigSection.Exceptions => "exceptions",
         ConfigSection.Accounting => "accounting",
+        ConfigSection.ModSecurityRuleIds => "modsecurity_rule_ids",
         _ => throw new ArgumentOutOfRangeException(nameof(section), section, null),
     };
 

@@ -1,4 +1,5 @@
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Core;
 
@@ -12,20 +13,12 @@ public interface IIpInfoService : IDisposable
 
     Task<StartupResult> InitializeAsync(CancellationToken ct);
 
-    /// <summary>Only after ConfigNewer, ConfigUnreadable, ConfigKeyMismatch or ConfigMissing: first opens config.db again,
-    /// and when it opens now, start-up finishes with it; when it gives another failure, that is the result and nothing is
-    /// replaced. Otherwise keeps config.db as config.unreadable.db (not for ConfigMissing), makes a new config.db with the
-    /// default settings, no exceptions and no download accounting, then finishes start-up. Gives the same failure back
-    /// when the old file couldn't be copied or deleted (it is then untouched, though a new key is already saved when the
-    /// old one was missing or could never be read). The key is kept whenever it reads, after ConfigKeyMismatch too, so the
-    /// copy kept as config.unreadable.db may still open with it. Gives ConfigKeyUnavailable or ConfigKeyStoreMissing, with
-    /// nothing touched, when the key can't be read or a new one saved; as at launch, that offers nothing more until the app
-    /// is reopened. Changes nothing in any other state.</summary>
+    /// <summary>Only after ConfigNewer, ConfigUnreadable, ConfigKeyMismatch or ConfigMissing. It first opens config.db
+    /// again, and when that gives any other result, that is the result and nothing is replaced.</summary>
     Task<StartupResult> StartFreshAsync(CancellationToken ct);
 
-    /// <summary>Only after ExceptionsImportUnreadable: moves exceptions.json to exceptions.unreadable.json (over an older
-    /// copy), imports with no exceptions, and finishes start-up. Gives ExceptionsImportUnreadable back when the move fails,
-    /// or any other failure a launch can give, and changes nothing in any other state.</summary>
+    /// <summary>Only after ExceptionsImportUnreadable: moves exceptions.json aside and imports with no exceptions.
+    /// A failed move gives ExceptionsImportUnreadable back; in any other state it changes nothing.</summary>
     Task<StartupResult> StartWithoutOldExceptionsAsync(CancellationToken ct);
 
     Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken ct);
@@ -34,9 +27,8 @@ public interface IIpInfoService : IDisposable
     Task<SearchResult> SearchAsync(string input, int displayLimit, CancellationToken ct);
 
     /// <summary>
-    /// For each block, the IPinfo networks that overlap it, through the database gate on the thread pool.
-    /// Read-only. A database that is not usable returns NoDataset and is not queried. Only the caller's
-    /// cancellation throws.
+    /// For each block, the IPinfo networks that overlap it, read-only through the database gate on the thread pool.
+    /// An unusable database gives NoDataset unqueried; only the caller's cancellation throws.
     /// </summary>
     Task<OverlapResult> LookUpOverlapsAsync(IReadOnlyList<CidrBlock> blocks, CancellationToken ct);
     Task<ExportPlan> PrepareExportAsync(SearchQuery query, CancellationToken ct);
@@ -47,4 +39,8 @@ public interface IIpInfoService : IDisposable
     Task<bool> ClearTokenAsync();
     Task<bool> SaveSettingsAsync(UserSettings settings);
     Task<ExceptionsSaveOutcome> SaveExceptionsAsync(IReadOnlyList<ExceptionEntry> entries);   // Saved, or Failed when it couldn't be saved (the list in use is unchanged)
+
+    /// <summary>One kept rule id per list file name, from the saved first rule id. Cancel is seen once, before the
+    /// call; the write itself isn't cancelled. No store open gives StorageError.</summary>
+    Task<ModSecurityRuleIdsResult> AssignModSecurityRuleIdsAsync(IReadOnlyList<string> fileNames, CancellationToken ct);
 }

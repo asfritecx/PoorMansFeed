@@ -359,6 +359,24 @@ public sealed class AwsFeedViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task With_No_Feed_Type_Ticked_Write_Feed_Asks_And_Writes_No_AWS_Feed()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        FakeAwsFeedService feeds = Feeds(AwsTestData.Catalogue());
+        AwsFeedViewModel vm = Vm(feeds);
+        await vm.ActivateAsync();
+        vm.SelectedRegion = vm.Regions.Single(region => region.Region == "cn-north-1");
+        await vm.CheckCommand.ExecuteAsync(null);
+        Assert.NotEmpty(vm.Rows);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.False(Directory.Exists(Path.Combine(_temp.ExportFolder, "fortigate")));
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
     public async Task Open_Folder_Opens_The_Export_Folder()
     {
         AwsFeedViewModel vm = Vm(Feeds(AwsTestData.Catalogue()));

@@ -4,14 +4,17 @@ using PoorMansFeed.Core.AbuseIpDb;
 namespace PoorMansFeed.Tests;
 
 /// <summary>
-/// The AbuseIPDB Blacklist page's wording built in code: the facts row, the status line, the download, Clear list,
-/// Write feed, Empty feed and the offending networks. Every number comes from <see cref="AbuseIpDbLimits"/> or the
-/// result, and every time is the UTC minute, whatever the machine's zone: a past time rounded down, a future one up.
+/// Every number comes from <see cref="AbuseIpDbLimits"/> or the result, and every time is the UTC minute, whatever
+/// the machine's zone: a past time rounded down, a future one up.
 /// </summary>
 public sealed class AbuseIpDbPageTextTests
 {
     private static readonly DateTimeOffset Downloaded = new(2026, 10, 20, 8, 0, 30, TimeSpan.Zero);
     private static readonly DateTimeOffset Now = new(2026, 10, 20, 12, 0, 0, TimeSpan.Zero);
+
+    // A feed file is named with its type's folder, joined by this platform's separator
+    private static readonly string V4 = Path.Combine("fortigate", "AbuseIPDB_rolling_ipv4.txt");
+    private static readonly string V6 = Path.Combine("fortigate", "AbuseIPDB_rolling_ipv6.txt");
 
     private static AbuseListStatus Status(int ipv4, int ipv6, DateTimeOffset? last, AbuseRateLimit? limit, int today) =>
         new(AbuseListState.Usable, ipv4, ipv6, last, last, limit, today, RefusedUntil: null);
@@ -334,8 +337,10 @@ public sealed class AbuseIpDbPageTextTests
     [Fact]
     public void AWrittenFeedNamesTheCountsAndTheFolder()
     {
-        Assert.Equal("Feed written: 9,981 IPv4 and 19 IPv6 addresses to /e", AppText.AbuseFeedWritten(Feed(9_981, 19, 0, 0), "/e"));
-        Assert.Equal("Feed written: 1 IPv4 and 1 IPv6 address to /e", AppText.AbuseFeedWritten(Feed(1, 1, 0, 0), "/e"));
+        Assert.Equal("Feed written: 9,981 IPv4 and 19 IPv6 addresses to the fortigate folder of /e",
+            AppText.AbuseFeedWritten(Feed(9_981, 19, 0, 0), "/e"));
+        Assert.Equal("Feed written: 1 IPv4 and 1 IPv6 address to the fortigate folder of /e",
+            AppText.AbuseFeedWritten(Feed(1, 1, 0, 0), "/e"));
     }
 
     [Fact]
@@ -343,11 +348,11 @@ public sealed class AbuseIpDbPageTextTests
     {
         string line = AppText.AbuseFeedWritten(Feed(131_072, 0, 2_000, 1, "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"), "/e");
 
-        Assert.Equal("Feed written: 131,072 IPv4 and 0 IPv6 addresses to /e"
+        Assert.Equal("Feed written: 131,072 IPv4 and 0 IPv6 addresses to the fortigate folder of /e"
             + AppText.Dash + "1 address removed by exceptions"
             + AppText.Dash + "2,000 older addresses left out over the limit of 131,072 a file"
-            + AppText.Dash + "AbuseIPDB_rolling_ipv6.txt was emptied", line);
-        Assert.Equal("Feed written: 5 IPv4 and 0 IPv6 addresses to /e" + AppText.Dash + "1 older address left out over the limit of 131,072 a file",
+            + AppText.Dash + $"{V6} was emptied", line);
+        Assert.Equal("Feed written: 5 IPv4 and 0 IPv6 addresses to the fortigate folder of /e" + AppText.Dash + "1 older address left out over the limit of 131,072 a file",
             AppText.AbuseFeedWritten(Feed(5, 0, 1, 0), "/e"));
     }
 
@@ -355,7 +360,7 @@ public sealed class AbuseIpDbPageTextTests
     public void EveryFeedWriteFailureHasItsOwnLine()
     {
         var lines = Enum.GetValues<AbuseFeedWriteFailure>()
-            .Where(f => f != AbuseFeedWriteFailure.None)
+            .Where(f => f is not AbuseFeedWriteFailure.None)
             .Select(f => AppText.AbuseFeedWriteFailureLine(Failed(f), 30, ipv6Enabled: true)).ToList();
 
         Assert.Equal(lines.Count, lines.Distinct().Count());
@@ -396,11 +401,11 @@ public sealed class AbuseIpDbPageTextTests
     {
         Assert.Equal("The feed couldn't be written. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed), 30, ipv6Enabled: true));
-        Assert.Equal("The feed couldn't be written. AbuseIPDB_rolling_ipv4.txt was written before the failure. "
+        Assert.Equal($"The feed couldn't be written. {V4} was written before the failure. "
             + "Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
                 "/e/fortigate/AbuseIPDB_rolling_ipv4.txt"), 30, ipv6Enabled: true));
-        Assert.Equal("The feed couldn't be written. AbuseIPDB_rolling_ipv4.txt and AbuseIPDB_rolling_ipv6.txt were written "
+        Assert.Equal($"The feed couldn't be written. {V4} and {V6} were written "
             + "before the failure. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
                 "/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"), 30, ipv6Enabled: true));
@@ -412,13 +417,13 @@ public sealed class AbuseIpDbPageTextTests
         const string ipv4 = "/e/fortigate/AbuseIPDB_rolling_ipv4.txt";
         const string ipv6 = "/e/fortigate/AbuseIPDB_rolling_ipv6.txt";
 
-        Assert.Equal("The feed couldn't be written. AbuseIPDB_rolling_ipv4.txt was emptied before the failure. "
+        Assert.Equal($"The feed couldn't be written. {V4} was emptied before the failure. "
             + "Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4], [ipv4]), 30, ipv6Enabled: true));
-        Assert.Equal("The feed couldn't be written. AbuseIPDB_rolling_ipv4.txt was written before the failure. "
-            + "AbuseIPDB_rolling_ipv6.txt was emptied before the failure. Please try again or contact the Infra Team.",
+        Assert.Equal($"The feed couldn't be written. {V4} was written before the failure. "
+            + $"{V6} was emptied before the failure. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4, ipv6], [ipv6]), 30, ipv6Enabled: true));
-        Assert.Equal("The feed couldn't be written. AbuseIPDB_rolling_ipv4.txt and AbuseIPDB_rolling_ipv6.txt were written "
+        Assert.Equal($"The feed couldn't be written. {V4} and {V6} were written "
             + "before the failure. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4, ipv6], []), 30, ipv6Enabled: true));
     }
@@ -434,17 +439,17 @@ public sealed class AbuseIpDbPageTextTests
         string ipv4 = Path.Combine(folder, "AbuseIPDB_rolling_ipv4.txt");
         string ipv6 = Path.Combine(folder, "AbuseIPDB_rolling_ipv6.txt");
 
-        Assert.Equal("AbuseIPDB_rolling_ipv6.txt couldn't be written. AbuseIPDB_rolling_ipv4.txt was written before the "
+        Assert.Equal($"{V6} couldn't be written. {V4} was written before the "
             + "failure. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4], []) with { FailedFile = ipv6 }, 30, ipv6Enabled: true));
-        Assert.Equal("AbuseIPDB_rolling_ipv6.txt couldn't be written. AbuseIPDB_rolling_ipv4.txt was emptied before the "
+        Assert.Equal($"{V6} couldn't be written. {V4} was emptied before the "
             + "failure. Unsaved changes on the Settings page weren't used. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6 }, 30, ipv6Enabled: true,
                 unsaved: true));
-        Assert.Equal("AbuseIPDB_rolling_ipv4.txt couldn't be written. Please try again or contact the Infra Team.",
+        Assert.Equal($"{V4} couldn't be written. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([], []) with { FailedFile = ipv4 }, 30, ipv6Enabled: true,
                 unsaved: true));
-        Assert.Equal("The feed couldn't be written. AbuseIPDB_rolling_ipv4.txt was written before the failure. "
+        Assert.Equal($"The feed couldn't be written. {V4} was written before the failure. "
             + "Unsaved changes on the Settings page weren't used. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4], []), 30, ipv6Enabled: true, unsaved: true));
         Assert.Equal("Nothing was written" + AppText.Dash + "download the blacklist first",
@@ -459,9 +464,9 @@ public sealed class AbuseIpDbPageTextTests
         string ipv6 = Path.Combine(folder, "AbuseIPDB_rolling_ipv6.txt");
         AbuseFeedWriteResult failed = Failed(AbuseFeedWriteFailure.WriteFailed) with { FailedFile = ipv4 };
 
-        Assert.Equal("AbuseIPDB_rolling_ipv4.txt couldn't be emptied. Please try again or contact the Infra Team.",
+        Assert.Equal($"{V4} couldn't be emptied. Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(failed, folder));
-        Assert.Equal("AbuseIPDB_rolling_ipv6.txt couldn't be emptied. AbuseIPDB_rolling_ipv4.txt was emptied before the "
+        Assert.Equal($"{V6} couldn't be emptied. {V4} was emptied before the "
             + "failure. Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6 }, folder));
     }
@@ -473,22 +478,22 @@ public sealed class AbuseIpDbPageTextTests
         string ipv4 = Path.Combine(folder, "AbuseIPDB_rolling_ipv4.txt");
         string ipv6 = Path.Combine(folder, "AbuseIPDB_rolling_ipv6.txt");
 
-        Assert.Equal("AbuseIPDB_rolling_ipv4.txt couldn't be written. The old AbuseIPDB_rolling_ipv4.txt and "
-            + "AbuseIPDB_rolling_ipv6.txt were left as they were. Please try again or contact the Infra Team.",
+        Assert.Equal($"{V4} couldn't be written. The old {V4} and "
+            + $"{V6} were left as they were. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([], []) with { FailedFile = ipv4, OldFilesLeft = [ipv4, ipv6] }, 30,
                 ipv6Enabled: true, unsaved: true));
         // After the files done before it, and before the unsaved note
-        Assert.Equal("AbuseIPDB_rolling_ipv6.txt couldn't be written. AbuseIPDB_rolling_ipv4.txt was written before the "
-            + "failure. The old AbuseIPDB_rolling_ipv6.txt was left as it was. Unsaved changes on the Settings page weren't "
+        Assert.Equal($"{V6} couldn't be written. {V4} was written before the "
+            + $"failure. The old {V6} was left as it was. Unsaved changes on the Settings page weren't "
             + "used. Please try again or contact the Infra Team.",
             AppText.AbuseFeedWriteFailureLine(FailedWrite([ipv4], []) with { FailedFile = ipv6, OldFilesLeft = [ipv6] }, 30,
                 ipv6Enabled: true, unsaved: true));
-        Assert.Equal("AbuseIPDB_rolling_ipv4.txt couldn't be emptied. The old AbuseIPDB_rolling_ipv6.txt was left as it "
+        Assert.Equal($"{V4} couldn't be emptied. The old {V6} was left as it "
             + "was. Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed) with { FailedFile = ipv4, OldFilesLeft = [ipv6] },
                 folder));
-        Assert.Equal("AbuseIPDB_rolling_ipv6.txt couldn't be emptied. AbuseIPDB_rolling_ipv4.txt was emptied before the "
-            + "failure. The old AbuseIPDB_rolling_ipv6.txt was left as it was. Please try again or contact the Infra Team.",
+        Assert.Equal($"{V6} couldn't be emptied. {V4} was emptied before the "
+            + $"failure. The old {V6} was left as it was. Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6, OldFilesLeft = [ipv6] }, folder));
     }
 
@@ -497,11 +502,11 @@ public sealed class AbuseIpDbPageTextTests
     {
         Assert.Equal("The feed couldn't be emptied. Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed), "/e"));
-        Assert.Equal("The feed couldn't be emptied. AbuseIPDB_rolling_ipv4.txt was emptied before the failure. "
+        Assert.Equal($"The feed couldn't be emptied. {V4} was emptied before the failure. "
             + "Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
                 "/e/fortigate/AbuseIPDB_rolling_ipv4.txt"), "/e"));
-        Assert.Equal("The feed couldn't be emptied. AbuseIPDB_rolling_ipv4.txt and AbuseIPDB_rolling_ipv6.txt were emptied "
+        Assert.Equal($"The feed couldn't be emptied. {V4} and {V6} were emptied "
             + "before the failure. Please try again or contact the Infra Team.",
             AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
                 "/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"), "/e"));
@@ -514,9 +519,10 @@ public sealed class AbuseIpDbPageTextTests
             ["/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"], 0, 0, 0, 0,
             ["/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"]);
 
-        Assert.Equal("Feed emptied: AbuseIPDB_rolling_ipv4.txt and AbuseIPDB_rolling_ipv6.txt in /e",
+        Assert.Equal($"Feed emptied: {V4} and {V6} in /e",
             AppText.AbuseFeedEmptied(emptied, "/e"));
-        Assert.Equal("Nothing was emptied" + AppText.Dash + "there's no AbuseIPDB feed file in /e",
+        Assert.Equal("Nothing was emptied" + AppText.Dash
+            + "there's no AbuseIPDB feed file in the fortigate or modsecurity folder of /e",
             AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.NothingToWrite), "/e"));
     }
 
@@ -530,7 +536,7 @@ public sealed class AbuseIpDbPageTextTests
         Assert.Contains("With IPv6 off, an existing IPv6 feed file is emptied.", off);
         Assert.Contains("FortiOS 7.4.4", on);
         Assert.Contains("262,144", off);
-        const string start = "Write a Fortigate threat feed of the addresses listed in the days before the last download, "
+        const string start = "Write a threat feed of the addresses listed in the days before the last download, "
             + "as many days as Settings sets.";
         Assert.StartsWith(start + " From FortiOS 7.4.4", on);
         Assert.StartsWith(start + " With IPv6 off, an existing IPv6 feed file is emptied. From FortiOS 7.4.4", off);
@@ -641,8 +647,9 @@ public sealed class AbuseIpDbPageTextTests
             + "feed files are kept; choose Empty feed to empty the files. This cannot be undone.", AppText.ClearAbuseListBody);
         Assert.Equal("Empty the AbuseIPDB feed?", AppText.EmptyAbuseFeedTitle);
         Assert.Equal("Empty feed", AppText.EmptyAbuseFeedButton);
-        Assert.Equal("Each AbuseIPDB feed file in the export folder's fortigate folder is rewritten with no addresses, so a "
-            + "FortiGate that reads it blocks none. The AbuseIPDB list is kept, and the next Write feed fills the files again.",
+        Assert.Equal("Each AbuseIPDB feed file in the export folder's fortigate and modsecurity folders, whatever is ticked, "
+            + "is rewritten with no addresses, so a FortiGate or ModSecurity server matches none of them once it reads the "
+            + "file again. The AbuseIPDB list is kept, and the next Write feed fills the files again.",
             AppText.EmptyAbuseFeedBody);
     }
 
@@ -666,9 +673,11 @@ public sealed class AbuseIpDbPageTextTests
         Assert.Contains(" downloads a day. New addresses lists the addresses the last download added. "
             + "Right-click an offending network to open its ASN on ipinfo.io, or a new address to open it on ipinfo.io "
             + "or AbuseIPDB's website. "
-            + "Write feed writes a Fortigate threat feed of the addresses listed in the days "
+            + "Write feed writes a threat feed of the addresses listed in the days "
             + "before the last download, as many days as Settings sets, leaving out the networks under Exceptions. "
             + "With IPv6 off, the download asks for IPv4 addresses only, and an existing IPv6 feed file is emptied.", help);
+        Assert.Contains("Empty feed rewrites the feed files with no addresses, so a FortiGate or ModSecurity server that "
+            + "reads them blocks none.", help);
         Assert.Contains("of the last download", AppText.AbuseIpDbKeepDaysCaption);
     }
 

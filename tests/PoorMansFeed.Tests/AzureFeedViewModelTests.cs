@@ -330,6 +330,25 @@ public sealed class AzureFeedViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task With_No_Feed_Type_Ticked_Write_Feed_Asks_And_Writes_No_Azure_Feed()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false };
+        FakeAzureFeedService feeds = Feeds(AzureTestData.Catalogue());
+        AzureFeedViewModel vm = Vm(feeds);
+        await vm.ActivateAsync();
+        vm.SelectedService = vm.Services.Single(service => service.BaseName == "Storage");
+        vm.SelectedRegion = vm.Regions.Single(region => region.TagName == "Storage.SoutheastAsia");
+        await vm.CheckCommand.ExecuteAsync(null);
+        Assert.NotEmpty(vm.Rows);
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.False(Directory.Exists(Path.Combine(_temp.ExportFolder, "fortigate")));
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
     public async Task Open_Folder_Opens_The_Export_Folder()
     {
         AzureFeedViewModel vm = Vm(Feeds(AzureTestData.Catalogue()));

@@ -1,5 +1,6 @@
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed;
 
@@ -55,6 +56,9 @@ internal sealed class UnavailableIpInfoService : IIpInfoService
     public Task<bool> SaveSettingsAsync(UserSettings settings) => Task.FromResult(false);
 
     public Task<ExceptionsSaveOutcome> SaveExceptionsAsync(IReadOnlyList<ExceptionEntry> entries) => Task.FromResult(ExceptionsSaveOutcome.Failed);
+
+    public Task<ModSecurityRuleIdsResult> AssignModSecurityRuleIdsAsync(IReadOnlyList<string> fileNames, CancellationToken ct)
+        => Task.FromResult(new ModSecurityRuleIdsResult(ModSecurityRuleIdsFailure.StorageError, []));
 
     public void Dispose()
     {

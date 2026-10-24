@@ -42,9 +42,9 @@ public sealed class AbuseIpDbFeedTests : IDisposable
 
     private string ExportFolder => _temp.Paths.DefaultExportFolder;
 
-    private string Ipv4File => AbuseIpDbFeedWriter.PathFor(ExportFolder, ipv6: false);
+    private string Ipv4File => AbuseIpDbFeedWriter.PathFor(ExportFolder, FeedType.Fortigate, ipv6: false);
 
-    private string Ipv6File => AbuseIpDbFeedWriter.PathFor(ExportFolder, ipv6: true);
+    private string Ipv6File => AbuseIpDbFeedWriter.PathFor(ExportFolder, FeedType.Fortigate, ipv6: true);
 
     // ---------- 1. The exact bytes ----------
 
@@ -117,9 +117,9 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         AbuseFeedFamily family = new(false, [Address("8.8.8.8")], 0, 0);
         Directory.CreateDirectory(Path.GetDirectoryName(Ipv4File)!);
 
-        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, family, new AbuseFeedHeader(30, Now, Downloaded, null));
+        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, FeedType.Fortigate, family, new AbuseFeedHeader(30, Now, Downloaded, null));
         string[] noGeneration = File.ReadAllLines(Ipv4File);
-        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, family, new AbuseFeedHeader(30, Now, null, null));
+        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, FeedType.Fortigate, family, new AbuseFeedHeader(30, Now, null, null));
         string[] noDownload = File.ReadAllLines(Ipv4File);
 
         Assert.Contains("# Last download: 2026-10-19 07:30:00 UTC", noGeneration);
@@ -132,10 +132,10 @@ public sealed class AbuseIpDbFeedTests : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Ipv4File)!);
 
-        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, new AbuseFeedFamily(false, [Address("8.8.8.8")], 1, 1),
+        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, FeedType.Fortigate, new AbuseFeedFamily(false, [Address("8.8.8.8")], 1, 1),
                                         new AbuseFeedHeader(30, Now, null, null));
         string[] singular = File.ReadAllLines(Ipv4File);
-        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, new AbuseFeedFamily(false, [Address("8.8.8.8")], 3, 5),
+        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, FeedType.Fortigate, new AbuseFeedFamily(false, [Address("8.8.8.8")], 3, 5),
                                         new AbuseFeedHeader(30, Now, null, null));
         string[] plural = File.ReadAllLines(Ipv4File);
 
@@ -151,10 +151,10 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         AbuseFeedFamily empty = new(false, [], 0, 0);
         Directory.CreateDirectory(Path.GetDirectoryName(Ipv4File)!);
 
-        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, empty, new AbuseFeedHeader(30, Now, Downloaded, Generated));
+        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, FeedType.Fortigate, empty, new AbuseFeedHeader(30, Now, Downloaded, Generated));
         Assert.Equal(Utf8(Header("IPv4", 0)), File.ReadAllBytes(Ipv4File));
 
-        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, empty, new AbuseFeedHeader(30, Now, null, null));
+        AbuseIpDbFeedWriter.WriteFamily(ExportFolder, FeedType.Fortigate, empty, new AbuseFeedHeader(30, Now, null, null));
         Assert.Equal(Utf8(Header("IPv4", 0, downloaded: false)), File.ReadAllBytes(Ipv4File));
         Assert.Equal(["AbuseIPDB_rolling_ipv4.txt"], FortigateNames());
     }
@@ -1056,6 +1056,40 @@ public sealed class AbuseIpDbFeedTests : IDisposable
     }
 
     [Fact]
+    public async Task A_written_feed_its_header_only_file_and_an_emptied_feed_are_all_LF_lines_with_no_CR()
+    {
+        Seed(Generated, Downloaded, Entry("8.8.8.8", 50), Entry("2001:4860::8888", 50));
+        AbuseIpDbService service = Service();
+
+        Assert.Equal(AbuseFeedWriteFailure.None, (await service.WriteFeedAsync(CancellationToken.None)).Failure);
+        AssertBothWellFormed();
+
+        // Two days on, a download lists only the IPv6 address, so Write feed rewrites the IPv4 file header-only
+        KeepDays(1);
+        _time.Advance(TimeSpan.FromDays(2));
+        Seed(Now.AddDays(2).AddHours(-1).AddSeconds(-2), Now.AddDays(2).AddHours(-1), Entry("2001:4860::8888", 50));
+        AbuseFeedWriteResult emptied = await service.WriteFeedAsync(CancellationToken.None);
+        Assert.Equal(AbuseFeedWriteFailure.None, emptied.Failure);
+        Assert.Equal([Ipv4File], emptied.EmptiedFiles);
+        Assert.Empty(Addresses(Ipv4File));
+        AssertBothWellFormed();
+
+        Assert.Equal(AbuseFeedWriteFailure.None, (await service.EmptyFeedAsync(CancellationToken.None)).Failure);
+        Assert.Empty(Addresses(Ipv6File));
+        AssertBothWellFormed();
+
+        void AssertBothWellFormed()
+        {
+            foreach (string file in new[] { Ipv4File, Ipv6File })
+            {
+                byte[] bytes = File.ReadAllBytes(file);
+                Assert.DoesNotContain((byte)'\r', bytes);
+                FeedFormat.AssertWellFormed(bytes);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Empty_with_only_the_IPv4_file_empties_it_alone_and_makes_no_IPv6_file()
     {
         WriteOldFeed(Ipv4File, "8.8.8.8");
@@ -1353,7 +1387,7 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         return Lines([.. lines]);
     }
 
-    private static string Lines(params string[] lines) => string.Concat(lines.Select(line => line + Environment.NewLine));
+    private static string Lines(params string[] lines) => string.Concat(lines.Select(line => line + "\n"));
 
     private static byte[] Utf8(string text) => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text);
 

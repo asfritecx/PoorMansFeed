@@ -4,11 +4,8 @@ using Avalonia.Input;
 namespace PoorMansFeed;
 
 /// <summary>
-/// The nav pane's items panel: a DockPanel, so Settings can sit at the foot, that the list steps through with the
-/// arrow keys in the order its items are listed. It answers every direction exactly as a vertical StackPanel with
-/// as many children does (pinned by a test that asks one): only a direct child counts as where focus is, Up and Down
-/// from anything else give nothing, Next and Previous count from before the first child, and a wrap goes to the
-/// first or the last child.
+/// A DockPanel, so Settings can sit at the foot, that answers every direction exactly as a vertical StackPanel with
+/// as many children does (a test asks one), because without it the arrow keys stop moving the selection.
 /// </summary>
 public sealed class NavItemsPanel : DockPanel, INavigableContainer
 {

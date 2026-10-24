@@ -7,10 +7,8 @@ namespace PoorMansFeed.Tests;
 /// <summary>The exceptions editor's rules, on the Settings page but without a window: adding, refusing, removing and what Save returns.</summary>
 public sealed class ExceptionsEditorModelTests
 {
-    // The longest feedback text in FeedbackTexts (the unreadable warning), which a Skia render of the editor's feedback
-    // line measured whole. A count of characters is only a proxy for width: it catches a message made longer, not
-    // one made of wider glyphs. The Settings page's render script shows every text in FeedbackTexts on that line, with
-    // the longest network, and fails when one is trimmed; a new text needs a state there as well as a row here.
+    // The unreadable warning, which a Skia render measured whole. A count of characters is only a proxy for width:
+    // it catches a message made longer, not one made of wider glyphs, which only the render script sees.
     private const int FeedbackLineBudget = 77;
 
     // .NET writes groups 5 and 6 of 0:5efe with a dotted IPv4 tail, so this is the longest canonical network

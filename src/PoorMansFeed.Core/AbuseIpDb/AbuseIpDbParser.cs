@@ -6,9 +6,8 @@ using System.Text.Json;
 namespace PoorMansFeed.Core.AbuseIpDb;
 
 /// <summary>
-/// Reads the answer to a check and the blacklist. A check answer must be about the address that was asked, a blacklist
-/// keeps only public addresses, and every kept field is checked for its type and range. No free text (ISP, domain,
-/// usage type, host names) is kept, because it would reach the screen and later a feed.
+/// A check answer must be about the address asked. No free text (ISP, domain, usage type, host names) is kept, because
+/// it would reach the screen and later a feed.
 /// </summary>
 internal static class AbuseIpDbParser
 {
@@ -56,14 +55,8 @@ internal static class AbuseIpDbParser
     private enum EntryRead { Read, Unreadable, NotPublic }
 
     /// <summary>
-    /// The blacklist, one entry per address, or null when the body is not a blacklist (not JSON, a string that isn't
-    /// valid UTF-8, no entries), more than 10 entries and more than 1% of them can't be read, or no entry is kept. An entry is judged in
-    /// this order: an object with an <c>ipAddress</c> string that reads as an address, a score from 0 to 100, a
-    /// readable <c>lastReportedAt</c> when there is one (all <see cref="Blacklist.Unreadable"/>), then the address,
-    /// an IPv4-mapped one as IPv4, must be public (<see cref="Blacklist.NotPublic"/>). Of the entries for one address
-    /// the latest report wins, then the higher score, then the first in the file; it keeps the first one's place.
-    /// <paramref name="answerTime"/> is the answer's time on AbuseIPDB's clock: its <c>Date</c> when the clock guard
-    /// accepted it, else the download time. The generation time is clamped to it and taken from it when missing.
+    /// <paramref name="answerTime"/> is on AbuseIPDB's clock: the Date the clock guard accepted, else the download
+    /// time. The generation time is clamped to it plus GeneratedAtLeeway, and taken from it when missing.
     /// </summary>
     public static Blacklist? TryParseBlacklist(byte[] json, DateTimeOffset answerTime)
     {

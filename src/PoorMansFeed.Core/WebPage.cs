@@ -3,8 +3,7 @@ using System.Globalization;
 namespace PoorMansFeed.Core;
 
 /// <summary>
-/// A page on ipinfo.io or AbuseIPDB's website that the app may hand to the default browser. Windows passes the text
-/// to ShellExecute, so the browser is handed only a page built here: a fixed https host, and a path made from an ASN's
+/// Windows hands the URL to ShellExecute, so a page is built only here: a fixed https host and a path from an ASN's
 /// digits or a <see cref="PublicAddress"/>'s checked text. No other string reaches the URL.
 /// </summary>
 public sealed class WebPage

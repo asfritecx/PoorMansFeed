@@ -100,13 +100,12 @@
                  TextWrapping="Wrap" Margin="20,16" />
     </Grid>
 
-    <!-- Content layer. The frame is as tall as the viewport, so each page's list card takes the height left over and
-         grows with the window. MinHeight is the tallest page (Azure and AWS, with their status line) with a 216px list,
-         measured headlessly; below it the page scrolls instead of squeezing the list. -->
+    <!-- Content layer. The frame is as tall as the viewport, so each list card takes the height left over. MinHeight
+         is the tallest page with a 216px list, measured headlessly; below it the page scrolls. -->
     <Border x:Name="ContentLayer" Grid.Row="1" Grid.Column="1">
       <Panel>
         <ScrollViewer x:Name="PageScroll" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding !IsStopped}">
-          <Border x:Name="PageFrame" Padding="32" MinHeight="738" Height="{Binding #PageScroll.Viewport.Height}">
+          <Border x:Name="PageFrame" Padding="32" MinHeight="755" Height="{Binding #PageScroll.Viewport.Height}">
             <Grid RowDefinitions="Auto,Auto,*" RowSpacing="32">
 
               <!-- Page headings: one per tool, swapped with the pages below -->
@@ -240,6 +239,8 @@
                       <TextBlock x:Name="ResultsSummary" Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding ResultsSummaryText}"
                                  Classes="caption" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
                       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                        <Button x:Name="ModSecurityRulesButton" Content="{x:Static vm:AppText.ModSecurityRulesButton}"
+                                Command="{Binding ModSecurityRulesCommand}" IsVisible="{Binding ShowsModSecurityRules}" />
                         <Button x:Name="CopyResultsButton" Classes="subtle" Command="{Binding CopyResultsCommand}"
                                 ToolTip.Tip="{x:Static vm:AppText.CopyTooltip}"
                                 AutomationProperties.Name="{x:Static vm:AppText.CopyName}">
@@ -472,14 +473,18 @@
                   </Border>
 
                   <Grid Grid.Row="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
-                      <StackPanel Spacing="2">
-                        <TextBlock Text="{x:Static vm:AppText.AbuseNetworksHeader}" Classes="section-title" />
-                        <TextBlock x:Name="AbuseSummary" Text="{Binding SummaryText}" Classes="caption"
-                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SummaryText}"
-                                   AutomationProperties.LiveSetting="Polite" />
-                      </StackPanel>
+                    <!-- The summary has a row of its own across the page, so its report note shows whole at the
+                         minimum width while the rules button shows; the buttons share the first row with the title -->
+                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="2"
+                          Margin="2,0,2,4">
+                      <TextBlock Text="{x:Static vm:AppText.AbuseNetworksHeader}" Classes="section-title"
+                                 VerticalAlignment="Center" />
+                      <TextBlock x:Name="AbuseSummary" Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding SummaryText}"
+                                 Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SummaryText}"
+                                 AutomationProperties.LiveSetting="Polite" />
                       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+                        <Button x:Name="AbuseModSecurityRulesButton" Content="{x:Static vm:AppText.ModSecurityRulesButton}"
+                                Command="{Binding ModSecurityRulesCommand}" IsVisible="{Binding ShowsModSecurityRules}" />
                         <Button x:Name="AbuseOpenFolderButton" Command="{Binding OpenFolderCommand}"
                                 ToolTip.Tip="{x:Static vm:AppText.OpenFolderName}"
                                 AutomationProperties.Name="{x:Static vm:AppText.OpenFolderName}">
@@ -578,11 +583,8 @@
                   </Grid>
                 </Grid>
 
-                <!-- Settings: the options, the API keys and the exceptions, each section with its own Save. Only this page
-                     scrolls inside the frame, so the frame's minimum stays the tallest list page's. The inputs are off while
-                     a save runs, because a save loads the saved values back into the form. Until start-up has read the
-                     saved values, one line stands in place of the cards; the swap happens once per start-up, so
-                     IsVisible is right here. -->
+                <!-- Settings: only this page scrolls inside the frame, so the frame's minimum stays the tallest list
+                     page's. The inputs are off while a save runs, because a save loads the saved values back. -->
                 <Grid x:Name="SettingsPage" IsVisible="False" x:DataType="vm:SettingsPageViewModel">
                   <TextBlock x:Name="SettingsNotStartedText" Text="{x:Static vm:AppText.SettingsNotStarted}" Classes="secondary"
                              TextWrapping="Wrap" Margin="2,0" IsVisible="{Binding !IsStarted}" />
@@ -607,6 +609,24 @@
                         <Border x:Name="SettingsCard" Classes="card">
                           <StackPanel x:Name="SettingsInputs" Spacing="16" IsEnabled="{Binding CanEditInputs}">
 
+                            <!-- Write feed -->
+                            <vm:FeedTypesSection x:Name="FeedTypesSection" />
+
+                            <!-- ASN export -->
+                            <StackPanel Spacing="8">
+                              <TextBlock Text="{x:Static vm:AppText.AsnExportHeader}" Classes="body-strong" />
+                              <CheckBox x:Name="FortigateEnabledBox" Content="{x:Static vm:AppText.AsnExportWritesFeeds}"
+                                        IsChecked="{Binding Settings.FortigateEnabled}" />
+                              <StackPanel Spacing="8" Margin="24,0,0,0">
+                                <CheckBox x:Name="FortigateIPv4Box" Content="{x:Static vm:AppText.IncludeIPv4}"
+                                          IsChecked="{Binding Settings.FortigateIncludeIPv4}" IsEnabled="{Binding Settings.FortigateEnabled}" />
+                                <CheckBox x:Name="FortigateIPv6Box" Content="{x:Static vm:AppText.IncludeIPv6}"
+                                          IsChecked="{Binding Settings.FortigateIncludeIPv6}" IsEnabled="{Binding Settings.CanEditFortigateIPv6}" />
+                                <CheckBox x:Name="FortigateSplitBox" Content="{x:Static vm:AppText.SplitByFamily}"
+                                          IsChecked="{Binding Settings.FortigateSplitByFamily}" IsEnabled="{Binding Settings.FortigateEnabled}" />
+                              </StackPanel>
+                            </StackPanel>
+
                             <!-- Export folder -->
                             <StackPanel Spacing="8">
                               <TextBlock Text="{x:Static vm:AppText.ExportFolderHeader}" Classes="body-strong" />
@@ -627,21 +647,6 @@
                               <CheckBox x:Name="IPv6EnabledBox" Content="{x:Static vm:AppText.IPv6Enabled}"
                                         IsChecked="{Binding Settings.IPv6Enabled}" />
                               <TextBlock Text="{x:Static vm:AppText.IPv6Caption}" Classes="caption" TextWrapping="Wrap" Margin="24,0,0,0" />
-                            </StackPanel>
-
-                            <!-- Fortigate threat feed -->
-                            <StackPanel Spacing="8">
-                              <TextBlock Text="{x:Static vm:AppText.FortigateHeader}" Classes="body-strong" />
-                              <CheckBox x:Name="FortigateEnabledBox" Content="{x:Static vm:AppText.FortigateEnabled}"
-                                        IsChecked="{Binding Settings.FortigateEnabled}" />
-                              <StackPanel Spacing="8" Margin="24,0,0,0">
-                                <CheckBox x:Name="FortigateIPv4Box" Content="{x:Static vm:AppText.IncludeIPv4}"
-                                          IsChecked="{Binding Settings.FortigateIncludeIPv4}" IsEnabled="{Binding Settings.FortigateEnabled}" />
-                                <CheckBox x:Name="FortigateIPv6Box" Content="{x:Static vm:AppText.IncludeIPv6}"
-                                          IsChecked="{Binding Settings.FortigateIncludeIPv6}" IsEnabled="{Binding Settings.CanEditFortigateIPv6}" />
-                                <CheckBox x:Name="FortigateSplitBox" Content="{x:Static vm:AppText.SplitByFamily}"
-                                          IsChecked="{Binding Settings.FortigateSplitByFamily}" IsEnabled="{Binding Settings.FortigateEnabled}" />
-                              </StackPanel>
                             </StackPanel>
 
                             <!-- Large ranges -->
@@ -765,10 +770,8 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                   <DataTemplate x:DataType="vm:ExceptionRow">
-                                    <!-- The network column is fixed at 368, wide enough for the longest network (46 characters
-                                         of Geist Mono, such as 2000:2000:2000:2000:0:5efe:200.200.200.200/125, with a few pixels
-                                         to spare), so no network trims at the minimum window width and every row's columns
-                                         line up; the note takes the rest and trims, with its tooltip -->
+                                    <!-- 368 fits the longest network, 46 characters of Geist Mono, so no network
+                                         trims at the minimum width; the note takes the rest and trims -->
                                     <Border Classes="row">
                                       <Grid ColumnDefinitions="368,*,Auto" ColumnSpacing="12">
                                         <TextBlock Text="{Binding NetworkText}" Classes="mono" TextTrimming="CharacterEllipsis"

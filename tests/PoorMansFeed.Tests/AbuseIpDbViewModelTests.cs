@@ -765,7 +765,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         Assert.Equal(AppText.AbuseListStale(KeepDays), vm.StatusText);
         Assert.True(vm.IsStatusWarning);
-        Assert.Equal(AppText.AbuseFeedWritten(result, Fortigate(Exports)), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedWritten(result, Exports), vm.ActionText);
 
         held.SetResult();
         await activation;
@@ -1342,7 +1342,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
         Assert.Equal([nameof(IAbuseIpDbService.EmptyFeedAsync), nameof(IAbuseIpDbService.GetStatusAsync)], _abuse.Calls);
-        Assert.Equal(AppText.AbuseFeedEmptied(result, Fortigate(root)), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedEmptied(result, root), vm.ActionText);
         Assert.DoesNotContain(AppText.UnsavedSettingsNote, vm.ActionText, StringComparison.Ordinal);
     }
 
@@ -1355,7 +1355,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal(AppText.AbuseFeedEmptyFailureLine(result, Fortigate(Exports)), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedEmptyFailureLine(result, Exports), vm.ActionText);
     }
 
     [Fact]
@@ -1365,11 +1365,197 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal(AppText.AbuseFeedEmptyFailureLine(ThrownWrite, Fortigate(Exports)), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedEmptyFailureLine(ThrownWrite, Exports), vm.ActionText);
         Assert.Equal(1, _abuse.StatusCalls);
     }
 
     // ---- Write feed ----
+
+    private void TickNoFeedType() =>
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false, WriteModSecurityLists = false };
+
+    [Fact]
+    public async Task Write_Feed_With_No_Feed_Type_Asks_And_Writes_Nothing()
+    {
+        TickNoFeedType();
+        using AbuseIpDbViewModel vm = Create();
+        string before = vm.ActionText;
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.Equal(0, _ui.SettingsPageShows);
+        Assert.Equal(before, vm.ActionText);
+        Assert.NotEqual(AppText.WritingAbuseFeed, vm.ActionText);
+        Assert.Equal(0, _abuse.StatusCalls);
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
+    public async Task Open_Settings_From_The_Configure_Dialog_Shows_The_Settings_Page_And_Writes_Nothing()
+    {
+        TickNoFeedType();
+        _ui.ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings;
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.Equal(1, _ui.SettingsPageShows);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
+    public async Task Every_Write_Feed_Press_With_No_Feed_Type_Asks()
+    {
+        TickNoFeedType();
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, _ui.ConfigureFeedsAsks);
+        Assert.Equal(0, _abuse.FeedCalls);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Write_Feed_With_A_Feed_Type_Ticked_Writes_Without_Asking(bool fortigate, bool modSecurity)
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = fortigate, WriteModSecurityLists = modSecurity };
+        _abuse.FeedResults.Enqueue(Feed());
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, _ui.ConfigureFeedsAsks);
+        Assert.Equal(1, _abuse.FeedCalls);
+    }
+
+    [Fact]
+    public async Task Write_Feed_With_No_Feed_Type_While_The_Gate_Is_Held_Shows_The_Busy_Line()
+    {
+        TickNoFeedType();
+        using AbuseIpDbViewModel vm = Create();
+        using (IDisposable hold = _gate.Hold())
+            await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(AppText.ConfigureFeedsBusy, vm.ActionText);
+        Assert.Equal(0, _ui.ConfigureFeedsAsks);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
+    public async Task The_Configure_Dialog_Holds_The_Gate_Only_While_It_Is_Open()
+    {
+        TickNoFeedType();
+        using AbuseIpDbViewModel vm = Create();
+        bool? heldWhileAsking = null;
+        bool? workingWhileAsking = null;
+        _ui.OnDialogOpen = () =>
+        {
+            heldWhileAsking = _gate.IsHeld;
+            workingWhileAsking = vm.IsWorking;
+        };
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.True(heldWhileAsking);
+        Assert.True(workingWhileAsking);
+        Assert.False(_gate.IsHeld);
+        Assert.True(_gate.CanStart);
+        Assert.True(vm.WriteFeedCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task A_Configure_Dialog_That_Fails_To_Show_Gives_The_Generic_Line_And_No_Settings_Page()
+    {
+        TickNoFeedType();
+        _ui.ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings;
+        _ui.ConfigureFeedsException = new InvalidOperationException("dialog broken");
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.Equal(AppText.Generic, vm.ActionText);
+        Assert.Equal(0, _ui.SettingsPageShows);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.False(_gate.IsHeld);
+        Assert.False(vm.IsWorking);
+    }
+
+    [Fact]
+    public async Task A_Page_Disposed_While_The_Configure_Dialog_Is_Open_Shows_No_Settings_Page()
+    {
+        TickNoFeedType();
+        _ui.ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings;
+        var open = new TaskCompletionSource();
+        _ui.ConfigureFeedsGate = open;
+        AbuseIpDbViewModel vm = Create();
+
+        Task write = vm.WriteFeedCommand.ExecuteAsync(null);
+        vm.Dispose();
+        open.SetResult();
+        await write;
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.Equal(0, _ui.SettingsPageShows);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.False(_gate.IsHeld);
+    }
+
+    [Fact]
+    public async Task A_Close_While_The_Configure_Dialog_Is_Open_Shows_No_Settings_Page()
+    {
+        TickNoFeedType();
+        _ui.ConfigureFeedsAnswer = ConfigureFeedsChoice.OpenSettings;
+        var open = new TaskCompletionSource();
+        _ui.ConfigureFeedsGate = open;
+        using AbuseIpDbViewModel vm = Create();
+
+        Task write = vm.WriteFeedCommand.ExecuteAsync(null);
+        await vm.StopForCloseAsync();
+        open.SetResult();
+        await write;
+
+        Assert.Equal(1, _ui.ConfigureFeedsAsks);
+        Assert.Equal(0, _ui.SettingsPageShows);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.False(_gate.IsHeld);
+    }
+
+    [Fact]
+    public async Task Empty_Feed_With_No_Feed_Type_Never_Asks_To_Configure()
+    {
+        TickNoFeedType();
+        _abuse.EmptyResults.Enqueue(Feed());
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.EmptyFeedCommand.ExecuteAsync(null);
+
+        Assert.Single(_ui.Confirms);
+        Assert.Equal(0, _ui.ConfigureFeedsAsks);
+        Assert.Equal(1, _abuse.EmptyCalls);
+    }
+
+    [Fact]
+    public async Task A_Write_Feed_Whose_Settings_Read_Throws_Never_Asks_And_Gives_The_Failed_Line()
+    {
+        using AbuseIpDbViewModel vm = Create();
+        _ipinfo.SettingsFailure = new InvalidOperationException("settings broken");
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(0, _ui.ConfigureFeedsAsks);
+        Assert.Equal(0, _abuse.FeedCalls);
+        Assert.Equal(AppText.AbuseFeedWriteFailureLine(ThrownWrite, AbuseIpDbLimits.DefaultKeepDays, true), vm.ActionText);
+        Assert.False(vm.IsWorking);
+    }
 
     [Theory]
     [InlineData(true)]
@@ -1382,7 +1568,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.WriteFeedCommand.ExecuteAsync(null);
 
-        string line = AppText.AbuseFeedWritten(result, Fortigate(Exports));
+        string line = AppText.AbuseFeedWritten(result, Exports);
         Assert.Equal(unsaved ? line + AppText.UnsavedSettingsNote : line, vm.ActionText);
         Assert.Equal([nameof(IAbuseIpDbService.WriteFeedAsync), nameof(IAbuseIpDbService.GetStatusAsync)], _abuse.Calls);
     }
@@ -1400,7 +1586,8 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.WriteFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal("AbuseIPDB_rolling_ipv6.txt couldn't be written. AbuseIPDB_rolling_ipv4.txt was written before the failure."
+        Assert.Equal(Path.Combine("fortigate", "AbuseIPDB_rolling_ipv6.txt") + " couldn't be written. "
+                     + Path.Combine("fortigate", "AbuseIPDB_rolling_ipv4.txt") + " was written before the failure."
                      + (unsaved ? " Unsaved changes on the Settings page weren't used." : "")
                      + " Please try again or contact the Infra Team.", vm.ActionText);
     }
@@ -1424,7 +1611,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         writing.SetResult();
         await write;
 
-        string line = AppText.AbuseFeedWritten(result, Fortigate(Exports));
+        string line = AppText.AbuseFeedWritten(result, Exports);
         Assert.Equal(unsavedAtStart ? line + AppText.UnsavedSettingsNote : line, vm.ActionText);
     }
 
@@ -1473,13 +1660,55 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
     {
         string root = Path.Combine(_folder, "chosen");
         _ipinfo.Settings = _ipinfo.Settings with { ExportFolder = root };
-        AbuseFeedWriteResult result = Feed();
+        AbuseFeedWriteResult result = Feed() with { Files = [Path.Combine(Fortigate(root), "AbuseIPDB_rolling_ipv4.txt")] };
         _abuse.FeedResults.Enqueue(result);
         using AbuseIpDbViewModel vm = Create();
 
         await vm.WriteFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal(AppText.AbuseFeedWritten(result, Fortigate(root)), vm.ActionText);
+        Assert.Equal("Feed written: 100 IPv4 and 2 IPv6 addresses to the fortigate folder of " + root, vm.ActionText);
+    }
+
+    // The settings ticked a type, but the write found none ticked: its own line, with the unsaved note
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_Write_That_Finds_No_Feed_Type_Says_So(bool unsaved)
+    {
+        _abuse.FeedResults.Enqueue(new AbuseFeedWriteResult(AbuseFeedWriteFailure.NoFeedType, [], 0, 0, 0, 0, []));
+        using AbuseIpDbViewModel vm = Create(new FakeUnsavedSettings(unsaved));
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal(AppText.NothingWrittenNoFeedType + (unsaved ? AppText.UnsavedSettingsNote : ""), vm.ActionText);
+    }
+
+    [Fact]
+    public async Task A_ModSecurity_Only_Write_Names_The_ModSecurity_Folder()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false, WriteModSecurityLists = true };
+        string file = Path.Combine(Exports, "modsecurity", "AbuseIPDB_rolling_ipv4.txt");
+        _abuse.FeedResults.Enqueue(Feed() with { Files = [file], ModSecurityFiles = [file] });
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal("Feed written: 100 IPv4 and 2 IPv6 addresses to the modsecurity folder of " + Exports, vm.ActionText);
+    }
+
+    [Fact]
+    public async Task Empty_Feed_Over_Both_Folders_Names_Each_File_With_Its_Folder()
+    {
+        string fortigate = Path.Combine(Fortigate(Exports), "AbuseIPDB_rolling_ipv6.txt");
+        string modSecurity = Path.Combine(Exports, "modsecurity", "AbuseIPDB_rolling_ipv6.txt");
+        _abuse.EmptyResults.Enqueue(new AbuseFeedWriteResult(AbuseFeedWriteFailure.None, [fortigate, modSecurity], 0, 0, 0, 0,
+            [fortigate, modSecurity]));
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.EmptyFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal("Feed emptied: " + Path.Combine("fortigate", "AbuseIPDB_rolling_ipv6.txt") + " and "
+            + Path.Combine("modsecurity", "AbuseIPDB_rolling_ipv6.txt") + " in " + Exports, vm.ActionText);
     }
 
     [Fact]

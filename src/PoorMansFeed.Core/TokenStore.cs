@@ -6,10 +6,8 @@ using PoorMansFeed.Core.Secrets;
 namespace PoorMansFeed.Core;
 
 /// <summary>
-/// The IPInfo API token, kept by the operating system for the current user (<see cref="ISecretStore"/>): DPAPI on
-/// Windows, the login Keychain on macOS. Failures come back as null or false, and nothing traced holds the token.
-/// The AbuseIPDB key uses the same rules over its own store; <paramref name="secretName"/> says in traces which secret
-/// a failure is about.
+/// The IPInfo API token, or the AbuseIPDB key over its own store, kept by the operating system. Failures come back
+/// as null or false, and no trace holds the secret: <paramref name="secretName"/> names it there.
 /// </summary>
 internal sealed class TokenStore(ISecretStore store, string secretName = "API token")
 {

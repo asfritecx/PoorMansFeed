@@ -85,7 +85,7 @@ public sealed class AwsFeedTests : IDisposable
     [Fact]
     public async Task With_IPv6_Off_Only_IPv4_Is_Asked_For()
     {
-        _ipinfo.Settings = new UserSettings { IPv6Enabled = false };
+        _ipinfo.Settings = new UserSettings { IPv6Enabled = false, WriteFortigateFeeds = true };
 
         CheckResult result = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection("EC2", "us-east-1"), Ct);
 
@@ -124,7 +124,7 @@ public sealed class AwsFeedTests : IDisposable
         Assert.Equal(1, written.UnconfirmedWritten);
         string folder = Path.Combine(_temp.ExportFolder, "fortigate");
         Assert.Equal([Path.Combine(folder, "AWS_EC2_cn-north-1_ipv4.txt"), Path.Combine(folder, "AWS_EC2_cn-north-1_ipv6.txt")], written.Files.ToArray());
-        string nl = Environment.NewLine;
+        string nl = "\n";
         string expected =
             "# PoorMansFeed - Fortigate Threat Feed" + nl +
             "# Ranges: AWS ip-ranges.json (sync token 1792136826, created 2026-10-16 07:47:06 UTC)" + nl +
@@ -154,7 +154,7 @@ public sealed class AwsFeedTests : IDisposable
         Assert.Equal(
             Path.Combine(_temp.ExportFolder, "fortigate", "AWS_EC2_all_ipv4.txt"),
             written.Files[0]);
-        Assert.Contains("# Region: all regions" + Environment.NewLine, File.ReadAllText(written.Files[0]));
+        Assert.Contains("# Region: all regions" + "\n", File.ReadAllText(written.Files[0]));
     }
 
     [Fact]

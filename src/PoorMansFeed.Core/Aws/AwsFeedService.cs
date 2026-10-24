@@ -9,9 +9,8 @@ namespace PoorMansFeed.Core.Aws;
 public sealed class AwsFeedService : IAwsFeedService
 {
     /// <summary>
-    /// The IPinfo as_domain values that count as AWS. Outside China nearly every AWS range is amazon.com. The two
-    /// China regions are operated by Sinnet (cn-north-1) and Ningxia Western Cloud Data (cn-northwest-1), and the
-    /// AWS European Sovereign Cloud region by aws.eu, so each of those domains is an AWS operator here too.
+    /// The IPinfo as_domain values that count as AWS: amazon.com, plus the operators of cn-north-1 (Sinnet),
+    /// cn-northwest-1 (Ningxia Western Cloud Data) and the AWS European Sovereign Cloud (aws.eu).
     /// </summary>
     public static IReadOnlyList<string> ConfirmationDomains { get; } =
         ["amazon.com", "sinnet.com.cn", "westcloudvalley.com", "aws.eu"];

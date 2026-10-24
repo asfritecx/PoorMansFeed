@@ -221,12 +221,15 @@ public sealed class IpInfoServiceTests : IDisposable
     [Fact]
     public async Task No_Feed_Can_Be_Written_Until_A_Successful_Start_Up_Has_Read_The_Exceptions()
     {
-        // A successful start-up with no file gives a readable empty list (Saved_Exceptions_Are_Seen_By_A_New_Instance)
+        // A successful start-up with no file gives a readable empty list (Saved_Exceptions_Are_Seen_By_A_New_Instance).
+        // Before it the settings tick no feed type, so the export is not refused for the list and finds nothing to write
         IpInfoService first = NewService();
         Assert.False(first.Exceptions.IsReadable);
+        Assert.False(first.Settings.TicksAnyFeedType());
         Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
         ExportResult refused = await first.ExportAsync(query, [], Ct);
-        Assert.Equal(ExportFailure.ExceptionsUnreadable, refused.Failure);
+        Assert.Equal(ExportFailure.NothingToExport, refused.Failure);
+        Assert.True(refused.NoFeedType);
         Assert.Empty(refused.Files);
         Assert.False(Directory.Exists(first.ExportFolder));
 
@@ -521,7 +524,7 @@ public sealed class IpInfoServiceTests : IDisposable
     public async Task Export_Leaves_Out_Large_Ranges_Unless_Included_And_Honours_Fortigate_Setting()
     {
         IpInfoService service = await InstalledServiceAsync();
-        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder }));
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true }));
         Assert.Equal(_temp.ExportFolder, service.ExportFolder);
         Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
 
@@ -557,7 +560,7 @@ public sealed class IpInfoServiceTests : IDisposable
     public async Task Export_Cuts_Exceptions_From_The_Feeds_And_The_Report_Still_Lists_Every_Network()
     {
         IpInfoService service = await InstalledServiceAsync();
-        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder }));
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true }));
         Assert.Equal(ExceptionsSaveOutcome.Saved, await service.SaveExceptionsAsync(
             [ExceptionEntryTests.Entry("8.8.8.0/25", "Resolver"), ExceptionEntryTests.Entry("2001:4860::/32", null)]));
         Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
@@ -575,7 +578,7 @@ public sealed class IpInfoServiceTests : IDisposable
         // Every IPv6 network was removed, so there is a report and an IPv4 feed only
         string feed = File.ReadAllText(Assert.Single(result.Files, f => f.EndsWith("AS15169_ipv4.txt", StringComparison.Ordinal)));
         Assert.Equal(2, result.Files.Count);
-        Assert.Contains(Environment.NewLine + "8.8.8.128/25" + Environment.NewLine, feed);
+        Assert.Contains("\n" + "8.8.8.128/25" + "\n", feed);
         Assert.DoesNotContain("8.8.8.0/24", feed);
     }
 
@@ -590,6 +593,7 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.True(await service.SaveSettingsAsync(service.Settings with
         {
             ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
             FortigateSplitByFamily = split
         }));
         // A folder where the file should go makes that one write fail
@@ -617,6 +621,7 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.True(await service.SaveSettingsAsync(service.Settings with
         {
             ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
             FortigateSplitByFamily = true
         }));
         Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
@@ -645,6 +650,7 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.True(await service.SaveSettingsAsync(service.Settings with
         {
             ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
             FortigateEnabled = true,
             FortigateSplitByFamily = split
         }));
@@ -675,6 +681,7 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.True(await service.SaveSettingsAsync(service.Settings with
         {
             ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
             FortigateSplitByFamily = true
         }));
         // A file where the fortigate folder should go fails each feed's folder, so the first feed is named
@@ -704,11 +711,194 @@ public sealed class IpInfoServiceTests : IDisposable
 
         ExportResult refused = await service.ExportAsync(query, [], Ct);
 
-        Assert.Equal(ExportFailure.ExceptionsUnreadable, refused.Failure);
+        // The stopped launch ticks no feed type, so nothing reaches the list and there is no dataset to export
+        Assert.Equal(ExportFailure.NothingToExport, refused.Failure);
+        Assert.True(refused.NoFeedType);
         Assert.Empty(refused.Files);
         Assert.False(Directory.Exists(service.ExportFolder));
         service.Dispose();
         Assert.Equal(unreadable, File.ReadAllBytes(Paths.ExceptionsPath));
+    }
+
+    [Fact]
+    public async Task A_Launch_On_An_Empty_Folder_Ticks_No_Feed_Type()
+    {
+        IpInfoService service = NewService();
+
+        Assert.Equal(StartupFailure.None, (await service.InitializeAsync(Ct)).Failure);
+
+        Assert.False(service.Settings.WriteFortigateFeeds);
+        Assert.False(service.Settings.WriteModSecurityLists);
+    }
+
+    [Fact]
+    public async Task An_Export_With_No_Feed_Type_Ticked_Writes_The_Report_Alone_And_Says_So()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        string report = Path.Combine(_temp.ExportFolder, "AS15169.txt");
+
+        ExportResult none = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, none.Failure);
+        Assert.True(none.NoFeedType);
+        Assert.Equal([report], none.Files);
+        Assert.Null(none.ModSecurityFiles);
+        Assert.False(Directory.Exists(Path.Combine(_temp.ExportFolder, "fortigate")));
+        Assert.False(Directory.Exists(Path.Combine(_temp.ExportFolder, "modsecurity")));
+
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { FortigateEnabled = false }));
+        ExportResult off = await service.ExportAsync(query, [], Ct);
+        Assert.Equal(ExportFailure.None, off.Failure);
+        Assert.False(off.NoFeedType);
+        Assert.Equal([report], off.Files);
+    }
+
+    [Fact]
+    public async Task An_Export_With_Both_Types_Ticked_Writes_Each_Copy_After_The_Report()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
+            WriteModSecurityLists = true,
+        }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        string[] names = ["AS15169_ipv4.txt", "AS15169_ipv6.txt"];
+        string[] modSecurity = names.Select(n => Path.Combine(_temp.ExportFolder, "modsecurity", n)).ToArray();
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        Assert.False(result.NoFeedType);
+        Assert.Equal(3, result.NetworksWritten);
+        Assert.Equal(0, result.WholeRangesLeftOut);
+        Assert.Equal(
+            [Path.Combine(_temp.ExportFolder, "AS15169.txt"), .. names.Select(n => Path.Combine(_temp.ExportFolder, "fortigate", n)), .. modSecurity],
+            result.Files);
+        Assert.Equal(modSecurity, result.ModSecurityFiles);
+    }
+
+    [Fact]
+    public async Task A_ModSecurity_Folder_That_Cannot_Be_Made_Fails_After_Every_FortiGate_File()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
+            WriteModSecurityLists = true,
+        }));
+        Directory.CreateDirectory(_temp.ExportFolder);
+        File.WriteAllText(Path.Combine(_temp.ExportFolder, "modsecurity"), "");
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(Path.Combine(_temp.ExportFolder, "modsecurity", "AS15169_ipv4.txt"), result.FailedFile);
+        Assert.Equal(
+            [
+                Path.Combine(_temp.ExportFolder, "AS15169.txt"),
+                Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv4.txt"),
+                Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv6.txt"),
+            ],
+            result.Files);
+        Assert.All(result.Files, file => Assert.True(File.Exists(file)));
+        Assert.Null(result.ModSecurityFiles);
+        Assert.False(result.NoFeedType);
+        Assert.Equal(0, result.WholeRangesLeftOut);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Failed_Export_With_No_Feed_Type_Ticked_Still_Says_So(bool reportFails)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            FortigateEnabled = true,
+            WriteFortigateFeeds = false,
+            WriteModSecurityLists = false,
+        }));
+        if (reportFails)
+            Directory.CreateDirectory(Path.Combine(_temp.ExportFolder, "AS15169.txt.tmp"));
+        else
+            File.WriteAllText(_temp.ExportFolder, "");
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(reportFails ? ExportFailure.WriteFailed : ExportFailure.FolderUnavailable, result.Failure);
+        Assert.True(result.NoFeedType);
+        Assert.False(Directory.Exists(Path.Combine(_temp.ExportFolder, "fortigate")));
+        Assert.False(Directory.Exists(Path.Combine(_temp.ExportFolder, "modsecurity")));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_Failed_Report_Names_The_Old_Feeds_Of_Each_Ticked_Type_FortiGate_First(bool modSecurity)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
+            WriteModSecurityLists = modSecurity,
+            FortigateSplitByFamily = true,
+        }));
+        string[] fortigate = ["AS15169_ipv4.txt", "AS15169_ipv6.txt"];
+        string[] old =
+        [
+            .. fortigate.Select(n => Path.Combine(_temp.ExportFolder, "fortigate", n)),
+            .. fortigate.Select(n => Path.Combine(_temp.ExportFolder, "modsecurity", n)),
+        ];
+        foreach (string file in old)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, "old " + file + "\n");
+        }
+        Directory.CreateDirectory(Path.Combine(_temp.ExportFolder, "AS15169.txt.tmp"));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(Path.Combine(_temp.ExportFolder, "AS15169.txt"), result.FailedFile);
+        Assert.Equal(modSecurity ? old : old[..2], result.OldFilesLeft);
+        Assert.All(old, file => Assert.Equal("old " + file + "\n", File.ReadAllText(file)));
+    }
+
+    [Fact]
+    public async Task An_Exported_Range_Covering_Every_Address_Stays_In_The_Report_And_Is_Left_Out_Of_The_Feed()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.True(await service.SaveTokenAsync("test-token"));
+        _remote.Body = GzBody([.. SampleLines, Line("0.0.0.0/0")]);
+        Assert.Equal(UpdateFailure.None, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
+            FortigateSplitByFamily = true,
+        }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, ["0.0.0.0/0"], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        Assert.Equal(1, result.WholeRangesLeftOut);
+        Assert.Contains("| 0.0.0.0/0 ", File.ReadAllText(Path.Combine(_temp.ExportFolder, "AS15169.txt")));
+        string feed = File.ReadAllText(Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv4.txt"));
+        Assert.DoesNotContain("\n0.0.0.0/0\n", feed);
+        Assert.Contains("\n# Left out: 1 range covering every address: 0.0.0.0/0\n", feed);
+        Assert.Contains("\n8.8.8.0/24\n", feed);
     }
 
     [Fact]
@@ -795,7 +985,7 @@ public sealed class IpInfoServiceTests : IDisposable
     public async Task Export_With_IPv6_Off_Writes_No_IPv6_Networks_Or_IPv6_Feed()
     {
         IpInfoService service = await InstalledServiceAsync();
-        Assert.True(await service.SaveSettingsAsync(service.Settings with { IPv6Enabled = false, ExportFolder = _temp.ExportFolder }));
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { IPv6Enabled = false, ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true }));
         Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
 
         ExportPlan plan = await service.PrepareExportAsync(query, Ct);
@@ -1151,7 +1341,7 @@ public sealed class IpInfoServiceTests : IDisposable
 
         Assert.Equal(StartupFailure.None, fresh.Failure);
         Assert.NotNull(service.Config);
-        Assert.Equal(new UserSettings(), service.Settings);
+        Assert.Equal(new UserSettings { WriteFortigateFeeds = true }, service.Settings);
         Assert.True(service.Exceptions.IsReadable);
         Assert.Empty(service.Exceptions.Entries);
         Assert.Equal(AbuseAccounting.Empty, service.AbuseAccounting.Current);
@@ -1338,7 +1528,7 @@ public sealed class IpInfoServiceTests : IDisposable
 
         Assert.Equal(StartupFailure.None, fresh.Failure);
         Assert.NotNull(service.Config);
-        Assert.Equal(new UserSettings(), service.Settings);
+        Assert.Equal(new UserSettings { WriteFortigateFeeds = true }, service.Settings);
         Assert.True(service.Exceptions.IsReadable);
         Assert.Empty(service.Exceptions.Entries);
         Assert.Equal(key, _configKeys.Secret);

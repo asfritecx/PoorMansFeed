@@ -7,13 +7,15 @@
   <!-- The checked ranges, the Open folder and Write feed buttons, and the action line. All three cloud tool pages use it.
        The card takes the height the page gives the panel; the header and the action line keep theirs. -->
   <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
-    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="2,0,2,4">
-      <StackPanel Spacing="2">
-        <TextBlock Text="{x:Static vm:AppText.CloudResultsHeader}" Classes="section-title" />
-        <TextBlock Text="{Binding SummaryText}" Classes="caption" TextTrimming="CharacterEllipsis"
-                   AutomationProperties.LiveSetting="Polite" />
-      </StackPanel>
+    <!-- The summary has a row of its own across the panel, so it shows whole at the minimum width while the rules
+         button shows; the buttons share the first row with the title -->
+    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="2" Margin="2,0,2,4">
+      <TextBlock Text="{x:Static vm:AppText.CloudResultsHeader}" Classes="section-title" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding SummaryText}" Classes="caption"
+                 TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
       <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+        <Button x:Name="CloudModSecurityRulesButton" Content="{x:Static vm:AppText.ModSecurityRulesButton}"
+                Command="{Binding ModSecurityRulesCommand}" IsVisible="{Binding ShowsModSecurityRules}" />
         <Button x:Name="OpenFeedFolderButton" Command="{Binding OpenFeedFolderCommand}"
                 ToolTip.Tip="{x:Static vm:AppText.OpenFolderName}"
                 AutomationProperties.Name="{x:Static vm:AppText.OpenFolderName}">

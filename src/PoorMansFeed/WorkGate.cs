@@ -1,12 +1,8 @@
 namespace PoorMansFeed;
 
 /// <summary>
-/// The gate the IPInfo Lookup and Settings commands wait on, and that their dialogs, confirmations, prompts and saves
-/// hold: work may start only once the app has started, while no update runs and while nothing holds it. The cloud
-/// pages' runs are outside it on purpose: each keeps its own IsWorking, and their service serialises their work; their
-/// large-range question holds it like every other dialog. That question, and the AbuseIPDB page's Clear list, Empty feed
-/// and New addresses, test IsHeld at the moment of showing and show nothing while something holds it; the close's
-/// questions don't, because the close must be asked. Used on the UI thread only.
+/// Work may start only once the app has started, while no update runs and nothing holds the gate. UI thread only.
+/// The cloud and AbuseIPDB pages' runs stay outside it on purpose, each with its own IsWorking; their dialogs hold it.
 /// </summary>
 public interface IWorkGate
 {

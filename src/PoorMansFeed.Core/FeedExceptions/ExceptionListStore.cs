@@ -4,10 +4,8 @@ using System.Text.Json;
 namespace PoorMansFeed.Core.FeedExceptions;
 
 /// <summary>
-/// Reads the legacy exceptions.json once, for the import into config.db, and turns the exceptions section to and from
-/// JSON. Nothing writes the legacy file: the list is saved only in config.db. A missing file is an empty list. A file
-/// that can't be read, is larger than MaxFileBytes, isn't the expected shape, comes from a newer version or holds an
-/// entry that isn't a network is Unreadable, and the import then stops start-up.
+/// Reads the legacy exceptions.json once, for the import into config.db; nothing writes it. A missing file is an empty
+/// list, and an Unreadable one stops start-up at the import.
 /// </summary>
 internal sealed class ExceptionListStore(string path)
 {
@@ -55,9 +53,8 @@ internal sealed class ExceptionListStore(string path)
     }
 
     /// <summary>
-    /// Reads a list from its JSON with <see cref="Load"/>'s rules: longer than <see cref="MaxFileBytes"/>, not the
-    /// expected shape, another schema version, more than <see cref="ExceptionList.MaxEntries"/> entries or an entry that
-    /// isn't a network is Unreadable. One UTF-8 byte order mark is skipped.
+    /// <see cref="Load"/>'s rules: over <see cref="MaxFileBytes"/>, another shape or schema version, more than
+    /// <see cref="ExceptionList.MaxEntries"/> entries or a non-network entry is Unreadable. One UTF-8 BOM is skipped.
     /// </summary>
     internal static ExceptionList Read(ReadOnlySpan<byte> utf8Json)
     {

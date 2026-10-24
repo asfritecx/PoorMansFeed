@@ -22,6 +22,7 @@ public sealed class ExportWriterTests
     private static UserSettings Settings(bool split = true, bool v4 = true, bool v6 = true, bool enabled = true) => new()
     {
         FortigateEnabled = enabled,
+        WriteFortigateFeeds = true,
         FortigateSplitByFamily = split,
         FortigateIncludeIPv4 = v4,
         FortigateIncludeIPv6 = v6,
@@ -77,14 +78,14 @@ public sealed class ExportWriterTests
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6, new("", null, null, null, null, null, null), OtherV4 };
 
-        IReadOnlyList<string> files = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> files = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
 
         string v4Path = Path.Combine(temp.Folder, "fortigate", "AS15169_ipv4.txt");
         string v6Path = Path.Combine(temp.Folder, "fortigate", "AS15169_ipv6.txt");
         Assert.Equal([v4Path, v6Path], files);
 
         string v4 = File.ReadAllText(v4Path);
-        Assert.Equal(Nl(
+        Assert.Equal(
             "# PoorMansFeed - Fortigate Threat Feed\n" +
             "# ASN: AS15169 - Google LLC\n" +
             "# Address Family: IPv4\n" +
@@ -92,12 +93,12 @@ public sealed class ExportWriterTests
             "# Entries: 2\n" +
             "# IP address data powered by IPinfo (https://ipinfo.io)\n" +
             "8.8.8.0/24\n" +
-            "1.1.1.0/24\n"), v4);
+            "1.1.1.0/24\n", v4);
 
         string v6 = File.ReadAllText(v6Path);
-        Assert.Contains("# Address Family: IPv6" + Environment.NewLine, v6);
-        Assert.Contains("# Entries: 1" + Environment.NewLine, v6);
-        Assert.EndsWith("2a02:26f0::/29" + Environment.NewLine, v6);
+        Assert.Contains("# Address Family: IPv6\n", v6);
+        Assert.Contains("# Entries: 1\n", v6);
+        Assert.EndsWith("2a02:26f0::/29\n", v6);
     }
 
     [Fact]
@@ -106,12 +107,12 @@ public sealed class ExportWriterTests
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GermanV6, GoogleV4 };
 
-        IReadOnlyList<string> files = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> files = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(split: false), FixedUtc, ExceptionList.Empty).Files;
 
         string path = Path.Combine(temp.Folder, "fortigate", "AS15169.txt");
         Assert.Equal([path], files);
-        Assert.Equal(Nl(
+        Assert.Equal(
             "# PoorMansFeed - Fortigate Threat Feed\n" +
             "# ASN: AS15169 - Google LLC\n" +
             "# Address Family: IPv4/IPv6\n" +
@@ -119,7 +120,7 @@ public sealed class ExportWriterTests
             "# Entries: 2\n" +
             "# IP address data powered by IPinfo (https://ipinfo.io)\n" +
             "8.8.8.0/24\n" +
-            "2a02:26f0::/29\n"), File.ReadAllText(path));
+            "2a02:26f0::/29\n", File.ReadAllText(path));
     }
 
     [Fact]
@@ -128,7 +129,7 @@ public sealed class ExportWriterTests
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
 
-        IReadOnlyList<string> files = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> files = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(v6: false), FixedUtc, ExceptionList.Empty).Files;
 
         Assert.Equal([Path.Combine(temp.Folder, "fortigate", "AS15169_ipv4.txt")], files);
@@ -140,7 +141,7 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
 
-        IReadOnlyList<string> files = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> files = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", [GoogleV4], Settings(enabled: false), FixedUtc, ExceptionList.Empty).Files;
 
         Assert.Empty(files);
@@ -154,7 +155,7 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
 
-        Assert.Throws<InvalidOperationException>(() => ExportWriter.WriteFortigateFeeds(
+        Assert.Throws<InvalidOperationException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", [GoogleV4, GermanV6], Settings(split: split), FixedUtc, ExceptionList.Unreadable));
 
         string fortigate = Path.Combine(temp.Folder, "fortigate");
@@ -167,7 +168,7 @@ public sealed class ExportWriterTests
         // The export still writes the ASN report alone while the list is unreadable, and passes the list here
         using var temp = new ExportTempFolder();
 
-        FortigateFeedWrite write = ExportWriter.WriteFortigateFeeds(
+        FeedWrite write = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", [GoogleV4, GermanV6], Settings(enabled: false), FixedUtc, ExceptionList.Unreadable);
 
         Assert.Empty(write.Files);
@@ -180,13 +181,14 @@ public sealed class ExportWriterTests
         using var temp = new ExportTempFolder();
         const string name = "Evil\r\n9.9.9.0/24\nCorp\u2028Ltd";
 
-        IReadOnlyList<string> feeds = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> feeds = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", name, [GoogleV4], Settings(split: false), FixedUtc, ExceptionList.Empty).Files;
         string report = ExportWriter.WriteAsnReport(temp.Folder, "AS15169", name, [GoogleV4], FixedUtc);
 
         string[] feedLines = File.ReadAllLines(Assert.Single(feeds));
         Assert.Contains("# ASN: AS15169 - Evil  9.9.9.0/24 Corp Ltd", feedLines);
         Assert.Equal(["8.8.8.0/24"], feedLines.Where(line => !line.StartsWith('#')));
+        FeedFormat.AssertWellFormed(File.ReadAllBytes(feeds[0]));
         Assert.Contains("AS Name:   Evil  9.9.9.0/24 Corp Ltd", File.ReadAllLines(report));
     }
 
@@ -196,7 +198,7 @@ public sealed class ExportWriterTests
         using var temp = new ExportTempFolder();
         const string name = "Telef\u00F3nica de Espa\u00F1a";
 
-        IReadOnlyList<string> feeds = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> feeds = ExportWriter.WriteFeeds(
             temp.Folder, "AS3352", name, [GoogleV4], Settings(split: false), FixedUtc, ExceptionList.Empty).Files;
 
         Assert.Contains("# ASN: AS3352 - " + name, File.ReadAllLines(Assert.Single(feeds)));
@@ -216,13 +218,13 @@ public sealed class ExportWriterTests
         };
         ExceptionList exceptions = RangeSubtractionTests.List("1.0.168.172", "8.8.8.0/25", "2a02:26f0::/30");
 
-        FortigateFeedWrite written = ExportWriter.WriteFortigateFeeds(
+        FeedWrite written = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, exceptions);
 
         Assert.Equal(2, written.ExceptionCuts);
         Assert.Equal(1, written.ExceptionRemovals);
         Assert.Empty(written.OldFilesLeft);
-        Assert.Equal(Nl(
+        Assert.Equal(
             "# PoorMansFeed - Fortigate Threat Feed\n" +
             "# ASN: AS15169 - Google LLC\n" +
             "# Address Family: IPv4\n" +
@@ -231,7 +233,7 @@ public sealed class ExportWriterTests
             "# Exceptions: 1 range cut, 1 removed\n" +
             "# IP address data powered by IPinfo (https://ipinfo.io)\n" +
             "8.8.8.128/25\n" +
-            "1.1.1.0/24\n"), File.ReadAllText(written.Files[0]));
+            "1.1.1.0/24\n", File.ReadAllText(written.Files[0]));
         // An untouched line keeps the dataset's spelling; the pieces of a cut one are canonical
         string[] v6 = File.ReadAllLines(written.Files[1]);
         Assert.Contains("# Exceptions: 1 range cut, 0 removed", v6);
@@ -245,13 +247,96 @@ public sealed class ExportWriterTests
         var rows = new List<NetworkRecord> { GoogleV4, OtherV4, GermanV6 };
         ExceptionList exceptions = RangeSubtractionTests.List("1.1.1.0/24", "2a02:26f0::/32");
 
-        FortigateFeedWrite written = ExportWriter.WriteFortigateFeeds(
+        FeedWrite written = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(split: false), FixedUtc, exceptions);
 
         string[] lines = File.ReadAllLines(Assert.Single(written.Files));
         Assert.Contains("# Entries: 4", lines);
         Assert.Contains("# Exceptions: 1 range cut, 1 removed", lines);
         Assert.Equal(["8.8.8.0/24", "2a02:26f1::/32", "2a02:26f2::/31", "2a02:26f4::/30"], lines.Where(line => !line.StartsWith('#')));
+    }
+
+    private static readonly List<NetworkRecord> HostRows =
+    [
+        GoogleV4 with { Network = "8.8.8.8/32" },
+        GermanV6 with { Network = "2001:4860::8888/128" },
+        GermanV6 with { Network = "2001:db8::/32" },
+        GoogleV4 with { Network = "9.9.9.9" },
+    ];
+
+    [Fact]
+    public void ASingleHostIsWrittenBareInEachFamilysFeed()
+    {
+        using var temp = new ExportTempFolder();
+
+        FeedWrite written = ExportWriter.WriteFeeds(
+            temp.Folder, "AS15169", "Google LLC", HostRows, Settings(), FixedUtc, ExceptionList.Empty);
+
+        Assert.Equal(2, written.Files.Count);
+        string[] v4 = File.ReadAllLines(written.Files[0]);
+        Assert.Contains("# Entries: 2", v4);
+        Assert.Equal(["8.8.8.8", "9.9.9.9"], v4.Where(line => !line.StartsWith('#')));
+        string[] v6 = File.ReadAllLines(written.Files[1]);
+        Assert.Contains("# Entries: 2", v6);
+        Assert.Equal(["2001:4860::8888", "2001:db8::/32"], v6.Where(line => !line.StartsWith('#')));
+        foreach (string file in written.Files)
+            FeedFormat.AssertWellFormed(File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void ASingleHostIsWrittenBareInTheCombinedFeed()
+    {
+        using var temp = new ExportTempFolder();
+
+        FeedWrite written = ExportWriter.WriteFeeds(
+            temp.Folder, "AS15169", "Google LLC", HostRows, Settings(split: false), FixedUtc, ExceptionList.Empty);
+
+        string file = Assert.Single(written.Files);
+        string[] lines = File.ReadAllLines(file);
+        Assert.Contains("# Entries: 4", lines);
+        Assert.Equal(
+            ["8.8.8.8", "9.9.9.9", "2001:4860::8888", "2001:db8::/32"],
+            lines.Where(line => !line.StartsWith('#')));
+        FeedFormat.AssertWellFormed(File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void AnExceptionCutThatLeavesOneHostWritesItBare()
+    {
+        using var temp = new ExportTempFolder();
+        var rows = new List<NetworkRecord>
+        {
+            GoogleV4 with { Network = "8.8.8.0/30" },
+            GermanV6 with { Network = "2001:4860::/127" },
+        };
+        ExceptionList exceptions = RangeSubtractionTests.List("8.8.8.0/31", "8.8.8.3/32", "2001:4860::1/128");
+
+        FeedWrite written = ExportWriter.WriteFeeds(
+            temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, exceptions);
+
+        Assert.Equal(2, written.Files.Count);
+        string[] v4 = File.ReadAllLines(written.Files[0]);
+        Assert.Contains("# Exceptions: 1 range cut, 0 removed", v4);
+        Assert.Equal(["8.8.8.2"], v4.Where(line => !line.StartsWith('#')));
+        string[] v6 = File.ReadAllLines(written.Files[1]);
+        Assert.Contains("# Exceptions: 1 range cut, 0 removed", v6);
+        Assert.Equal(["2001:4860::"], v6.Where(line => !line.StartsWith('#')));
+        foreach (string file in written.Files)
+            FeedFormat.AssertWellFormed(File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void TheAsnReportKeepsTheDatasetsTextForASingleHost()
+    {
+        using var temp = new ExportTempFolder();
+
+        string path = ExportWriter.WriteAsnReport(temp.Folder, "AS15169", "Google LLC", HostRows, FixedUtc);
+
+        string text = File.ReadAllText(path);
+        Assert.Contains("| 8.8.8.8/32 ", text);
+        Assert.Contains("| 2001:4860::8888/128 ", text);
+        Assert.Contains("  4 row(s)" + Environment.NewLine, text);
+        Assert.EndsWith("(https://ipinfo.io)" + Environment.NewLine, text);
     }
 
     [Fact]
@@ -261,8 +346,8 @@ public sealed class ExportWriterTests
         using var before = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6, OtherV4 };
 
-        IReadOnlyList<string> plain = ExportWriter.WriteFortigateFeeds(before.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
-        FortigateFeedWrite written = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> plain = ExportWriter.WriteFeeds(before.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        FeedWrite written = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, RangeSubtractionTests.List("8.8.9.0/24", "8.8.7.255", "::808:800/120"));
 
         Assert.Equal(0, written.ExceptionCuts + written.ExceptionRemovals);
@@ -275,17 +360,17 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
-        IReadOnlyList<string> first = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> first = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
         byte[] oldV6 = File.ReadAllBytes(first[1]);
 
-        FortigateFeedWrite written = ExportWriter.WriteFortigateFeeds(
+        FeedWrite written = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, RangeSubtractionTests.List("2a02:26f0::/29"));
 
         Assert.Equal([first[0]], written.Files);
         Assert.Equal([first[1]], written.OldFilesLeft);
         Assert.Equal(oldV6, File.ReadAllBytes(first[1]));
 
-        FortigateFeedWrite combined = ExportWriter.WriteFortigateFeeds(
+        FeedWrite combined = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(split: false), FixedUtc, RangeSubtractionTests.List("0.0.0.0/0", "::/0"));
         Assert.Empty(combined.Files);
         Assert.Empty(combined.OldFilesLeft);
@@ -297,8 +382,8 @@ public sealed class ExportWriterTests
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
         string report = ExportWriter.WriteAsnReport(temp.Folder, "AS15169", "Google LLC", rows, FixedUtc);
-        IReadOnlyList<string> split = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
-        IReadOnlyList<string> combined = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> split = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> combined = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(split: false), FixedUtc, ExceptionList.Empty).Files;
 
         Assert.True(File.Exists(report));
@@ -316,7 +401,7 @@ public sealed class ExportWriterTests
         using var outside = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
         string plainReport = ExportWriter.WriteAsnReport(plain.Folder, "AS15169", "Google LLC", rows, FixedUtc);
-        IReadOnlyList<string> plainFeeds = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> plainFeeds = ExportWriter.WriteFeeds(
             plain.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
         string report = Path.Combine(temp.Folder, Path.GetFileName(plainReport));
         string[] feeds = plainFeeds.Select(file => Path.Combine(temp.Folder, "fortigate", Path.GetFileName(file))).ToArray();
@@ -331,7 +416,7 @@ public sealed class ExportWriterTests
             return;
 
         string written = ExportWriter.WriteAsnReport(temp.Folder, "AS15169", "Google LLC", rows, FixedUtc);
-        IReadOnlyList<string> writtenFeeds = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> writtenFeeds = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
 
         Assert.Equal(report, written);
@@ -368,12 +453,12 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
-        IReadOnlyList<string> first = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> first = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
         byte[] oldV6 = File.ReadAllBytes(first[1]);
         // A folder where the feed's temporary file should go makes that one write fail
         Directory.CreateDirectory(first[1] + ".tmp");
 
-        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFortigateFeeds(
+        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc.AddHours(1), ExceptionList.Empty));
 
         Assert.Equal(first[1], ex.FilePath);
@@ -384,7 +469,7 @@ public sealed class ExportWriterTests
 
         // A family the exceptions emptied is named before the failed file
         File.WriteAllText(first[0], "old");
-        var cut = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFortigateFeeds(
+        var cut = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, RangeSubtractionTests.List("8.8.8.0/24")));
         Assert.Empty(cut.WrittenBefore);
         Assert.Equal([first[0], first[1]], cut.OldFilesLeft);
@@ -396,7 +481,7 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
-        IReadOnlyList<string> first = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> first = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
         string ipv4 = first[0];
         string ipv6 = first[1];
         byte[] oldV4 = File.ReadAllBytes(ipv4);
@@ -404,7 +489,7 @@ public sealed class ExportWriterTests
         // The IPv4 write fails before the IPv6 family, which the exceptions emptied, is reached
         Directory.CreateDirectory(ipv4 + ".tmp");
 
-        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFortigateFeeds(
+        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc.AddHours(1), RangeSubtractionTests.List("2a02:26f0::/29")));
 
         Assert.Equal(ipv4, ex.FilePath);
@@ -419,14 +504,14 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
-        IReadOnlyList<string> first = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> first = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
         string ipv4 = first[0];
         string ipv6 = first[1];
         byte[] oldV6 = File.ReadAllBytes(ipv6);
         // The IPv4 write fails, so the IPv6 feed is never tried and its earlier copy stays for FortiGate to read
         Directory.CreateDirectory(ipv4 + ".tmp");
 
-        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFortigateFeeds(
+        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc.AddHours(1), ExceptionList.Empty));
 
         Assert.Equal(ipv4, ex.FilePath);
@@ -436,7 +521,7 @@ public sealed class ExportWriterTests
 
         // With no earlier IPv6 feed only the failed file is named
         File.Delete(ipv6);
-        var noV6 = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFortigateFeeds(
+        var noV6 = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty));
         Assert.Equal([ipv4], noV6.OldFilesLeft);
     }
@@ -446,8 +531,8 @@ public sealed class ExportWriterTests
     {
         using var temp = new ExportTempFolder();
         var rows = new List<NetworkRecord> { GoogleV4, GermanV6 };
-        IReadOnlyList<string> split = ExportWriter.WriteFortigateFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
-        IReadOnlyList<string> combined = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> split = ExportWriter.WriteFeeds(temp.Folder, "AS15169", "Google LLC", rows, Settings(), FixedUtc, ExceptionList.Empty).Files;
+        IReadOnlyList<string> combined = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(split: false), FixedUtc, ExceptionList.Empty).Files;
 
         Assert.Equal(split, ExportWriter.ExistingFeedFiles(temp.Folder, "AS15169", rows, Settings()));
@@ -468,7 +553,7 @@ public sealed class ExportWriterTests
         string ipv6 = Path.Combine(temp.Folder, ExportWriter.FortigateFolderName, "AS15169_ipv6.txt");
         Directory.CreateDirectory(ipv6 + ".tmp");
 
-        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFortigateFeeds(
+        var ex = Assert.Throws<ExportFileException>(() => ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", [GoogleV4, GermanV6], Settings(), FixedUtc, ExceptionList.Empty));
 
         Assert.Equal(ipv6, ex.FilePath);
@@ -506,7 +591,7 @@ public sealed class ExportWriterTests
         // An overload without the list would skip the cut. The refusal while the list is unreadable is the callers';
         // here an unreadable list only throws (AnUnreadableExceptionListThrowsRatherThanWritingAnUncutFeed).
         var overloads = typeof(ExportWriter).GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Where(method => method.Name == nameof(ExportWriter.WriteFortigateFeeds))
+            .Where(method => method.Name == nameof(ExportWriter.WriteFeeds))
             .ToList();
 
         Assert.NotEmpty(overloads);
@@ -530,7 +615,7 @@ public sealed class ExportWriterTests
             GermanV6 with { Network = "[2a02:26f0::1]:80" },
         };
 
-        IReadOnlyList<string> files = ExportWriter.WriteFortigateFeeds(
+        IReadOnlyList<string> files = ExportWriter.WriteFeeds(
             temp.Folder, "AS15169", "Google LLC", rows, Settings(split: false), FixedUtc, ExceptionList.Empty).Files;
 
         string[] lines = File.ReadAllLines(Assert.Single(files));
@@ -552,7 +637,7 @@ public sealed class ExportWriterTests
         Assert.Throws<ArgumentException>(() =>
             ExportWriter.WriteAsnReport(temp.Folder, asn, "Google LLC", [GoogleV4], FixedUtc));
         Assert.Throws<ArgumentException>(() =>
-            ExportWriter.WriteFortigateFeeds(temp.Folder, asn, "Google LLC", [GoogleV4], Settings(), FixedUtc, ExceptionList.Empty).Files);
+            ExportWriter.WriteFeeds(temp.Folder, asn, "Google LLC", [GoogleV4], Settings(), FixedUtc, ExceptionList.Empty).Files);
     }
 
     [Fact]

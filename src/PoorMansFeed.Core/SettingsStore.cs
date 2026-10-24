@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using PoorMansFeed.Core.AbuseIpDb;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Core;
 
@@ -52,19 +53,41 @@ public sealed class SettingsStore(string path)
     }
 
     /// <summary>
-    /// Reads settings from their JSON, with property names in any letter case. Null when the JSON doesn't parse or is
-    /// <c>null</c>. The values are not clamped; the caller applies <see cref="Normalise"/>.
+    /// Reads settings from their JSON, names in any case, unclamped; null when it isn't settings. Settings written before
+    /// the feed types have no WriteFortigateFeeds and read it as true, so an earlier install keeps its FortiGate feeds.
     /// </summary>
     internal static UserSettings? TryRead(ReadOnlySpan<byte> utf8Json)
     {
+        UserSettings? settings;
         try
         {
-            return JsonSerializer.Deserialize<UserSettings>(utf8Json, s_options);
+            settings = JsonSerializer.Deserialize<UserSettings>(utf8Json, s_options);
         }
         catch (JsonException)
         {
             return null;
         }
+        if (settings is null || NamesWriteFortigateFeeds(utf8Json))
+            return settings;
+        return settings with { WriteFortigateFeeds = true };
+    }
+
+    // Only called on JSON the serializer has read, and with its reader options, so the reader can't throw
+    private static bool NamesWriteFortigateFeeds(ReadOnlySpan<byte> utf8Json)
+    {
+        var reader = new Utf8JsonReader(utf8Json, new JsonReaderOptions
+        {
+            AllowTrailingCommas = s_options.AllowTrailingCommas,
+            CommentHandling = s_options.ReadCommentHandling,
+            MaxDepth = s_options.MaxDepth,
+        });
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.PropertyName && reader.CurrentDepth == 1
+                && string.Equals(reader.GetString(), nameof(UserSettings.WriteFortigateFeeds), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>The settings as settings.json holds them: indented UTF-8 with no byte order mark.</summary>
@@ -74,11 +97,7 @@ public sealed class SettingsStore(string path)
         return JsonSerializer.SerializeToUtf8Bytes(settings, s_options);
     }
 
-    /// <summary>
-    /// The settings with every value in its valid range: a missing export folder becomes empty, the IPv4 prefix is
-    /// clamped to 1-32, the IPv6 prefix to 1-128, and the AbuseIPDB keep days to
-    /// <see cref="AbuseIpDbLimits.MinKeepDays"/>-<see cref="AbuseIpDbLimits.MaxKeepDays"/>.
-    /// </summary>
+    /// <summary>The settings with every value clamped into its range, applied on import, on load and on save.</summary>
     internal static UserSettings Normalise(UserSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -88,6 +107,12 @@ public sealed class SettingsStore(string path)
             IPv4MinPrefix = Math.Clamp(settings.IPv4MinPrefix, 1, 32),
             IPv6MinPrefix = Math.Clamp(settings.IPv6MinPrefix, 1, 128),
             AbuseIpDbKeepDays = Math.Clamp(settings.AbuseIpDbKeepDays, AbuseIpDbLimits.MinKeepDays, AbuseIpDbLimits.MaxKeepDays),
+            ModSecurityAction = Enum.IsDefined(settings.ModSecurityAction) ? settings.ModSecurityAction : ModSecurityAction.LogOnly,
+            ModSecurityFirstRuleId = Math.Clamp(settings.ModSecurityFirstRuleId, ModSecurityLimits.RuleIdMin, ModSecurityLimits.RuleIdMax),
+            ModSecurityLocation = settings.ModSecurityLocation is null
+                                  || settings.ModSecurityLocation.Length > ModSecurityLimits.MaxLocationLength
+                ? ""
+                : settings.ModSecurityLocation,
         };
     }
 }

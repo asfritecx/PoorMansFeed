@@ -25,9 +25,8 @@ internal enum KeyState
 }
 
 /// <summary>
-/// The raw 32-byte config key over an ISecretStore. Read-back on save; never deletes on read. A key that can never be
-/// read is reported, not removed, because config.db's sections can't be opened without it and the caller decides what
-/// starts fresh. Nothing traced holds the key's bytes.
+/// The raw 32-byte config key. A key that can never be read is reported, not removed, because config.db's sections
+/// can't be opened without it and the caller decides what starts fresh. Nothing traced holds the key's bytes.
 /// </summary>
 internal sealed class ConfigKeyStore(ISecretStore store)
 {
@@ -82,9 +81,8 @@ internal sealed class ConfigKeyStore(ISecretStore store)
     }
 
     /// <summary>
-    /// Saves the key in place of any saved before, then reads it back. <see cref="KeyState.Read"/> only when the store
-    /// gives the same 32 bytes back, so a write that failed without saying so counts as a failure. The caller's array is
-    /// neither kept nor zeroed. Throws ArgumentException when the key isn't 32 bytes.
+    /// Saves the key, then reads it back: <see cref="KeyState.Read"/> only when the same 32 bytes come back, so a write
+    /// that failed without saying so counts as a failure. The caller's array is neither kept nor zeroed.
     /// </summary>
     internal KeyState Replace(byte[] key)
     {

@@ -11,9 +11,8 @@ namespace PoorMansFeed.Core.Aws;
 internal sealed record AwsFetchResult(AwsSourceFailure Failure, bool NotModified, byte[]? Body, string? ETag);
 
 /// <summary>
-/// The one request the AWS tool makes: ip-ranges.json, sent with If-None-Match when a saved ETag is known, so an
-/// unchanged file costs no body. Failures come back as values. Only a cancel by the caller throws. Nothing here
-/// writes a URL to the trace.
+/// The one request the AWS tool makes, sent with If-None-Match when a saved ETag is known, so an unchanged file
+/// costs no body. Failures come back as values; only a caller's cancel throws, and no URL is traced.
 /// </summary>
 internal sealed class AwsRangesClient
 {

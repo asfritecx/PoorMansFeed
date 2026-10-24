@@ -1,4 +1,5 @@
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Tests;
 
@@ -31,6 +32,11 @@ public sealed class SettingsStoreTests
             IPv4MinPrefix = 20,
             IPv6MinPrefix = 48,
             AbuseIpDbKeepDays = 90,
+            WriteFortigateFeeds = false,
+            WriteModSecurityLists = true,
+            ModSecurityAction = ModSecurityAction.Deny,
+            ModSecurityFirstRuleId = 20_000,
+            ModSecurityLocation = "/blocked list",
         };
 
         File.WriteAllBytes(path, SettingsStore.ToJson(original));
@@ -116,6 +122,18 @@ public sealed class SettingsStoreTests
         Assert.Equal(expected, store.Load().IPv6MinPrefix);
     }
 
+    [Fact]
+    public void A_saved_close_action_round_trips_as_the_number_2()
+    {
+        byte[] json = SettingsStore.ToJson(new UserSettings { ModSecurityAction = ModSecurityAction.Close });
+
+        Assert.Contains("\"ModSecurityAction\": 2", System.Text.Encoding.UTF8.GetString(json));
+        UserSettings? read = SettingsStore.TryRead(json);
+        Assert.NotNull(read);
+        Assert.Equal(ModSecurityAction.Close, read.ModSecurityAction);
+        Assert.Equal(ModSecurityAction.Close, SettingsStore.Normalise(read).ModSecurityAction);
+    }
+
     [Theory]
     [InlineData(-5, 1)]
     [InlineData(0, 1)]
@@ -149,6 +167,11 @@ public sealed class SettingsStoreTests
             IPv4MinPrefix = 20,
             IPv6MinPrefix = 48,
             AbuseIpDbKeepDays = 90,
+            WriteFortigateFeeds = false,
+            WriteModSecurityLists = true,
+            ModSecurityAction = ModSecurityAction.Deny,
+            ModSecurityFirstRuleId = 20_000,
+            ModSecurityLocation = "/blocked list",
         };
 
         Assert.Equal(original, SettingsStore.TryRead(SettingsStore.ToJson(original)));
@@ -170,9 +193,124 @@ public sealed class SettingsStoreTests
     [InlineData("null")]
     [InlineData("[]")]
     [InlineData("{ \"IPv4MinPrefix\": \"x\" }")]
+    [InlineData("{} x")]
+    [InlineData("{ \"WriteFortigateFeeds\": null }")]
+    [InlineData("{ \"ModSecurityAction\": \"Deny\" }")]
     public void TryRead_gives_null_for_json_that_isnt_settings(string json)
     {
         Assert.Null(SettingsStore.TryRead(System.Text.Encoding.UTF8.GetBytes(json)));
+    }
+
+    private const string OneZeroZeroSettings = """
+        { "SchemaVersion": 1, "ExportFolder": "", "IPv6Enabled": true, "FortigateEnabled": true,
+          "FortigateIncludeIPv4": true, "FortigateIncludeIPv6": true, "FortigateSplitByFamily": true,
+          "LargeRangeCheckEnabled": true, "IPv4MinPrefix": 16, "IPv6MinPrefix": 32 }
+        """;
+
+    [Fact]
+    public void Settings_from_before_the_feed_types_keep_FortiGate_and_start_without_ModSecurity()
+    {
+        using var temp = new TempFolder();
+        string path = temp.File("settings.json");
+        File.WriteAllText(path, OneZeroZeroSettings);
+        var expected = new UserSettings { WriteFortigateFeeds = true };
+
+        Assert.Equal(expected, SettingsStore.TryRead(System.Text.Encoding.UTF8.GetBytes(OneZeroZeroSettings)));
+        UserSettings loaded = new SettingsStore(path).Load();
+        Assert.Equal(expected, loaded);
+        Assert.False(loaded.WriteModSecurityLists);
+        Assert.Equal(ModSecurityAction.LogOnly, loaded.ModSecurityAction);
+        Assert.Equal(10_000, loaded.ModSecurityFirstRuleId);
+        Assert.Equal("", loaded.ModSecurityLocation);
+    }
+
+    [Theory]
+    [InlineData("{ \"WriteFortigateFeeds\": false }")]
+    [InlineData("{ \"writefortigatefeeds\": false }")]
+    [InlineData("{ \"WRITEFORTIGATEFEEDS\": false, \"IPv4MinPrefix\": 20 }")]
+    [InlineData("{ \"Write\\u0046ortigateFeeds\": false }")]
+    public void WriteFortigateFeeds_false_in_any_letter_case_reads_false(string json)
+    {
+        UserSettings? read = SettingsStore.TryRead(System.Text.Encoding.UTF8.GetBytes(json));
+
+        Assert.NotNull(read);
+        Assert.False(read.WriteFortigateFeeds);
+    }
+
+    [Theory]
+    [InlineData("{ \"Other\": { \"WriteFortigateFeeds\": false } }")]
+    [InlineData("{ \"Other\": [ { \"WriteFortigateFeeds\": false } ], \"IPv4MinPrefix\": 20 }")]
+    [InlineData("{ }")]
+    public void WriteFortigateFeeds_only_in_a_nested_value_or_absent_reads_true(string json)
+    {
+        UserSettings? read = SettingsStore.TryRead(System.Text.Encoding.UTF8.GetBytes(json));
+
+        Assert.NotNull(read);
+        Assert.True(read.WriteFortigateFeeds);
+    }
+
+    [Fact]
+    public void WriteFortigateFeeds_true_reads_true()
+    {
+        Assert.True(SettingsStore.TryRead("{ \"WriteFortigateFeeds\": true }"u8)!.WriteFortigateFeeds);
+    }
+
+    [Fact]
+    public void The_ModSecurity_action_is_read_from_a_number()
+    {
+        UserSettings? read = SettingsStore.TryRead("{ \"ModSecurityAction\": 1 }"u8);
+
+        Assert.NotNull(read);
+        Assert.Equal(ModSecurityAction.Deny, read.ModSecurityAction);
+        Assert.Contains("\"ModSecurityAction\": 1", System.Text.Encoding.UTF8.GetString(
+            SettingsStore.ToJson(new UserSettings { ModSecurityAction = ModSecurityAction.Deny })));
+    }
+
+    [Theory]
+    [InlineData(-5, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(10_000, 10_000)]
+    [InlineData(99_999, 99_999)]
+    [InlineData(100_000, 99_999)]
+    [InlineData(int.MaxValue, 99_999)]
+    [InlineData(int.MinValue, 1)]
+    public void Normalise_clamps_the_ModSecurity_rule_id_to_1_to_99999(int stored, int expected)
+    {
+        Assert.Equal(expected,
+                     SettingsStore.Normalise(new UserSettings { ModSecurityFirstRuleId = stored }).ModSecurityFirstRuleId);
+    }
+
+    [Theory]
+    [InlineData(3, ModSecurityAction.LogOnly)]
+    [InlineData(-1, ModSecurityAction.LogOnly)]
+    [InlineData(0, ModSecurityAction.LogOnly)]
+    [InlineData(1, ModSecurityAction.Deny)]
+    [InlineData(2, ModSecurityAction.Close)]
+    public void Normalise_makes_an_undefined_ModSecurity_action_log_only(int stored, ModSecurityAction expected)
+    {
+        Assert.Equal(expected,
+                     SettingsStore.Normalise(new UserSettings { ModSecurityAction = (ModSecurityAction)stored }).ModSecurityAction);
+    }
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData(" /path with spaces/ ", " /path with spaces/ ")]
+    public void Normalise_keeps_a_ModSecurity_location_and_makes_null_empty(string? stored, string expected)
+    {
+        Assert.Equal(expected, SettingsStore.Normalise(new UserSettings { ModSecurityLocation = stored! }).ModSecurityLocation);
+    }
+
+    [Theory]
+    [InlineData(2_048, true)]
+    [InlineData(2_049, false)]
+    public void Normalise_empties_a_ModSecurity_location_over_2048_characters(int length, bool kept)
+    {
+        string location = new('x', length);
+
+        Assert.Equal(kept ? location : "",
+                     SettingsStore.Normalise(new UserSettings { ModSecurityLocation = location }).ModSecurityLocation);
     }
 
     [Fact]
@@ -220,4 +358,13 @@ public sealed class SettingsStoreTests
         Assert.Equal(20, loaded.IPv4MinPrefix);
         Assert.Equal("C:\\Feeds \u00e9", loaded.ExportFolder);
     }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void TicksAnyFeedType_is_false_only_with_no_type_ticked(bool fortigate, bool modSecurity, bool expected) =>
+        Assert.Equal(expected,
+            new UserSettings { WriteFortigateFeeds = fortigate, WriteModSecurityLists = modSecurity }.TicksAnyFeedType());
 }

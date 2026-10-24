@@ -1,0 +1,84 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:PoorMansFeed"
+        x:Class="PoorMansFeed.ModSecurityRulesDialog"
+        x:DataType="local:ModSecurityRulesModel"
+        Title="{x:Static local:AppText.ModSecurityRulesTitle}"
+        Width="540"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="24" RowSpacing="16">
+    <TextBlock x:Name="TitleText" Classes="subtitle" Text="{x:Static local:AppText.ModSecurityRulesTitle}" />
+    <TextBlock x:Name="IdsText" Grid.Row="1" TextWrapping="Wrap" Text="{Binding IdsText}" />
+
+    <StackPanel Grid.Row="2" Spacing="4">
+      <TextBlock Text="{x:Static local:AppText.ModSecurityLocationLabel}" />
+      <TextBox x:Name="LocationBox" Classes="mono" PlaceholderText="{x:Static local:AppText.ModSecurityLocationPlaceholder}"
+               Text="{Binding Location, Mode=TwoWay}"
+               AutomationProperties.Name="{x:Static local:AppText.ModSecurityLocationLabel}" />
+      <!-- Three lines of small text, kept when empty so the dialog never moves -->
+      <TextBlock x:Name="ExpiryText" Classes="small secondary" TextWrapping="Wrap" Height="54" Text="{Binding ExpiryText}"
+                 Classes.critical="{Binding IsExpiryCritical}" Classes.caution="{Binding IsExpiryCaution}"
+                 Classes.placeholder="{Binding !HasExpiry}" AutomationProperties.LiveSetting="Polite" />
+    </StackPanel>
+
+    <!-- The label sits above the radios, as three of them beside it don't fit the dialog's width -->
+    <StackPanel Grid.Row="3" Spacing="4">
+      <TextBlock Text="{x:Static local:AppText.ModSecurityActionLabel}" />
+      <StackPanel Orientation="Horizontal" Spacing="16">
+        <RadioButton x:Name="LogOnlyRadio" GroupName="ModSecurityRuleAction" Content="{x:Static local:AppText.ModSecurityLogOnly}"
+                     IsChecked="{Binding IsLogOnly, Mode=TwoWay}" />
+        <RadioButton x:Name="DenyRadio" GroupName="ModSecurityRuleAction" Content="{x:Static local:AppText.ModSecurityDeny}"
+                     IsChecked="{Binding IsDeny, Mode=TwoWay}" />
+        <RadioButton x:Name="CloseRadio" GroupName="ModSecurityRuleAction" Content="{x:Static local:AppText.ModSecurityClose}"
+                     IsChecked="{Binding IsClose, Mode=TwoWay}" />
+      </StackPanel>
+    </StackPanel>
+
+    <!-- One height for both: the rules scroll unwrapped, and a problem line wraps in their place so it reads whole -->
+    <Panel x:Name="PreviewArea" Grid.Row="4" Height="112">
+      <!-- OneWay: the automation peer writes Text without checking IsReadOnly -->
+      <TextBox x:Name="PreviewBox" Classes="mono" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+               Height="112" Text="{Binding PreviewText, Mode=OneWay}" IsVisible="{Binding HasRules}"
+               ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
+               AutomationProperties.Name="{x:Static local:AppText.ModSecurityRulesPreviewName}" />
+      <!-- The longest problem line is taller than the box, so it scrolls, with the notes' keys -->
+      <Border x:Name="ProblemBox" Classes="inset" IsVisible="{Binding IsProblem}">
+        <ScrollViewer x:Name="ProblemScroll" Focusable="True" AutomationProperties.Name="{Binding PreviewText}">
+          <TextBlock x:Name="ProblemText" TextWrapping="Wrap" Text="{Binding PreviewText}"
+                     AutomationProperties.LiveSetting="Polite" />
+        </ScrollViewer>
+      </Border>
+    </Panel>
+
+    <!-- What Copy did; empty and hidden at first, but it keeps its height so the dialog never moves -->
+    <TextBlock x:Name="CopyStatusText" Grid.Row="5" Classes="caption" Classes.placeholder="{Binding !HasCopyStatus}"
+               Height="18" TextTrimming="CharacterEllipsis" Text="{Binding CopyStatusText}"
+               AutomationProperties.LiveSetting="Polite" />
+
+    <ScrollViewer x:Name="NotesScroll" Grid.Row="6" MaxHeight="150" Focusable="True"
+                  AutomationProperties.Name="{x:Static local:AppText.ModSecurityRulesNotesName}">
+      <ItemsControl x:Name="NotesList" ItemsSource="{x:Static local:AppText.ModSecurityRulesNotes}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <StackPanel Spacing="8" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="x:String">
+            <TextBlock Text="{Binding}" Classes="small secondary" TextWrapping="Wrap" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <!-- Neither button is the default: Enter alone does nothing, and Copy keeps the dialog open -->
+    <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button x:Name="CopyButton" Content="{x:Static local:AppText.ModSecurityRulesCopy}" MinWidth="88"
+              Command="{Binding CopyCommand}" />
+      <Button x:Name="CloseButton" Content="{x:Static local:AppText.Close}" MinWidth="88" IsCancel="True" Click="CloseClicked" />
+    </StackPanel>
+  </Grid>
+</Window>

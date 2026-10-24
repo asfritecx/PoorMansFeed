@@ -5,6 +5,7 @@ using PoorMansFeed.Core;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.Config;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Tests;
 
@@ -34,11 +35,13 @@ public sealed class ConfigImportTests : IDisposable
     private string SettingsFile => _temp.File("settings.json");
     private string ExceptionsFile => _temp.File("exceptions.json");
 
-    private const string EverySetting = """
+    private static readonly string EverySetting = """
         { "SchemaVersion": 3, "ExportFolder": "/Users/someone/Feeds", "IPv6Enabled": false, "FortigateEnabled": false,
           "FortigateIncludeIPv4": false, "FortigateIncludeIPv6": false, "FortigateSplitByFamily": false,
-          "LargeRangeCheckEnabled": false, "IPv4MinPrefix": 40, "IPv6MinPrefix": 0, "AbuseIpDbKeepDays": 999 }
-        """;
+          "LargeRangeCheckEnabled": false, "IPv4MinPrefix": 40, "IPv6MinPrefix": 0, "AbuseIpDbKeepDays": 999,
+          "WriteModSecurityLists": true, "ModSecurityAction": 9, "ModSecurityFirstRuleId": 100000,
+          "ModSecurityLocation": "LONG_LOCATION" }
+        """.Replace("LONG_LOCATION", new string('x', ModSecurityLimits.MaxLocationLength + 1));
 
     private const string ThreeExceptions = """
         { "schemaVersion": 1, "exceptions": [
@@ -71,6 +74,11 @@ public sealed class ConfigImportTests : IDisposable
                 IPv4MinPrefix = 32,
                 IPv6MinPrefix = 1,
                 AbuseIpDbKeepDays = AbuseIpDbLimits.MaxKeepDays,
+                WriteFortigateFeeds = true,
+                WriteModSecurityLists = true,
+                ModSecurityAction = ModSecurityAction.LogOnly,
+                ModSecurityFirstRuleId = ModSecurityLimits.RuleIdMax,
+                ModSecurityLocation = "",
             }, store.Snapshot.Settings);
             Assert.Equal(["2001:db8::/32", "192.0.2.0/24", "198.51.100.7/32"],
                          store.Snapshot.Exceptions.Entries.Select(entry => entry.Network.Text));
@@ -109,11 +117,73 @@ public sealed class ConfigImportTests : IDisposable
         File.WriteAllText(SettingsFile, "{ not json");
 
         using (ConfigStore store = Open())
-            Assert.Equal(new UserSettings(), store.Snapshot.Settings);
+            Assert.Equal(new UserSettings { WriteFortigateFeeds = true }, store.Snapshot.Settings);
 
         Assert.False(File.Exists(SettingsFile));
         Assert.Equal("{ not json", File.ReadAllText(SettingsFile + ".migrated"));
         Assert.Equal("settings.json", ConfigStoreTests.Metadata(ConfigFile)["imported_from"]);
+    }
+
+    public static TheoryData<string> EarlierInstallFiles =>
+    [
+        "ipinfo.db", "ipinfo.next.db", "ipinfo_lite.json.gz.tmp", "ipinfo_token", ".ipinfo_token", "settings.json",
+        "exceptions.json", "exceptions.unreadable.json", "config.unreadable.db", "abuseipdb_key",
+        "azure_service_tags.json", "azure_service_tags.source.json", "aws_ip_ranges.json", "aws_ip_ranges.source.json",
+    ];
+
+    [Theory]
+    [MemberData(nameof(EarlierInstallFiles))]
+    public void A_file_of_an_earlier_install_keeps_FortiGate_feeds_on_at_the_import(string file)
+    {
+        File.WriteAllText(_temp.File("ipinfo.lock"), "1");
+        File.WriteAllText(_temp.File(file), file == "exceptions.json" ? "{ \"schemaVersion\": 1, \"exceptions\": [] }" : "{ not json");
+
+        using ConfigStore store = Open();
+
+        Assert.True(store.Snapshot.Settings.WriteFortigateFeeds);
+        Assert.False(store.Snapshot.Settings.WriteModSecurityLists);
+    }
+
+    [Fact]
+    public void A_new_data_folder_with_only_the_lock_and_the_key_file_starts_with_no_feed_type()
+    {
+        File.WriteAllText(_temp.File("ipinfo.lock"), "1");
+        File.WriteAllText(_temp.File("config_key"), "key");
+
+        using ConfigStore store = Open();
+
+        Assert.Equal(new UserSettings(), store.Snapshot.Settings);
+        Assert.False(store.Snapshot.Settings.WriteFortigateFeeds);
+    }
+
+    [Fact]
+    public void A_settings_file_turning_FortiGate_off_still_imports_it_on_and_keeps_its_ModSecurity()
+    {
+        File.WriteAllText(SettingsFile, "{ \"WriteFortigateFeeds\": false, \"WriteModSecurityLists\": true }");
+
+        using ConfigStore store = Open();
+
+        Assert.True(store.Snapshot.Settings.WriteFortigateFeeds);
+        Assert.True(store.Snapshot.Settings.WriteModSecurityLists);
+    }
+
+    public static TheoryData<string> MissingEvidence => ["config_made", "settings.json.migrated.2", "exceptions.json.migrated"];
+
+    [Theory]
+    [MemberData(nameof(MissingEvidence))]
+    public void Start_fresh_beside_a_file_of_an_earlier_launch_keeps_FortiGate_feeds_on(string file)
+    {
+        File.WriteAllText(_temp.File(file), "x");
+        Assert.Equal(ConfigOpenState.Missing, ConfigStore.TryOpen(_paths, _keys, _time, false, out ConfigStore? none));
+        Assert.Null(none);
+
+        Assert.Equal(ConfigOpenState.Opened,
+                     ConfigStore.StartFresh(_paths, _keys, _time, ConfigOpenState.Missing, out ConfigStore? store));
+        using (store)
+        {
+            Assert.True(store!.Snapshot.Settings.WriteFortigateFeeds);
+            Assert.False(store.Snapshot.Settings.WriteModSecurityLists);
+        }
     }
 
     public static TheoryData<string> UnreadableExceptions => ["bad json", "schema 2", "not a network", "over the cap", "over the size"];
@@ -149,6 +219,22 @@ public sealed class ConfigImportTests : IDisposable
         Assert.False(File.Exists(ExceptionsFile + ".migrated"));
         Assert.True(File.Exists(SettingsFile + ".migrated"));
         Assert.Equal("settings.json", ConfigStoreTests.Metadata(ConfigFile)["imported_from"]);
+    }
+
+    [Fact]
+    public void Start_without_exceptions_beside_only_an_unreadable_exceptions_file_keeps_FortiGate_feeds_on()
+    {
+        File.WriteAllBytes(ExceptionsFile, UnreadableExceptionsFile("bad json"));
+
+        Assert.Equal(ConfigOpenState.Opened, ConfigStore.TryOpen(_paths, _keys, _time, true, out ConfigStore? store));
+        using (store)
+        {
+            Assert.True(store!.Snapshot.Settings.WriteFortigateFeeds);
+            Assert.False(store.Snapshot.Settings.WriteModSecurityLists);
+            Assert.Equal(0, store.Snapshot.RuleIds.Count);
+        }
+        Assert.False(File.Exists(ExceptionsFile));
+        Assert.True(File.Exists(_temp.File("exceptions.unreadable.json")));
     }
 
     [Fact]

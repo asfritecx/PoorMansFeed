@@ -7,9 +7,8 @@ namespace PoorMansFeed.Core.Azure;
 internal sealed record CachedAzureTags(AzureTagFileSource Source, byte[] Json);
 
 /// <summary>
-/// The last good service tags file in the data folder, with a record of where it came from. A cache is only used
-/// when the file's length and SHA-256 match that record. A cache that does not match counts as missing and is left
-/// where it is: the next update overwrites it. With no AppPaths nothing is read or written.
+/// The last good service tags file and its source record. A file whose length or SHA-256 differs from the record
+/// counts as missing and is left for the next update to overwrite. With no AppPaths nothing is read or written.
 /// </summary>
 internal sealed class AzureTagCache
 {

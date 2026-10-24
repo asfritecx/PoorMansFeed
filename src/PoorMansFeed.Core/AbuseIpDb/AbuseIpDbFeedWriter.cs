@@ -12,44 +12,61 @@ namespace PoorMansFeed.Core.AbuseIpDb;
 internal sealed record AbuseFeedFamily(bool IsIpv6, IReadOnlyList<PublicAddress> Addresses, int ExceptionRemovals, int LeftOut);
 
 /// <summary>
-/// One family as a report selects it (the offending networks), not a feed: the addresses in byte order and how many
-/// were left out over the cap, with no exception applied. It can't be written, because it is its own type:
-/// <see cref="AbuseIpDbFeedWriter.WriteFamily"/> takes only an <see cref="AbuseFeedFamily"/>. Build an
-/// <see cref="AbuseFeedFamily"/> with addresses only through <see cref="AbuseIpDbFeedWriter.Select"/>, which applies the
-/// exceptions: one built from a report's addresses would write a feed with none cut.
+/// A report's selection, with no exception applied; its own type so no <see cref="AbuseFeedBody"/>, all a file write
+/// takes, can be made from it. A feed family with addresses comes only from <see cref="AbuseIpDbFeedWriter.Select"/>.
 /// </summary>
 internal sealed record AbuseReportFamily(bool IsIpv6, IReadOnlyList<PublicAddress> Addresses, int LeftOut);
 
 /// <summary>
-/// What a rolling feed's header says: the keep days, when the feed was written, and when the list it was written from
-/// was downloaded and generated (null when the list doesn't know). Null keep days mean a file emptied by hand (Empty
-/// feed): its header says so in place of the keep days.
+/// A family's file below its first line. Only <see cref="Of"/> makes one, from a feed family, so a report's selection
+/// never reaches a file write.
+/// </summary>
+internal sealed class AbuseFeedBody
+{
+    private AbuseFeedBody(AbuseFeedFamily family, string text)
+    {
+        Family = family;
+        Text = text;
+    }
+
+    public AbuseFeedFamily Family { get; }
+
+    public string Text { get; }
+
+    public static AbuseFeedBody Of(AbuseFeedFamily family, AbuseFeedHeader header)
+    {
+        ArgumentNullException.ThrowIfNull(family);
+        ArgumentNullException.ThrowIfNull(header);
+        return new AbuseFeedBody(family, AbuseIpDbFeedWriter.BodyAfterFirstLine(family, header));
+    }
+}
+
+/// <summary>
+/// Null keep days mean a file emptied by hand (Empty feed), whose header says so in their place. The list's times are
+/// null when the list doesn't know them.
 /// </summary>
 internal sealed record AbuseFeedHeader(int? KeepDays, DateTimeOffset WrittenAt, DateTimeOffset? LastDownloadAt,
                                        DateTimeOffset? ListGeneratedAt);
 
 /// <summary>
-/// Chooses and writes the AbuseIPDB rolling feed: one Fortigate threat feed file per family, of bare addresses. Nothing
-/// in it comes from IPinfo, so it carries no IPinfo line, and no country is written.
+/// Chooses and writes the AbuseIPDB rolling feed: one file per family and feed type, of bare addresses. Nothing in it
+/// comes from IPinfo, so it carries no IPinfo line, and no country is written.
 /// </summary>
 internal static class AbuseIpDbFeedWriter
 {
     /// <summary>The start of both file names.</summary>
     public const string FileStem = "AbuseIPDB_rolling";
 
-    /// <summary>The family's feed file: <c>{exportFolder}/fortigate/AbuseIPDB_rolling_ipv4.txt</c> or <c>_ipv6.txt</c>.</summary>
-    public static string PathFor(string exportFolder, bool ipv6)
+    /// <summary>The family's file in the type's folder, as in <c>fortigate/AbuseIPDB_rolling_ipv4.txt</c>.</summary>
+    public static string PathFor(string exportFolder, FeedType type, bool ipv6)
     {
         ArgumentNullException.ThrowIfNull(exportFolder);
-        return Path.Combine(exportFolder, ExportWriter.FortigateFolderName, $"{FileStem}_{(ipv6 ? "ipv6" : "ipv4")}.txt");
+        return Path.Combine(exportFolder, FeedTypes.FolderName(type), $"{FileStem}_{(ipv6 ? "ipv6" : "ipv4")}.txt");
     }
 
     /// <summary>
-    /// One family's feed: the entries of that family, less those an exception covers, so a covered address takes no
-    /// place under the cap. When more than <paramref name="cap"/> remain, the most recently listed are kept: last seen
-    /// latest first, then the higher score, then the later last report (none last), then the lower address bytes, so
-    /// the choice is the same whatever the input order. What is kept is then sorted by address bytes. Throws when the
-    /// exceptions are unreadable, so callers check <see cref="ExceptionList.IsReadable"/> first.
+    /// Over <paramref name="cap"/>, keeps the most recently listed (<see cref="ByRecency"/>), the same in any input
+    /// order. Throws when the exceptions are unreadable, so callers check <see cref="ExceptionList.IsReadable"/> first.
     /// </summary>
     public static AbuseFeedFamily Select(IEnumerable<AbuseListEntry> entries, ExceptionList exceptions, bool ipv6,
                                          int cap = AbuseIpDbLimits.MaxFeedEntries)
@@ -66,8 +83,7 @@ internal static class AbuseIpDbFeedWriter
     }
 
     /// <summary>
-    /// <see cref="Select"/> with no exceptions, for the offending-networks report: the entries of that family, at most
-    /// <paramref name="cap"/> of them by the same ranking, sorted by address bytes. Exceptions apply to feeds only, and
+    /// <see cref="Select"/> with no exceptions, for the offending-networks report: exceptions apply to feeds only, and
     /// the <see cref="AbuseReportFamily"/> it returns can't be written as one.
     /// </summary>
     public static AbuseReportFamily SelectForReport(IEnumerable<AbuseListEntry> entries, bool ipv6,
@@ -114,24 +130,30 @@ internal static class AbuseIpDbFeedWriter
         return leftOut;
     }
 
-    /// <summary>
-    /// Writes one family to its file through <c>{path}.tmp</c> and a move, and returns the path. A family with no
-    /// address gives a header-only file (<c># Entries: 0</c>). The <c>fortigate</c> folder must exist. IOException and
-    /// UnauthorizedAccessException escape, with the <c>.tmp</c> file deleted. The <c>.tmp</c> is made new, so a link
-    /// planted there is never written through.
-    /// </summary>
-    public static string WriteFamily(string exportFolder, AbuseFeedFamily family, AbuseFeedHeader header)
+    /// <summary>One type's copy of a family, written as <see cref="WriteFile"/> writes it.</summary>
+    public static string WriteFamily(string exportFolder, FeedType type, AbuseFeedFamily family, AbuseFeedHeader header)
     {
         ArgumentNullException.ThrowIfNull(family);
-        ArgumentNullException.ThrowIfNull(header);
+        string path = PathFor(exportFolder, type, family.IsIpv6);
+        WriteFile(path, type, AbuseFeedBody.Of(family, header));
+        return path;
+    }
 
-        string path = PathFor(exportFolder, family.IsIpv6);
+    /// <summary>
+    /// Writes the type's first line, then <paramref name="body"/>, making the type's folder first. The .tmp is made
+    /// new, so a link there is never written through; IO failures escape with the .tmp deleted.
+    /// </summary>
+    public static void WriteFile(string path, FeedType type, AbuseFeedBody body)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(body);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string tmp = path + ".tmp";
         try
         {
-            TemporaryFile.WriteNew(tmp, Body(family, header));
+            TemporaryFile.WriteNew(tmp, FeedTypes.FirstLine(type) + FeedText.LineEnd + body.Text);
             File.Move(tmp, path, overwrite: true);
-            return path;
         }
         catch
         {
@@ -140,11 +162,14 @@ internal static class AbuseIpDbFeedWriter
         }
     }
 
-    private static string Body(AbuseFeedFamily family, AbuseFeedHeader header)
+    /// <summary>A family's file below its first line, the one line that differs between the types' copies.</summary>
+    public static string BodyAfterFirstLine(AbuseFeedFamily family, AbuseFeedHeader header)
     {
-        string nl = Environment.NewLine;
+        ArgumentNullException.ThrowIfNull(family);
+        ArgumentNullException.ThrowIfNull(header);
+
+        string nl = FeedText.LineEnd;
         var text = new StringBuilder();
-        text.Append("# PoorMansFeed - Fortigate Threat Feed").Append(nl);
         text.Append("# Source: AbuseIPDB blacklist (https://www.abuseipdb.com), rolling list").Append(nl);
         text.Append("# For your own firewalls only: AbuseIPDB's terms don't allow this data to be republished.").Append(nl);
         if (header.KeepDays is int keepDays)

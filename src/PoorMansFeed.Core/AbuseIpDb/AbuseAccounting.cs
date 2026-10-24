@@ -1,17 +1,15 @@
 namespace PoorMansFeed.Core.AbuseIpDb;
 
 /// <summary>
-/// The AbuseIPDB download accounting: the stored rate limit and the UTC day's count of 2xx answers.
-/// <see cref="RateLimit"/> is null when AbuseIPDB never said what is left of the limit; <see cref="DownloadsOnDay"/> is
-/// the number of 2xx answers on <see cref="DownloadsDay"/>, and 0 while there is no day.
+/// The stored rate limit and the UTC day's count of 2xx answers. <see cref="RateLimit"/> is null while AbuseIPDB has
+/// never said what is left of the limit.
 /// </summary>
 internal sealed record AbuseAccounting(AbuseRateLimit? RateLimit, DateOnly? DownloadsDay, int DownloadsOnDay)
 {
     public static AbuseAccounting Empty { get; } = new(null, null, 0);
 
-    /// <summary>The accounting after one more answer: with countDownload the count for answeredAt's UTC day goes up by one
-    /// (a new day starts at 1, and the count stops at int.MaxValue); the limit is replaced only when rateLimit.Remaining is
-    /// not null.</summary>
+    /// <summary>The accounting after one more answer: the day's count stops at int.MaxValue, and the limit is replaced
+    /// only when rateLimit.Remaining was sent.</summary>
     internal AbuseAccounting After(AbuseRateLimit rateLimit, DateTimeOffset answeredAt, bool countDownload)
     {
         ArgumentNullException.ThrowIfNull(rateLimit);
@@ -44,9 +42,8 @@ internal interface IAbuseAccounting
     bool IsAvailable { get; }
 
     /// <summary>
-    /// One transaction. With countDownload the count for answeredAt's UTC day goes up by one (a new day starts at 1).
-    /// The limit is replaced only when rateLimit.Remaining is not null. Current changes only after the commit; false when
-    /// the write failed, and Current is then unchanged.
+    /// One transaction, by the rules of <see cref="AbuseAccounting.After"/>. Current changes only after the commit;
+    /// false when the write failed, and Current is then unchanged.
     /// </summary>
     bool TryRecordAnswer(AbuseRateLimit rateLimit, DateTimeOffset answeredAt, bool countDownload);
 }

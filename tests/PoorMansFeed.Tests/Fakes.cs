@@ -4,6 +4,7 @@ using PoorMansFeed.Core.Aws;
 using PoorMansFeed.Core.Azure;
 using PoorMansFeed.Core.CloudFeeds;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 using GraphiteUi;
 
 namespace PoorMansFeed.Tests;
@@ -15,7 +16,8 @@ namespace PoorMansFeed.Tests;
 internal sealed class FakeIpInfoService : IIpInfoService
 {
     public string DataFolder { get; set; } = Path.Combine(Path.GetTempPath(), "ipinfo-fake-data");
-    private UserSettings _settings = new();
+    // An upgraded install, with FortiGate ticked; a test of no feed type sets the settings itself
+    private UserSettings _settings = new() { WriteFortigateFeeds = true };
 
     /// <summary>
     /// The settings; each read of the getter is counted in <see cref="SettingsReads"/>, and throws
@@ -60,6 +62,10 @@ internal sealed class FakeIpInfoService : IIpInfoService
     public ExceptionsSaveOutcome SaveExceptionsResult { get; set; } = ExceptionsSaveOutcome.Saved;
     /// <summary>When set, an exceptions save waits for it before it returns, to test what happens meanwhile.</summary>
     public TaskCompletionSource? SaveExceptionsPending { get; set; }
+    /// <summary>The answer to every rule id request; null gives each name the next id up from the first rule id.</summary>
+    public ModSecurityRuleIdsResult? AssignRuleIdsResult { get; set; }
+    /// <summary>When set, a rule id request waits for it before it returns, to test what happens meanwhile.</summary>
+    public TaskCompletionSource? AssignRuleIdsPending { get; set; }
 
     /// <summary>Thrown by the next check or search, to test defensive handling.</summary>
     public Exception? CheckException { get; set; }
@@ -108,6 +114,7 @@ internal sealed class FakeIpInfoService : IIpInfoService
     public string? SavedToken { get; private set; }
     public UserSettings? SavedSettings { get; private set; }
     public IReadOnlyList<ExceptionEntry>? SavedExceptions { get; private set; }
+    public List<IReadOnlyList<string>> AssignRuleIdsCalls { get; } = [];
 
     public int InitializeCalls { get; private set; }
 
@@ -333,6 +340,26 @@ internal sealed class FakeIpInfoService : IIpInfoService
         }
     }
 
+    public Task<ModSecurityRuleIdsResult> AssignModSecurityRuleIdsAsync(IReadOnlyList<string> fileNames, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(fileNames);
+        if (ct.IsCancellationRequested)
+            return Task.FromCanceled<ModSecurityRuleIdsResult>(ct);
+        AssignRuleIdsCalls.Add([.. fileNames]);
+
+        return AssignRuleIdsPending is { } pending ? AssignAfterAsync(pending) : Task.FromResult(FinishAssign(fileNames));
+
+        async Task<ModSecurityRuleIdsResult> AssignAfterAsync(TaskCompletionSource gate)
+        {
+            await gate.Task;
+            return FinishAssign(fileNames);
+        }
+    }
+
+    private ModSecurityRuleIdsResult FinishAssign(IReadOnlyList<string> fileNames) =>
+        AssignRuleIdsResult ?? new ModSecurityRuleIdsResult(ModSecurityRuleIdsFailure.None,
+            [.. fileNames.Select((_, i) => Settings.ModSecurityFirstRuleId + i)]);
+
     private ExceptionsSaveOutcome FinishSaveExceptions(IReadOnlyList<ExceptionEntry> entries)
     {
         if (SaveExceptionsResult != ExceptionsSaveOutcome.Failed)
@@ -371,6 +398,20 @@ internal sealed class FakeUi : IUiServices
     /// <summary>When set, runs as the new addresses dialog, so a test can hold it open or make it fail; unset, it closes at once.</summary>
     public Func<NewAddressesPrompt, Task>? NewAddressesAnswer { get; set; }
 
+    /// <summary>Runs as the rules dialog when set, so a test can hold it open or make it fail.</summary>
+    public Func<ModSecurityRulesPrompt, Task>? ModSecurityRulesAnswer { get; set; }
+
+    /// <summary>The configure dialog's answer; Close by default, as Esc gives.</summary>
+    public ConfigureFeedsChoice ConfigureFeedsAnswer { get; set; } = ConfigureFeedsChoice.Close;
+    /// <summary>Thrown by the next configure dialog, after it is recorded, as a dialog that fails to show.</summary>
+    public Exception? ConfigureFeedsException { get; set; }
+    /// <summary>
+    /// When set, the next configure dialog stays open until it completes, then answers ConfigureFeedsAnswer.
+    /// </summary>
+    public TaskCompletionSource? ConfigureFeedsGate { get; set; }
+    public int ConfigureFeedsAsks { get; private set; }
+    public int SettingsPageShows { get; private set; }
+
     /// <summary>Runs while a dialog is "open", before it answers.</summary>
     public Action? OnDialogOpen { get; set; }
 
@@ -405,6 +446,7 @@ internal sealed class FakeUi : IUiServices
     public List<AbuseKeyAsk> AbuseKeyPrompts { get; } = [];
     public List<LargeRangePrompt> LargeRangePrompts { get; } = [];
     public List<NewAddressesPrompt> NewAddressesPrompts { get; } = [];
+    public List<ModSecurityRulesPrompt> ModSecurityRulesPrompts { get; } = [];
 
     public Task<bool> ConfirmAsync(string title, string message, string confirmText)
     {
@@ -519,6 +561,36 @@ internal sealed class FakeUi : IUiServices
         OnDialogOpen?.Invoke();
         return NewAddressesAnswer is { } answer ? answer(prompt) : Task.CompletedTask;
     }
+
+    public Task ShowModSecurityRulesAsync(ModSecurityRulesPrompt prompt)
+    {
+        ModSecurityRulesPrompts.Add(prompt);
+        OnDialogOpen?.Invoke();
+        return ModSecurityRulesAnswer is { } answer ? answer(prompt) : Task.CompletedTask;
+    }
+
+    public Task<ConfigureFeedsChoice> AskToConfigureFeedsAsync()
+    {
+        ConfigureFeedsAsks++;
+        if (ConfigureFeedsException is { } failure)
+        {
+            ConfigureFeedsException = null;
+            throw failure;
+        }
+
+        OnDialogOpen?.Invoke();
+        TaskCompletionSource? gate = ConfigureFeedsGate;
+        ConfigureFeedsGate = null;
+        return gate is null ? Task.FromResult(ConfigureFeedsAnswer) : AnswerConfigureFeedsWhenReleasedAsync(gate);
+    }
+
+    private async Task<ConfigureFeedsChoice> AnswerConfigureFeedsWhenReleasedAsync(TaskCompletionSource gate)
+    {
+        await gate.Task;
+        return ConfigureFeedsAnswer;
+    }
+
+    public void ShowSettingsPage() => SettingsPageShows++;
 }
 
 /// <summary>
@@ -547,11 +619,8 @@ internal sealed class FakeAbuseAccounting : IAbuseAccounting
 }
 
 /// <summary>
-/// Scripted AbuseIPDB service. Each check takes the next queued result (none queued throws); CheckGate holds the NEXT
-/// check until it completes, and honours the call's cancellation token; CheckHoldIgnoringCancel holds it without the
-/// token, so a check called off meanwhile still returns its answer, as a real one whose answer was already in does. A
-/// save takes the next queued result (none = Saved); SaveGate holds the NEXT save, after its key is recorded, until it
-/// completes.
+/// Scripted AbuseIPDB service. CheckHoldIgnoringCancel holds the next check without its token, so a check called off
+/// meanwhile still returns its answer, as a real one whose answer was already in does.
 /// </summary>
 internal sealed class FakeAbuseIpDbService : IAbuseIpDbService
 {

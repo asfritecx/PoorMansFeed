@@ -76,7 +76,7 @@ public sealed class AzureFeedTests : IDisposable
     [Fact]
     public async Task With_IPv6_Off_Only_IPv4_Is_Asked_For()
     {
-        _ipinfo.Settings = new UserSettings { IPv6Enabled = false };
+        _ipinfo.Settings = new UserSettings { IPv6Enabled = false, WriteFortigateFeeds = true };
 
         CheckResult result = await Service().CheckAsync(Catalogue(), new AzureTagSelection("Storage"), Ct);
 
@@ -114,7 +114,7 @@ public sealed class AzureFeedTests : IDisposable
         Assert.Equal(1, written.UnconfirmedWritten);
         string path = Assert.Single(written.Files);
         Assert.Equal(Path.Combine(_temp.ExportFolder, "fortigate", "Azure_Storage_SoutheastAsia_ipv4.txt"), path);
-        string nl = Environment.NewLine;
+        string nl = "\n";
         string expected =
             "# PoorMansFeed - Fortigate Threat Feed" + nl +
             "# Ranges: Azure service tags, ServiceTags_Public_20261012.json (change 422)" + nl +
@@ -138,8 +138,8 @@ public sealed class AzureFeedTests : IDisposable
             service.PlanWrite(storage.Check!, storage.Check!.Ranges.Select(range => range.Prefix.Block).ToList()), [], Ct);
         string folder = Path.Combine(_temp.ExportFolder, "fortigate");
         Assert.Equal([Path.Combine(folder, "Azure_Storage_ipv4.txt"), Path.Combine(folder, "Azure_Storage_ipv6.txt")], both.Files.ToArray());
-        Assert.Contains("# Address Family: IPv6" + Environment.NewLine + "# Generated", File.ReadAllText(both.Files[1]));
-        Assert.Contains("2603:1000::/32" + Environment.NewLine, File.ReadAllText(both.Files[1]));
+        Assert.Contains("# Address Family: IPv6" + "\n" + "# Generated", File.ReadAllText(both.Files[1]));
+        Assert.Contains("2603:1000::/32" + "\n", File.ReadAllText(both.Files[1]));
 
         CheckResult core = await service.CheckAsync(Catalogue(), new AzureTagSelection("AzureMonitor.Core"), Ct);
         CloudFeedWriteResult dotted = await service.WriteAsync(

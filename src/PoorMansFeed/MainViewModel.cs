@@ -12,9 +12,8 @@ namespace PoorMansFeed;
 internal enum DatasetState { Starting, NoDataset, Checking, Current, UpdateAvailable, CheckFailed, Updating, UpdateFailed }
 
 /// <summary>
-/// House shape: a sealed ObservableObject with hand-written properties and commands built in the constructor.
-/// No source generators and no converters: the view binds to ready-made *Text properties. Everything that needs a
-/// window goes through <see cref="IUiServices"/>, and the core goes through <see cref="IIpInfoService"/>.
+/// House shape: hand-written properties and commands built in the constructor, with no source generators and no
+/// converters: the view binds to ready-made *Text properties.
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
@@ -76,6 +75,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private TaskCompletionSource? _startStep;
     // Set by a close during a start-up step: nothing the step returns is applied
     private bool _closingAfterStartStep;
+
+    // The rules button: the ModSecurity copies of the last export, and whether its press is out
+    private readonly ModSecurityRulesPress _rulesPress;
+    private readonly ModSecurityRulesFiles _rulesFiles = new();
+    private bool _showingRules;
     // The dataset the last refresh of the facts showed, null before the first
     private DatasetInfo? _datasetShown;
     private string _searchText = "";
@@ -108,6 +112,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         _gate.Changed += GateChanged;
+        _rulesPress = new ModSecurityRulesPress(service, ui, _gate);
+        _rulesFiles.ShowsChanged += RulesFilesShowsChanged;
         _abuseKeys = abuseKeys ?? (abuse is null ? null : new AbuseKeyPrompt(ui, abuse, _gate));
         _defaultExportFolder = defaultExportFolder ?? Path.Combine(service.DataFolder, "exports");
         _exportFolder = ResolveExportFolder();
@@ -122,6 +128,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Outside CanStart, so it works while an update runs, but off once a close is held
         OpenExportFolderCommand = new AsyncRelayCommand(OpenExportFolderAsync, () => !_disposed && !_closingAfterStartStep);
         CheckAbuseCommand = new AsyncRelayCommand(CheckAbuseAsync, CanCheckAbuse);
+        ModSecurityRulesCommand = new AsyncRelayCommand(ShowModSecurityRulesAsync, () => CanStart() && ShowsModSecurityRules);
         // Outside the work gate too: a browser is not work, and a modal dialog already blocks the results menu
         OpenInIpinfoCommand = new AsyncRelayCommand(OpenInIpinfoAsync, () => CanOpenWebPage(IpinfoPage()));
         OpenInAbuseIpDbCommand = new AsyncRelayCommand(OpenInAbuseIpDbAsync, () => CanOpenWebPage(AbuseIpDbPage()));
@@ -137,6 +144,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public IAsyncRelayCommand CopyResultsCommand { get; }
     public IAsyncRelayCommand OpenExportFolderCommand { get; }
     public IAsyncRelayCommand CheckAbuseCommand { get; }
+    public IAsyncRelayCommand ModSecurityRulesCommand { get; }
+
+    /// <summary>The last export succeeded and wrote ModSecurity copies.</summary>
+    public bool ShowsModSecurityRules => _rulesFiles.Shows;
 
     /// <summary>Opens the searched ASN or public address on ipinfo.io, from the results menu.</summary>
     public IAsyncRelayCommand OpenInIpinfoCommand { get; }
@@ -243,7 +254,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string ExportFolder { get => _exportFolder; private set => SetProperty(ref _exportFolder, value); }
 
     // One predicate gates every action, so a new command cannot forget a case. A held close turns every action off.
-    private bool CanStart() => _gate.CanStart && !_disposed && !_closingAfterStartStep;
+    private bool CanStart() => _gate.CanStart && !_disposed && !_closingAfterStartStep && !_showingRules;
 
     // The stop's buttons are outside the gate, which stays closed while start-up has stopped
     private bool CanLeaveStop() => !_disposed && !_closingAfterStartStep && _isStopped && !_stopWorking && !_stopAsking;
@@ -252,9 +263,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     internal bool IsStartStepRunning => _startStep is not null;
 
     /// <summary>
-    /// The window's close during a start-up step. The step can't be cut short, so it is left to return, and nothing it
-    /// returns is applied: no stop, no start, no notice and no prompt. Completes once the step has returned.
-    /// The pill says the close is waiting, and every command is off from here on.
+    /// The window's close during a start-up step, which can't be cut short: it is left to return, and nothing it
+    /// returns is applied (no stop, start, notice or prompt). Every command is off from here on.
     /// </summary>
     internal async Task CloseAfterStartStepAsync()
     {
@@ -444,9 +454,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         AppText.StartWithoutOldExceptionsFailed,
         _service.StartWithoutOldExceptionsAsync);
 
-    // Asks first. The same failure back says it couldn't be done and keeps the button; any other result is applied
-    // as a launch's would be, so a different failure shows its own stop and None starts the app in place.
-    // offered is the button's own offer; the check uses this class's state, not the running command's.
+    // The same failure back keeps the button; any other result is applied as a launch's would be. offered is the
+    // button's own offer; the check uses this class's state, not the running command's.
     private async Task LeaveStopAsync(bool offered, string title, string body, string confirmText,
         string working, string failed, Func<CancellationToken, Task<StartupResult>> leave)
     {
@@ -840,9 +849,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>Searches for <paramref name="text"/> from another page: sets the box and runs the search, superseding
-    /// one still running. Returns false, with a fixed results line, when no search can start now or the text is blank;
-    /// the box is then left as it was.</summary>
+    /// <summary>Searches for <paramref name="text"/> from another page, superseding a search still running. False, with
+    /// a fixed results line, when no search can start or the text is blank; the box is then left as it was.</summary>
     internal async Task<bool> SearchForAsync(string text)
     {
         // CanStart covers start-up, a gate holder (an update, a dialog), the held close and dispose
@@ -878,6 +886,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (!keepCheckIfSameQuery)
         {
             _abuseCheckCts?.Cancel();
+            _rulesFiles.Clear();
         }
 
         _isSearching = true;
@@ -902,6 +911,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (version != _searchVersion)
         {
             return;
+        }
+
+        // An export pressed while this search was out wrote the last query's files, which don't go with this result
+        if (!keepCheckIfSameQuery)
+        {
+            _rulesFiles.Clear();
         }
 
         // The commands are refreshed after the result is applied, because their gates read the query and the count it sets
@@ -1010,6 +1025,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        int rulesMark = _rulesFiles.Clear();
         ExportPlan plan;
         try
         {
@@ -1024,6 +1040,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (!CanStart())
         {
             return;
+        }
+
+        UserSettings settings = _service.Settings;
+        if (settings.FortigateEnabled && !settings.TicksAnyFeedType())
+        {
+            ConfigureFeedsChoice? choice = await AskToConfigureFeedsAsync();
+            // The window can start closing while the dialog is open
+            if (choice is null || !CanStart())
+            {
+                return;
+            }
+
+            if (choice == ConfigureFeedsChoice.OpenSettings)
+            {
+                _ui.ShowSettingsPage();
+                return;
+            }
+
+            // Close goes on: the export always writes the ASN report
         }
 
         IReadOnlyList<string> included = [];
@@ -1066,6 +1101,40 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         SetResultsAction(ExportMessage(result, unsaved));
+        if (result.Failure == ExportFailure.None && !_disposed)
+        {
+            _rulesFiles.Set(rulesMark, result.ModSecurityFiles);
+        }
+    }
+
+    private void RulesFilesShowsChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(ShowsModSecurityRules));
+        RefreshCommandStates();
+    }
+
+    private async Task ShowModSecurityRulesAsync()
+    {
+        if (!CanStart() || _rulesFiles.Files is not { Count: > 0 } files)
+        {
+            return;
+        }
+
+        _showingRules = true;
+        RefreshCommandStates();
+        try
+        {
+            string? line = await _rulesPress.RunAsync(files, () => !_disposed && !_closingAfterStartStep, _lifetime.Token);
+            if (line is not null && !_disposed)
+            {
+                SetResultsAction(line);
+            }
+        }
+        finally
+        {
+            _showingRules = false;
+            RefreshCommandStates();
+        }
     }
 
     private static string ExportMessage(ExportResult result, bool unsaved)
@@ -1095,8 +1164,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             text += AppText.LargeRangesLeftOut(result.LargeRangesLeftOut);
         }
 
+        if (result.WholeRangesLeftOut > 0)
+        {
+            text += AppText.ExportWholeRangesLeftOut(result.WholeRangesLeftOut);
+        }
+
         return text + AppText.ExceptionsApplied(result.ExceptionCuts, result.ExceptionRemovals, "network", "networks")
-            + AppText.OldFeedFilesLeft(result.OldFilesLeft) + (unsaved ? AppText.UnsavedSettingsNote : "");
+            + AppText.OldFeedFilesLeft(result.OldFilesLeft) + (result.NoFeedType ? AppText.ExportNoFeedType : "")
+            + (unsaved ? AppText.UnsavedSettingsNote : "");
     }
 
     private Task CopyResultsAsync()
@@ -1175,10 +1250,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             StartCheck();
         }
 
-        // The badges of the open results depend on the settings, so the search runs again: the newest one started
-        // when it is still out (its answer used the old settings), else the one shown. A rerun of the same address keeps
-        // an AbuseIPDB check, and its line only while the check wrote it; a user's search still out has already called
-        // its check off, so it keeps none
+        // The badges depend on the settings, so the newest search still out runs again (its answer used the old
+        // settings), else the one shown. A user's search still out has already called its AbuseIPDB check off
         if (_isSearching && _newestSearchInput is { } newest)
         {
             await RunSearchAsync(newest, _newestSearchKeepsCheck);
@@ -1190,10 +1263,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Sends the searched address to AbuseIPDB and writes the answer to the results line. A missing or refused key
-    /// asks for one once, saves it and checks once more. A search the user starts, or a settings rerun that doesn't show
-    /// the same address again, calls the check off and owns the line. The key passes straight from the dialog to the
-    /// service and is kept nowhere here.
+    /// A search the user starts, or a settings rerun that doesn't show the same address again, calls the check off and
+    /// owns the line. The key passes straight from the dialog to the service and is kept nowhere here.
     /// </summary>
     private async Task CheckAbuseAsync()
     {
@@ -1300,10 +1371,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     };
 
     /// <summary>
-    /// Asks to confirm, removes the saved token and asks for a new one. Writes no results line: the outcome says what
-    /// happened. A saved token starts the update when there is no dataset and the check otherwise, and returns once
-    /// either has started: the update holds the gate itself (IsBusy) until it ends, and its task is
-    /// <see cref="PendingUpdate"/>.
+    /// Writes no results line. After a save it returns once the update or check has started, unless the window closed;
+    /// the update holds the gate itself (IsBusy) until it ends, and its task is <see cref="PendingUpdate"/>.
     /// </summary>
     internal async Task<TokenResetOutcome> ResetTokenAsync()
     {
@@ -1334,9 +1403,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // so the gate is busy by the time this returns
         if (!HasDataset)
         {
-            // Without a dataset, a new token goes straight to the download, as on the first run. It isn't awaited, so
-            // the page that asked has its outcome now rather than after the download. RunUpdateAsync catches the
-            // service's failures itself. The task is kept only so the tests can await it; keeping it doesn't observe it.
+            // Not awaited, so the page that asked has its outcome now; RunUpdateAsync catches the service's failures.
+            // The task is kept only so the tests can await it; keeping it doesn't observe it.
             PendingUpdate = RunUpdateAsync();
             return TokenResetOutcome.Saved;
         }
@@ -1479,6 +1547,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // The enum twin of ShowDialogAsync: a dialog that fails to show writes the generic line and gives null
+    private async Task<ConfigureFeedsChoice?> AskToConfigureFeedsAsync()
+    {
+        using IDisposable hold = _gate.Hold();
+        try
+        {
+            return await _ui.AskToConfigureFeedsAsync();
+        }
+        catch (Exception)
+        {
+            SetResultsAction(AppText.Generic);
+            return null;
+        }
+    }
+
     // A dialog that fails to show writes the generic line to the results line, or calls failed instead when given
     private async Task<T?> ShowDialogAsync<T>(Func<Task<T?>> show, Action? failed = null) where T : class
     {
@@ -1566,6 +1649,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyResultsCommand.NotifyCanExecuteChanged();
         OpenExportFolderCommand.NotifyCanExecuteChanged();
         CheckAbuseCommand.NotifyCanExecuteChanged();
+        ModSecurityRulesCommand.NotifyCanExecuteChanged();
         OpenInIpinfoCommand.NotifyCanExecuteChanged();
         OpenInAbuseIpDbCommand.NotifyCanExecuteChanged();
         RefreshStopCommands();

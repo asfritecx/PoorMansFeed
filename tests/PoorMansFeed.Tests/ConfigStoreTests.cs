@@ -8,14 +8,14 @@ using PoorMansFeed.Core;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.Config;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.ModSecurity;
 using PoorMansFeed.Core.Secrets;
 
 namespace PoorMansFeed.Tests;
 
 /// <summary>
-/// config.db: the open order, the lock, the checks before and after the key, the saves and Start fresh. Every store is
-/// disposed before a test reads, copies or changes the file's bytes, because on macOS a System.IO open of the locked
-/// file drops SQLite's locks for the whole process.
+/// Every store is disposed before a test reads, copies or changes the file's bytes, because on macOS a System.IO open
+/// of the locked file drops SQLite's locks for the whole process.
 /// </summary>
 public sealed class ConfigStoreTests : IDisposable
 {
@@ -82,6 +82,11 @@ public sealed class ConfigStoreTests : IDisposable
             IPv4MinPrefix = 20,
             IPv6MinPrefix = 48,
             AbuseIpDbKeepDays = 90,
+            WriteFortigateFeeds = false,
+            WriteModSecurityLists = true,
+            ModSecurityAction = ModSecurityAction.Deny,
+            ModSecurityFirstRuleId = 99_999,
+            ModSecurityLocation = "/blocked list",
         };
         ExceptionList exceptions = ExceptionList.Create(
         [
@@ -111,11 +116,71 @@ public sealed class ConfigStoreTests : IDisposable
     {
         using ConfigStore store = Open();
 
-        Assert.True(store.SaveSettings(new UserSettings { IPv4MinPrefix = 40, IPv6MinPrefix = 0, AbuseIpDbKeepDays = 999 }));
+        Assert.True(store.SaveSettings(new UserSettings
+        {
+            IPv4MinPrefix = 40,
+            IPv6MinPrefix = 0,
+            AbuseIpDbKeepDays = 999,
+            ModSecurityAction = (ModSecurityAction)7,
+            ModSecurityFirstRuleId = 0,
+            ModSecurityLocation = new string('x', ModSecurityLimits.MaxLocationLength + 1),
+        }));
 
         Assert.Equal(32, store.Snapshot.Settings.IPv4MinPrefix);
         Assert.Equal(1, store.Snapshot.Settings.IPv6MinPrefix);
         Assert.Equal(AbuseIpDbLimits.MaxKeepDays, store.Snapshot.Settings.AbuseIpDbKeepDays);
+        Assert.Equal(ModSecurityAction.LogOnly, store.Snapshot.Settings.ModSecurityAction);
+        Assert.Equal(ModSecurityLimits.RuleIdMin, store.Snapshot.Settings.ModSecurityFirstRuleId);
+        Assert.Equal("", store.Snapshot.Settings.ModSecurityLocation);
+    }
+
+    [Fact]
+    public void Settings_sealed_before_the_feed_types_reopen_with_FortiGate_on_and_ModSecurity_off()
+    {
+        Open().Dispose();
+        byte[] plaintext = Encoding.UTF8.GetBytes("""
+            { "SchemaVersion": 1, "ExportFolder": "", "IPv6Enabled": true, "FortigateEnabled": true,
+              "FortigateIncludeIPv4": true, "FortigateIncludeIPv6": true, "FortigateSplitByFamily": true,
+              "LargeRangeCheckEnabled": true, "IPv4MinPrefix": 16, "IPv6MinPrefix": 32, "AbuseIpDbKeepDays": 12 }
+            """);
+        using var seal = new ConfigSeal([.. _secrets.Secret!], Metadata(ConfigFile)["file_id"]);
+        SetBlob(ConfigFile, "settings", seal.Seal(ConfigSection.Settings, 1, plaintext));
+
+        using ConfigStore store = Open();
+
+        Assert.Equal(new UserSettings { WriteFortigateFeeds = true, AbuseIpDbKeepDays = 12 }, store.Snapshot.Settings);
+    }
+
+    [Theory]
+    [InlineData("Newer")]
+    [InlineData("Unreadable")]
+    [InlineData("KeyMismatch")]
+    [InlineData("Missing")]
+    public void Start_fresh_after_an_earlier_launch_keeps_FortiGate_feeds_on(string state)
+    {
+        ConfigOpenState failed = Enum.Parse<ConfigOpenState>(state);
+        MakeFailedConfig(failed);
+
+        Assert.Equal(ConfigOpenState.Opened, ConfigStore.StartFresh(_paths, _keys, _time, failed, out ConfigStore? store));
+        using (store)
+        {
+            Assert.True(store!.Snapshot.Settings.WriteFortigateFeeds);
+            Assert.False(store.Snapshot.Settings.WriteModSecurityLists);
+        }
+        using (ConfigStore reopened = Open())
+            Assert.True(reopened.Snapshot.Settings.WriteFortigateFeeds);
+    }
+
+    [Fact]
+    public void An_empty_file_imported_in_place_beside_a_dataset_keeps_FortiGate_feeds_on()
+    {
+        MakeEmptyConfig("sqlite");
+        File.WriteAllText(_temp.File("ipinfo.db"), "x");
+
+        using ConfigStore store = Open();
+
+        Assert.True(store.Snapshot.Settings.WriteFortigateFeeds);
+        Assert.False(store.Snapshot.Settings.WriteModSecurityLists);
     }
 
     [Theory]
@@ -721,7 +786,7 @@ public sealed class ConfigStoreTests : IDisposable
         using (store)
         {
             Assert.NotNull(store);
-            Assert.Equal(new UserSettings(), store.Snapshot.Settings);
+            Assert.Equal(new UserSettings { WriteFortigateFeeds = true }, store.Snapshot.Settings);
             Assert.Empty(store.Snapshot.Exceptions.Entries);
             Assert.Equal(AbuseAccounting.Empty, store.Current);
         }
@@ -914,7 +979,7 @@ public sealed class ConfigStoreTests : IDisposable
 
         Assert.Equal(ConfigOpenState.Opened, ConfigStore.StartFresh(_paths, _keys, _time, failed, out ConfigStore? store));
         using (store)
-            Assert.Equal(new UserSettings(), store!.Snapshot.Settings);
+            Assert.Equal(new UserSettings { WriteFortigateFeeds = true }, store!.Snapshot.Settings);
 
         Assert.Equal(key, _secrets.Secret);
         Assert.False(File.Exists(_temp.File("config.unreadable.db")));
@@ -1227,13 +1292,14 @@ public sealed class ConfigStoreTests : IDisposable
     [Fact]
     public void A_first_launch_with_no_evidence_of_an_earlier_one_opens_with_the_defaults()
     {
-        // Neither is evidence: a copy kept by a Start fresh, or exceptions set aside
+        // Neither shows that config.db was made: a copy kept by a Start fresh, or exceptions set aside. Both show an
+        // earlier install, so FortiGate feeds stay on.
         File.WriteAllText(_temp.File("config.unreadable.db"), "an older copy");
         File.WriteAllText(_temp.File("exceptions.unreadable.json"), "{ not json");
 
         using (ConfigStore store = Open())
         {
-            Assert.Equal(new UserSettings(), store.Snapshot.Settings);
+            Assert.Equal(new UserSettings { WriteFortigateFeeds = true }, store.Snapshot.Settings);
             Assert.Empty(store.Snapshot.Exceptions.Entries);
         }
     }
@@ -1502,6 +1568,288 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.False(store.IsAvailable);
     }
 
+    // ----- The ModSecurity rule ids -----
+
+    private const string RuleIdsKey = "modsecurity_rule_ids";
+
+    [Fact]
+    public void A_new_file_has_no_rule_id_key_and_an_empty_map()
+    {
+        using (ConfigStore store = Open())
+            Assert.Same(ModSecurityRuleIds.Empty, store.Snapshot.RuleIds);
+
+        Assert.False(Metadata(ConfigFile).ContainsKey(RuleIdsKey));
+        using (ConfigStore store = Open())
+            Assert.Same(ModSecurityRuleIds.Empty, store.Snapshot.RuleIds);
+    }
+
+    [Fact]
+    public void Assigned_rule_ids_are_saved_and_a_reopen_keeps_them_and_continues_upward()
+    {
+        using (ConfigStore store = Open())
+        {
+            ModSecurityRuleIdsResult result = store.AssignRuleIds(["AS1_ipv4.txt", "AS1_ipv6.txt"], 10_000);
+            Assert.Equal(ModSecurityRuleIdsFailure.None, result.Failure);
+            Assert.Equal([10_000, 10_001], result.RuleIds);
+            Assert.Equal(2, store.Snapshot.RuleIds.Count);
+        }
+
+        Assert.Equal(["text"], Strings(ConfigFile, $"SELECT typeof(value) FROM metadata WHERE key = '{RuleIdsKey}';"));
+        using (ConfigSeal seal = TestSeal())
+        {
+            Assert.True(seal.TryOpen(ConfigSection.ModSecurityRuleIds, ConfigStore.SchemaVersion,
+                                     Convert.FromBase64String(Metadata(ConfigFile)[RuleIdsKey]), out byte[]? json));
+            Assert.Equal("""{"version":1,"ruleIds":[{"file":"AS1_ipv4.txt","id":10000},{"file":"AS1_ipv6.txt","id":10001}]}""",
+                         Encoding.UTF8.GetString(json));
+        }
+
+        using (ConfigStore store = Open())
+        {
+            Assert.Equal(2, store.Snapshot.RuleIds.Count);
+            ModSecurityRuleIdsResult result = store.AssignRuleIds(["AS1_ipv6.txt", "AS2_ipv4.txt", "AS1_ipv4.txt"], 500);
+            Assert.Equal([10_001, 10_002, 10_000], result.RuleIds);
+        }
+
+        using (ConfigStore store = Open())
+            Assert.Equal([10_002], store.AssignRuleIds(["AS2_ipv4.txt"], 1).RuleIds);
+    }
+
+    [Fact]
+    public void A_call_with_no_new_name_writes_nothing()
+    {
+        using (ConfigStore store = Open())
+            Assert.Equal(ModSecurityRuleIdsFailure.None, store.AssignRuleIds(["a.txt", "b.txt"], 10).Failure);
+        string value = Metadata(ConfigFile)[RuleIdsKey];
+
+        using (ConfigStore store = Open())
+        {
+            ModSecurityRuleIds map = store.Snapshot.RuleIds;
+            // Any write would fail here
+            store.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+
+            Assert.Equal([11, 10, 11], store.AssignRuleIds(["b.txt", "a.txt", "b.txt"], 500).RuleIds);
+            ModSecurityRuleIdsResult empty = store.AssignRuleIds([], 500);
+            Assert.Equal(ModSecurityRuleIdsFailure.None, empty.Failure);
+            Assert.Empty(empty.RuleIds);
+            Assert.Same(map, store.Snapshot.RuleIds);
+        }
+
+        Assert.Equal(value, Metadata(ConfigFile)[RuleIdsKey]);
+    }
+
+    [Fact]
+    public void A_failed_rule_id_write_is_a_storage_error_and_keeps_the_snapshot_and_the_file()
+    {
+        using (ConfigStore store = Open())
+            Assert.Equal([10], store.AssignRuleIds(["a.txt"], 10).RuleIds);
+        string value = Metadata(ConfigFile)[RuleIdsKey];
+
+        using (ConfigStore store = Open())
+        {
+            ConfigSnapshot snapshot = store.Snapshot;
+            store.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+
+            ModSecurityRuleIdsResult result = store.AssignRuleIds(["a.txt", "b.txt"], 10);
+
+            Assert.Equal(ModSecurityRuleIdsFailure.StorageError, result.Failure);
+            Assert.Empty(result.RuleIds);
+            Assert.Same(snapshot, store.Snapshot);
+        }
+
+        Assert.Equal(value, Metadata(ConfigFile)[RuleIdsKey]);
+        using (ConfigStore store = Open())
+        {
+            Assert.Equal(1, store.Snapshot.RuleIds.Count);
+            Assert.False(store.Snapshot.RuleIds.TryGet("b.txt", out _));
+        }
+    }
+
+    [Fact]
+    public void A_closed_store_gives_a_storage_error_after_the_argument_checks()
+    {
+        ConfigStore store = Open();
+        ConfigSnapshot snapshot = store.Snapshot;
+        store.Dispose();
+
+        ModSecurityRuleIdsResult result = store.AssignRuleIds(["a.txt"], 10);
+
+        Assert.Equal(ModSecurityRuleIdsFailure.StorageError, result.Failure);
+        Assert.Empty(result.RuleIds);
+        Assert.Same(snapshot, store.Snapshot);
+        Assert.Throws<ArgumentNullException>(() => store.AssignRuleIds(null!, 10));
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.AssignRuleIds(["a.txt"], 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.AssignRuleIds(["a.txt"], ModSecurityLimits.RuleIdMax + 1));
+    }
+
+    [Fact]
+    public void Section_saves_leave_the_rule_ids_and_a_rule_id_save_leaves_the_rows()
+    {
+        using (ConfigStore store = Open())
+            Assert.Equal([10], store.AssignRuleIds(["a.txt"], 10).RuleIds);
+        string value = Metadata(ConfigFile)[RuleIdsKey];
+
+        using (ConfigStore store = Open())
+        {
+            Assert.True(store.SaveSettings(new UserSettings { IPv6Enabled = false }));
+            Assert.True(store.SaveExceptions(ExceptionList.Create([ExceptionEntryTests.Entry("192.0.2.0/24", "Office")])));
+            Assert.True(store.TryRecordAnswer(new AbuseRateLimit(5, 4, null), Now, countDownload: true));
+        }
+        Assert.Equal(value, Metadata(ConfigFile)[RuleIdsKey]);
+        Dictionary<string, byte[]> rows = Blobs(ConfigFile);
+
+        using (ConfigStore store = Open())
+            Assert.Equal([11], store.AssignRuleIds(["b.txt"], 10).RuleIds);
+
+        Assert.NotEqual(value, Metadata(ConfigFile)[RuleIdsKey]);
+        Dictionary<string, byte[]> after = Blobs(ConfigFile);
+        Assert.Equal(rows.Keys.Order(), after.Keys.Order());
+        foreach (string name in rows.Keys)
+            Assert.Equal(rows[name], after[name]);
+    }
+
+    [Fact]
+    public void The_snapshot_carries_the_rule_ids_across_a_section_save()
+    {
+        using ConfigStore store = Open();
+        Assert.Equal([10], store.AssignRuleIds(["a.txt"], 10).RuleIds);
+        Assert.True(store.SaveSettings(new UserSettings { AbuseIpDbKeepDays = 7 }));
+        store.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+
+        ModSecurityRuleIdsResult result = store.AssignRuleIds(["a.txt"], 500);
+
+        Assert.Equal(ModSecurityRuleIdsFailure.None, result.Failure);
+        Assert.Equal([10], result.RuleIds);
+        Assert.Equal(7, store.Snapshot.Settings.AbuseIpDbKeepDays);
+    }
+
+    [Theory]
+    [InlineData("another file")]
+    [InlineData("a section's blob")]
+    [InlineData("not base64")]
+    [InlineData("one byte changed")]
+    [InlineData("a higher version")]
+    [InlineData("an unknown property")]
+    [InlineData("empty")]
+    [InlineData("shorter than a seal's header")]
+    public void Rule_ids_this_build_cant_use_leave_the_launch_going_and_are_never_rewritten(string change)
+    {
+        var settings = new UserSettings { AbuseIpDbKeepDays = 45, IPv6Enabled = false };
+        ExceptionList exceptions = ExceptionList.Create([ExceptionEntryTests.Entry("192.0.2.0/24", "Office")]);
+        using (ConfigStore store = Open())
+        {
+            Assert.True(store.SaveSettings(settings));
+            Assert.True(store.SaveExceptions(exceptions));
+            Assert.Equal([10], store.AssignRuleIds(["a.txt"], 10).RuleIds);
+        }
+        SetMetadataValue(ConfigFile, RuleIdsKey, UnusableRuleIds(change));
+        string value = Metadata(ConfigFile)[RuleIdsKey];
+
+        using (ConfigStore store = Open())
+        {
+            Assert.Equal(settings, store.Snapshot.Settings);
+            Assert.Equal(exceptions.Entries, store.Snapshot.Exceptions.Entries);
+            Assert.Same(ModSecurityRuleIds.Unavailable, store.Snapshot.RuleIds);
+
+            ModSecurityRuleIdsResult result = store.AssignRuleIds(["a.txt", "b.txt"], 10);
+            Assert.Equal(ModSecurityRuleIdsFailure.Unavailable, result.Failure);
+            Assert.Empty(result.RuleIds);
+            Assert.True(store.SaveSettings(settings with { AbuseIpDbKeepDays = 46 }));
+        }
+        Assert.Equal(value, Metadata(ConfigFile)[RuleIdsKey]);
+
+        using (ConfigStore store = Open())
+        {
+            Assert.Equal(46, store.Snapshot.Settings.AbuseIpDbKeepDays);
+            Assert.Same(ModSecurityRuleIds.Unavailable, store.Snapshot.RuleIds);
+        }
+        Assert.Equal(value, Metadata(ConfigFile)[RuleIdsKey]);
+    }
+
+    [Theory]
+    [InlineData("KeyMismatch")]
+    [InlineData("Newer")]
+    public void Start_fresh_forgets_the_rule_ids(string failed)
+    {
+        ConfigOpenState state = Enum.Parse<ConfigOpenState>(failed);
+        using (ConfigStore first = Open())
+            Assert.Equal([10], first.AssignRuleIds(["a.txt"], 10).RuleIds);
+        if (state == ConfigOpenState.Newer)
+        {
+            Execute(ConfigFile, "UPDATE metadata SET value = '2' WHERE key = 'schema_version';");
+        }
+        else
+        {
+            byte[] blob = Blobs(ConfigFile)["settings"];
+            blob[^1] ^= 0x01;
+            SetBlob(ConfigFile, "settings", blob);
+        }
+        Assert.Equal(state, TryOpenFails());
+
+        Assert.Equal(ConfigOpenState.Opened, ConfigStore.StartFresh(_paths, _keys, _time, state, out ConfigStore? store));
+        using (store)
+        {
+            Assert.Same(ModSecurityRuleIds.Empty, store!.Snapshot.RuleIds);
+            Assert.Equal([10_000], store.AssignRuleIds(["b.txt"], 10_000).RuleIds);
+        }
+        Assert.True(Metadata(ConfigFile).ContainsKey(RuleIdsKey));
+        Assert.True(Metadata(_temp.File("config.unreadable.db")).ContainsKey(RuleIdsKey));
+    }
+
+    [Fact]
+    public void A_file_with_rule_ids_is_still_current_to_this_builds_checks()
+    {
+        using (ConfigStore store = Open())
+            Assert.Equal([10], store.AssignRuleIds(["a.txt"], 10).RuleIds);
+        Assert.Equal("1", Metadata(ConfigFile)["schema_version"]);
+        Assert.Equal(["accounting", "exceptions", "settings"], Strings(ConfigFile, "SELECT name FROM sections ORDER BY name;"));
+
+        using (ConfigStore store = Open())
+            Assert.Equal(1, store.Snapshot.RuleIds.Count);
+    }
+
+    private ConfigSeal TestSeal() => new([.. _secrets.Secret!], Metadata(ConfigFile)["file_id"]);
+
+    private string UnusableRuleIds(string change)
+    {
+        string value = Metadata(ConfigFile)[RuleIdsKey];
+        switch (change)
+        {
+            case "another file":
+                using (var other = new ConfigSeal([.. _secrets.Secret!], "fedcba9876543210fedcba9876543210"))
+                    return Convert.ToBase64String(other.Seal(ConfigSection.ModSecurityRuleIds, ConfigStore.SchemaVersion,
+                                                             """{"version":1,"ruleIds":[]}"""u8));
+            case "a section's blob":
+                return Convert.ToBase64String(Blobs(ConfigFile)["settings"]);
+            case "empty":
+                return "";
+            case "shorter than a seal's header":
+                return Convert.ToBase64String(Convert.FromBase64String(value)[..(ConfigSeal.HeaderBytes - 1)]);
+            case "not base64":
+                return "not base64!";
+            case "one byte changed":
+                byte[] blob = Convert.FromBase64String(value);
+                blob[^1] ^= 0x01;
+                return Convert.ToBase64String(blob);
+            default:
+                string json = change == "a higher version"
+                    ? """{"version":2,"ruleIds":[{"file":"a.txt","id":10}]}"""
+                    : """{"version":1,"ruleIds":[{"file":"a.txt","id":10}],"note":""}""";
+                using (ConfigSeal seal = TestSeal())
+                    return Convert.ToBase64String(seal.Seal(ConfigSection.ModSecurityRuleIds, ConfigStore.SchemaVersion,
+                                                            Encoding.UTF8.GetBytes(json)));
+        }
+    }
+
+    private static void SetMetadataValue(string path, string key, string value)
+    {
+        using SqliteConnection conn = OpenRaw(path);
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE metadata SET value = $value WHERE key = $key;";
+        cmd.Parameters.Add("$value", SqliteType.Text).Value = value;
+        cmd.Parameters.Add("$key", SqliteType.Text).Value = key;
+        Assert.Equal(1, cmd.ExecuteNonQuery());
+    }
+
     // ----- Helpers -----
 
     /// <summary>A config.db that is absent, zero bytes, or a SQLite file with no object in it.</summary>
@@ -1563,9 +1911,8 @@ public sealed class ConfigStoreTests : IDisposable
         return state;
     }
 
-    // macOS: the folder's access list refuses to delete the files already in it, while a file made in it inherits leave
-    // to be deleted, so Start fresh still moves its copy into place. A flag or an access list on the file itself can't
-    // do that: File.Copy clones the file with it, and the copy's move fails first.
+    // macOS: files already in the folder can't be deleted, while a new file inherits leave to be. An access list or
+    // flag on the file itself won't do: File.Copy clones it with the file, and the copy's move fails first.
     private void DenyDeletingTheFilesThere()
     {
         string user = Environment.UserName;

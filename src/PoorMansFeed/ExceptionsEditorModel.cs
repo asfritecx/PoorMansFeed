@@ -7,9 +7,8 @@ using PoorMansFeed.Core.FeedExceptions;
 namespace PoorMansFeed;
 
 /// <summary>
-/// The exceptions being edited: the entries, the add boxes and the one feedback line. Nothing is saved here; the
-/// owner saves ToEntries(). <see cref="Load"/> takes a saved list again, and <see cref="HasChanges"/> says whether the
-/// entries differ from it.
+/// Nothing is saved here: the owner saves ToEntries(), and <see cref="HasChanges"/> compares the entries with the
+/// list <see cref="Load"/> last took.
 /// </summary>
 public sealed class ExceptionsEditorModel : ObservableObject
 {

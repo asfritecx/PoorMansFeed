@@ -80,11 +80,49 @@ Download the file for your platform from the [latest release](https://github.com
 
 Each release also has `SHA256SUMS.txt`, the SHA-256 of each file, so you can check a download before you run it. On macOS, `shasum -a 256 -c SHA256SUMS.txt --ignore-missing` in the download folder checks the files you have. On Windows, compare the output of `Get-FileHash <file>` in PowerShell with the line for that file.
 
-The macOS app is ad-hoc signed, not notarised, so Gatekeeper may warn or block its first launch; allow it in System Settings under Privacy & Security. The Windows exe is not signed, so SmartScreen may warn too.
+Neither build is code signed (see [Code signing policy](#code-signing-policy)), so Windows and macOS warn, or block, the first time you open each new version. [Opening the app the first time](#opening-the-app-the-first-time) shows how to get past them.
 
 Run the app as your normal user account. It keeps everything in your user profile and will not start elevated (as administrator on Windows, or as root on macOS). Only one copy runs at a time.
 
 There is no update check in the app yet. To update, download the new release and replace the old file. Your dataset, token, settings and exceptions are kept in your user profile, so they carry over. When you update from 1.0.0, the first launch moves your settings from `settings.json` into the app's settings file, `config.db`, and renames the old file `settings.json.migrated`. On macOS, the first time a new version starts, macOS may ask whether PoorMansFeed may use the key to its settings file in your keychain; choose **Always Allow**. If you choose Deny, the app doesn't start and says so; open it again and allow access. In the same way, the first time a new version reads the saved token, macOS asks whether PoorMansFeed may use its item in your keychain; choose **Always Allow**. The app is ad-hoc signed, so macOS treats each new version as a different app. If you choose Deny there, the update check says a token is needed; choose **Reset token** in **Settings** to enter it again. The AbuseIPDB key is a second keychain item, so macOS may ask again the first time a new version checks an address or downloads the blacklist.
+
+### Opening the app the first time
+
+Check the download against `SHA256SUMS.txt` first, then:
+
+**Windows**
+
+1. Your browser may say the file isn't commonly downloaded. Keep it: in Edge, choose **…** beside the download, then **Keep**, **Show more** and **Keep anyway**.
+2. Open the exe. If SmartScreen says **Windows protected your PC**, choose **More info**, check that the app it names is `PoorMansFeed-{version}-win-x64.exe` from an unknown publisher, then choose **Run anyway**. Or, before you open it, right-click the file, choose **Properties**, tick **Unblock** at the foot of the **General** tab and choose **OK**, and Windows opens it without asking.
+3. If Smart App Control is on (in Windows Security, under **App & browser control**), Windows blocks every unsigned app and offers no **Run anyway**. Unblocking the file as above may let it through. If it doesn't, PoorMansFeed can't run on that PC while Smart App Control is on; turning it off lowers the protection for every app, so that is your decision.
+
+Each new version is a new file, so Windows asks again.
+
+**macOS**
+
+1. Unzip the download, move `PoorMansFeed.app` to Applications and open it. macOS says it couldn't verify that PoorMansFeed is free of malware. Choose **Done**, not **Move to Trash**.
+2. Open **System Settings**, choose **Privacy & Security** and scroll down to **Security**. Beside the line saying PoorMansFeed was blocked, choose **Open Anyway** (or **Open**), then confirm with **Open Anyway** and your login password. The button is there for about an hour after you tried to open the app.
+3. From macOS 15, right-clicking the app and choosing **Open** no longer gets past this.
+
+Or, in Terminal, once the zip matches its line in `SHA256SUMS.txt`, run `xattr -dr com.apple.quarantine /Applications/PoorMansFeed.app`. It removes the mark macOS puts on downloaded files, and the app then opens without asking.
+
+Each new version asks again, and then asks about its keychain items, as described above.
+
+## Code signing policy
+
+The release builds aren't code signed:
+
+- The Windows exe has no Authenticode signature, so Windows shows its publisher as unknown.
+- The macOS app is ad-hoc signed, which lets it run on Apple silicon, but it isn't signed with an Apple Developer ID or notarised by Apple. That is also why macOS asks about the keychain again after each update.
+
+I'm the poor man in PoorMansFeed. I build it in my own time, and I don't have the money to pay for code signing: Apple charges US$99 a year for the membership that signs and notarises a Mac app, and a Windows code signing certificate costs money every year too.
+
+So that you can still check what you download:
+
+- Each release lists the SHA-256 of every file in `SHA256SUMS.txt` (see [Installing](#installing)).
+- Each release's source is the commit its tag points to in this repository, so you can read it and build it yourself (see [Building from source](#building-from-source)).
+
+The SignPath Foundation signs open-source Windows apps for free, for projects with some track record. I'll apply once PoorMansFeed has one, and this section will say so if the Windows builds become signed.
 
 ## First run
 

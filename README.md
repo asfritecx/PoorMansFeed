@@ -71,7 +71,7 @@ All of the data is free. IPinfo needs an account, for a free API token, and Abus
 - An IPinfo API token ([free signup](https://ipinfo.io/signup)).
 - For **Check AbuseIPDB** and the **AbuseIPDB Blacklist** page only: an API key from a free [AbuseIPDB](https://www.abuseipdb.com) account.
 - Internet access to `ipinfo.io` for the dataset and, for the cloud pages, `www.gstatic.com` (Google Cloud), `www.microsoft.com` and `download.microsoft.com` (Azure) and `ip-ranges.amazonaws.com` (AWS), and for **Check AbuseIPDB** and **Download blacklist**, `api.abuseipdb.com`.
-- To build from source: the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), 10.0.400 or later (`global.json`).
+- To build from source: the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), 10.0.400 or a later 10.0.4xx patch (see [BUILDING.md](BUILDING.md)).
 
 ## Installing
 
@@ -122,7 +122,7 @@ I'm the poor man in PoorMansFeed. I build it in my own time, and I don't have th
 So that you can still check what you download:
 
 - Each release lists the SHA-256 of every file in `SHA256SUMS.txt` (see [Installing](#installing)).
-- Each release's source is the commit its tag points to in this repository, so you can read it and build it yourself (see [Building from source](https://github.com/asfritecx/PoorMansFeed/wiki/Building-from-source)).
+- Each release's source is the commit its tag points to in this repository, so you can read it and build it yourself (see [BUILDING.md](BUILDING.md)).
 
 The SignPath Foundation signs open-source Windows apps for free, for projects with some track record. I'll apply once PoorMansFeed has one, and this section will say so if the Windows builds become signed.
 
@@ -145,7 +145,8 @@ How to use the app is in the [wiki](https://github.com/asfritecx/PoorMansFeed/wi
 - [Using a feed on a FortiGate](https://github.com/asfritecx/PoorMansFeed/wiki/Using-a-feed-on-a-FortiGate): serving a feed and adding it as an external connector
 - [Using a list with ModSecurity](https://github.com/asfritecx/PoorMansFeed/wiki/Using-a-list-with-ModSecurity): the lists, the rules that load them, and what to know on nginx and Apache
 - [Settings and data](https://github.com/asfritecx/PoorMansFeed/wiki/Settings-and-data): every setting, where the app keeps its data, and what to do if the settings file can't be opened
-- [Building from source](https://github.com/asfritecx/PoorMansFeed/wiki/Building-from-source): the build and test commands, and the project structure
+
+How to build the app from its source is in [BUILDING.md](BUILDING.md), which goes out with each release's source.
 
 ## Roadmap
 
@@ -200,3 +201,5 @@ The IP address data isn't part of this project. It comes from IPinfo under CC BY
 IP address data powered by [IPinfo](https://ipinfo.io), licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The app shows this attribution in its window, and every exported file whose entries come from IPinfo carries it: the ASN report and every ASN and cloud feed. The AbuseIPDB feed holds no IPinfo data and carries none.
 
 The app's fonts are [Geist and Geist Mono](https://vercel.com/font) by Vercel, under the SIL Open Font License 1.1 (`src/PoorMansFeed/GraphiteUi/Fonts/OFL.txt`).
+
+![PoorMansFeed, built by a poor man for anyone who guards a network on a budget: from IPinfo Lite, Google Cloud, Azure, AWS and AbuseIPDB to FortiGate feeds and ModSecurity lists](https://raw.githubusercontent.com/wiki/asfritecx/PoorMansFeed/images/footer.png)

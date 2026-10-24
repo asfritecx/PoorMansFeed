@@ -38,7 +38,8 @@
         <RadioButton x:Name="ModSecurityCloseButton" Content="{x:Static vm:AppText.ModSecurityClose}"
                      IsChecked="{Binding Settings.IsClose}" IsEnabled="{Binding Settings.CanEditModSecurity}" />
       </StackPanel>
-      <Grid ColumnDefinitions="*,120" ColumnSpacing="12">
+      <!-- Wider than the other number boxes: a five-digit id needs 44 px of text, and at 120 the box scrolled it -->
+      <Grid ColumnDefinitions="*,144" ColumnSpacing="12">
         <TextBlock Text="{x:Static vm:AppText.ModSecurityFirstRuleIdLabel}" VerticalAlignment="Center" TextWrapping="Wrap" />
         <NumericUpDown x:Name="ModSecurityFirstRuleIdBox" Grid.Column="1" Minimum="1" Maximum="99999" Increment="1"
                        FormatString="0" Value="{Binding Settings.ModSecurityFirstRuleId}"

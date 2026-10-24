@@ -199,6 +199,32 @@ public sealed class FeedTypesSectionTests
         }
     }
 
+    // A box narrower than its text scrolls it, so 10000 showed as 1000
+    [AvaloniaFact]
+    public async Task TheFirstRuleIdBoxShowsEveryIdWhole()
+    {
+        Shown shown = await ShowAsync(WithDataset(modSecurity: true));
+        try
+        {
+            NumericUpDown firstId = shown.InSection<NumericUpDown>("ModSecurityFirstRuleIdBox");
+            ScrollViewer scroll = firstId.GetVisualDescendants().OfType<TextBox>().First()
+                .GetVisualDescendants().OfType<ScrollViewer>().First();
+            decimal[] ids = [ModSecurityLimits.DefaultFirstRuleId, .. Enumerable.Range(1, 9).Select(digit => digit * 11_111m)];
+            foreach (decimal id in ids)
+            {
+                firstId.Value = id;
+                Settle(shown.Window);
+                Assert.True(scroll.Extent.Width <= scroll.Viewport.Width + 0.5,
+                    $"{id}: {scroll.Extent.Width} px of text in a {scroll.Viewport.Width} px box.");
+            }
+        }
+        finally
+        {
+            shown.Page.RevertSettingsCommand.Execute(null);
+            shown.Window.Close();
+        }
+    }
+
     // ----- the location note -----
 
     [AvaloniaFact]

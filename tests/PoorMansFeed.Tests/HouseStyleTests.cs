@@ -101,7 +101,8 @@ public sealed partial class HouseStyleTests
 
     // The files at the top of the solution that are published with the source
     private static readonly string[] PublishedTopFiles =
-        ["README.md", "Directory.Build.props", "global.json", "nuget.config", "PoorMansFeed.slnx", "build/publish.sh", "build/publish.ps1"];
+        ["README.md", "BUILDING.md", "Directory.Build.props", "global.json", "nuget.config", "PoorMansFeed.slnx", "build/publish.sh",
+            "build/publish.ps1"];
 
     [Fact]
     public void SourceStatesTheRuleNotAnOrderNumber()

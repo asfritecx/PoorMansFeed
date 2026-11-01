@@ -9,7 +9,11 @@ namespace PoorMansFeed.Core.AbuseIpDb;
 /// One family of the rolling feed, as it will be written: the addresses in byte order, how many an exception removed,
 /// and how many were left out over the cap.
 /// </summary>
-internal sealed record AbuseFeedFamily(bool IsIpv6, IReadOnlyList<PublicAddress> Addresses, int ExceptionRemovals, int LeftOut);
+internal sealed record AbuseFeedFamily(bool IsIpv6, IReadOnlyList<PublicAddress> Addresses, int ExceptionRemovals, int LeftOut)
+{
+    /// <summary>The addresses the cap left out, for the change record; never written to a file.</summary>
+    public IReadOnlyList<PublicAddress> PastCap { get; init; } = [];
+}
 
 /// <summary>
 /// A report's selection, with no exception applied; its own type so no <see cref="AbuseFeedBody"/>, all a file write
@@ -23,13 +27,17 @@ internal sealed record AbuseReportFamily(bool IsIpv6, IReadOnlyList<PublicAddres
 /// </summary>
 internal sealed class AbuseFeedBody
 {
-    private AbuseFeedBody(AbuseFeedFamily family, string text)
+    private AbuseFeedBody(AbuseFeedFamily family, IReadOnlyList<string> lines, string text)
     {
         Family = family;
+        Lines = lines;
         Text = text;
     }
 
     public AbuseFeedFamily Family { get; }
+
+    /// <summary>The entry lines <see cref="Text"/> ends with, as the same strings.</summary>
+    public IReadOnlyList<string> Lines { get; }
 
     public string Text { get; }
 
@@ -37,12 +45,13 @@ internal sealed class AbuseFeedBody
     {
         ArgumentNullException.ThrowIfNull(family);
         ArgumentNullException.ThrowIfNull(header);
-        return new AbuseFeedBody(family, AbuseIpDbFeedWriter.BodyAfterFirstLine(family, header));
+        string[] lines = family.Addresses.Select(address => address.Text).ToArray();
+        return new AbuseFeedBody(family, lines, AbuseIpDbFeedWriter.BodyAfterFirstLine(family, header, lines));
     }
 }
 
 /// <summary>
-/// Null keep days mean a file emptied by hand (Empty feed), whose header says so in their place. The list's times are
+/// Null keep days mean a file retired by hand (Retire feed), whose header says so in their place. The list's times are
 /// null when the list doesn't know them.
 /// </summary>
 internal sealed record AbuseFeedHeader(int? KeepDays, DateTimeOffset WrittenAt, DateTimeOffset? LastDownloadAt,
@@ -66,9 +75,9 @@ internal static class AbuseIpDbFeedWriter
 
     /// <summary>
     /// Over <paramref name="cap"/>, keeps the most recently listed (<see cref="ByRecency"/>), the same in any input
-    /// order. Throws when the exceptions are unreadable, so callers check <see cref="ExceptionList.IsReadable"/> first.
+    /// order; the exceptions are readable by their type, so a covered address is always removed.
     /// </summary>
-    public static AbuseFeedFamily Select(IEnumerable<AbuseListEntry> entries, ExceptionList exceptions, bool ipv6,
+    public static AbuseFeedFamily Select(IEnumerable<AbuseListEntry> entries, ReadableExceptions exceptions, bool ipv6,
                                          int cap = AbuseIpDbLimits.MaxFeedEntries)
     {
         ArgumentNullException.ThrowIfNull(entries);
@@ -78,8 +87,11 @@ internal static class AbuseIpDbFeedWriter
         List<Candidate> kept = OfFamily(entries, ipv6);
         // Before the cap, so a covered address takes no place under it
         int removed = kept.RemoveAll(candidate => exceptions.Covers(candidate.Bytes));
-        int leftOut = Rank(kept, cap);
-        return new AbuseFeedFamily(ipv6, kept.Select(candidate => candidate.Entry.Address).ToList(), removed, leftOut);
+        List<Candidate> pastCap = Rank(kept, cap);
+        return new AbuseFeedFamily(ipv6, kept.Select(candidate => candidate.Entry.Address).ToList(), removed, pastCap.Count)
+        {
+            PastCap = pastCap.Select(candidate => candidate.Entry.Address).ToList(),
+        };
     }
 
     /// <summary>
@@ -93,7 +105,7 @@ internal static class AbuseIpDbFeedWriter
         ArgumentOutOfRangeException.ThrowIfNegative(cap);
 
         List<Candidate> kept = OfFamily(entries, ipv6);
-        int leftOut = Rank(kept, cap);
+        int leftOut = Rank(kept, cap).Count;
         return new AbuseReportFamily(ipv6, kept.Select(candidate => candidate.Entry.Address).ToList(), leftOut);
     }
 
@@ -114,16 +126,16 @@ internal static class AbuseIpDbFeedWriter
 
     /// <summary>
     /// The ranking both selections share: over <paramref name="cap"/>, keeps the most recently listed
-    /// (<see cref="ByRecency"/>), then sorts what is kept by bytes. Returns how many were left out.
+    /// (<see cref="ByRecency"/>), then sorts what is kept by bytes. Returns the ones left out.
     /// </summary>
-    private static int Rank(List<Candidate> kept, int cap)
+    private static List<Candidate> Rank(List<Candidate> kept, int cap)
     {
-        int leftOut = 0;
+        List<Candidate> leftOut = [];
         if (kept.Count > cap)
         {
             kept.Sort(ByRecency);
-            leftOut = kept.Count - cap;
-            kept.RemoveRange(cap, leftOut);
+            leftOut = kept.GetRange(cap, kept.Count - cap);
+            kept.RemoveRange(cap, leftOut.Count);
         }
 
         kept.Sort(ByBytes);
@@ -140,10 +152,10 @@ internal static class AbuseIpDbFeedWriter
     }
 
     /// <summary>
-    /// Writes the type's first line, then <paramref name="body"/>, making the type's folder first. The .tmp is made
-    /// new, so a link there is never written through; IO failures escape with the .tmp deleted.
+    /// Writes the type's first line, then <paramref name="body"/>, making the type's folder first; gives the bytes'
+    /// SHA-256. The .tmp is made new, so a link there is never written through.
     /// </summary>
-    public static void WriteFile(string path, FeedType type, AbuseFeedBody body)
+    public static string WriteFile(string path, FeedType type, AbuseFeedBody body)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(body);
@@ -152,8 +164,10 @@ internal static class AbuseIpDbFeedWriter
         string tmp = path + ".tmp";
         try
         {
-            TemporaryFile.WriteNew(tmp, FeedTypes.FirstLine(type) + FeedText.LineEnd + body.Text);
+            string text = FeedTypes.FirstLine(type) + FeedText.LineEnd + body.Text;
+            TemporaryFile.WriteNew(tmp, text);
             File.Move(tmp, path, overwrite: true);
+            return SavedFeedWriteProof.HashOf(text);
         }
         catch
         {
@@ -162,11 +176,15 @@ internal static class AbuseIpDbFeedWriter
         }
     }
 
-    /// <summary>A family's file below its first line, the one line that differs between the types' copies.</summary>
-    public static string BodyAfterFirstLine(AbuseFeedFamily family, AbuseFeedHeader header)
+    /// <summary>
+    /// A family's file below its first line, the one line that differs between the types' copies. Its entries are
+    /// <paramref name="lines"/>, the family's addresses as <see cref="AbuseFeedBody.Of"/> renders them.
+    /// </summary>
+    public static string BodyAfterFirstLine(AbuseFeedFamily family, AbuseFeedHeader header, IReadOnlyList<string> lines)
     {
         ArgumentNullException.ThrowIfNull(family);
         ArgumentNullException.ThrowIfNull(header);
+        ArgumentNullException.ThrowIfNull(lines);
 
         string nl = FeedText.LineEnd;
         var text = new StringBuilder();
@@ -179,7 +197,7 @@ internal static class AbuseIpDbFeedWriter
         }
         else
         {
-            text.Append("# Emptied by hand: no address is listed until the feed is written again").Append(nl);
+            text.Append(RetiredFeedWriter.RetiredLine).Append(nl);
         }
         text.Append("# Address Family: ").Append(family.IsIpv6 ? "IPv6" : "IPv4").Append(nl);
         text.Append("# Generated: ").Append(Utc(header.WrittenAt)).Append(nl);
@@ -203,8 +221,8 @@ internal static class AbuseIpDbFeedWriter
                 .Append(" over FortiOS's ").Append(Number(AbuseIpDbLimits.MaxFeedEntries)).Append(" limit").Append(nl);
         }
 
-        foreach (PublicAddress address in family.Addresses)
-            text.Append(address.Text).Append(nl);
+        foreach (string line in lines)
+            text.Append(line).Append(nl);
         return text.ToString();
     }
 

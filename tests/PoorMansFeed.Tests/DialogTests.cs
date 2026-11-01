@@ -282,7 +282,7 @@ public sealed class DialogTests
     // ----- large ranges dialog -----
 
     [AvaloniaFact]
-    public void EveryLargeRangeStartsUnticked()
+    public void RangesWhoseChoicesAreUntickedStartUnticked()
     {
         Window owner = ShownOwner();
         LargeRangePrompt prompt = SamplePrompt();
@@ -294,6 +294,27 @@ public sealed class DialogTests
         Assert.All(dialog.GetLogicalDescendants().OfType<CheckBox>(), box => Assert.NotEqual(true, box.IsChecked));
 
         PressEscape(dialog);
+        owner.Close();
+    }
+
+    [AvaloniaFact]
+    public void ARangeThatStartsTickedIsShownCountedAndExportedWithNoClick()
+    {
+        Window owner = ShownOwner();
+        LargeRangePrompt prompt = SamplePrompt();
+        prompt.Choices[1].IsIncluded = true;
+        var dialog = new LargeRangesDialog(prompt);
+        Task<IReadOnlyList<string>?> result = dialog.ShowDialog<IReadOnlyList<string>?>(owner);
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+
+        Assert.Equal(true, CheckBoxForAccessibleName(dialog, prompt.Choices[1].AccessibleText).IsChecked);
+        Assert.NotEqual(true, CheckBoxForAccessibleName(dialog, prompt.Choices[0].AccessibleText).IsChecked);
+        Assert.Equal("1 of 3 ticked", dialog.FindControl<TextBlock>("CountText")!.Text);
+
+        Click(dialog.FindControl<Button>("ExportButton")!);
+
+        Assert.True(result.IsCompleted);
+        Assert.Equal(new[] { "172.16.0.0/12" }, result.Result!);
         owner.Close();
     }
 
@@ -605,7 +626,7 @@ public sealed class DialogTests
 
     // A right-click in the gap between a row's address and score columns, where no text is: the row's own
     // background is all that can take it there
-    private static (ContextMenu Menu, MenuItem Ipinfo, MenuItem AbuseIpDb) RightClickRowGap(NewAddressesDialog dialog, int index)
+    private static (ContextMenu Menu, MenuItem Ipinfo, MenuItem AbuseIpDb, MenuItem Copy) RightClickRowGap(NewAddressesDialog dialog, int index)
     {
         ItemsControl list = dialog.FindControl<ItemsControl>("AddressList")!;
         Border row = list.GetVisualDescendants().OfType<Border>().Where(border => border.Classes.Contains("row"))
@@ -624,8 +645,9 @@ public sealed class DialogTests
         ContextMenu menu = list.ContextMenu!;
         Assert.True(menu.IsOpen);
         List<MenuItem> items = menu.Items.OfType<MenuItem>().ToList();
-        Assert.Equal([AppText.OpenInIpinfo, AppText.OpenInAbuseIpDb], items.Select(item => item.Header as string));
-        return (menu, items[0], items[1]);
+        Assert.Equal([AppText.OpenInIpinfo, AppText.OpenInAbuseIpDb, AppText.CopyAddress],
+            items.Select(item => item.Header as string));
+        return (menu, items[0], items[1], items[2]);
     }
 
     [AvaloniaFact]
@@ -644,7 +666,7 @@ public sealed class DialogTests
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();
 
         // The second row, so the first row's pages can't pass by accident
-        (ContextMenu menu, MenuItem ipinfo, MenuItem abuse) = RightClickRowGap(dialog, 1);
+        (ContextMenu menu, MenuItem ipinfo, MenuItem abuse, _) = RightClickRowGap(dialog, 1);
         Assert.True(ipinfo.IsEffectivelyEnabled);
         Assert.True(abuse.IsEffectivelyEnabled);
         ipinfo.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
@@ -682,7 +704,7 @@ public sealed class DialogTests
         ItemsControl list = dialog.FindControl<ItemsControl>("AddressList")!;
 
         // A row's menu first, so a row recorded earlier can't carry over to a request from no row
-        (ContextMenu menu, _, _) = RightClickRowGap(dialog, 0);
+        (ContextMenu menu, _, _, _) = RightClickRowGap(dialog, 0);
         menu.Close();
         Dispatcher.UIThread.RunJobs();
         Assert.False(menu.IsOpen);
@@ -698,6 +720,77 @@ public sealed class DialogTests
     }
 
     [AvaloniaFact]
+    public void CopyAddressPutsThatRowsAddressOnTheClipboardAndShowsNoLine()
+    {
+        Window owner = ShownOwner();
+        var copied = new List<string>();
+        var dialog = new NewAddressesDialog(SampleNewAddresses(), text =>
+        {
+            copied.Add(text);
+            return Task.CompletedTask;
+        }, NoPage);
+        Task result = dialog.ShowDialog(owner);
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        TextBlock status = dialog.FindControl<TextBlock>("CopyStatusText")!;
+
+        // The second row, so the first row's address can't pass by accident
+        (ContextMenu menu, _, _, MenuItem copy) = RightClickRowGap(dialog, 1);
+        Assert.True(copy.IsEffectivelyEnabled);
+        copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(["9.9.9.9"], copied);
+        Assert.True(string.IsNullOrEmpty(status.Text));
+        Assert.Contains("placeholder", status.Classes);
+        Assert.False(result.IsCompleted);
+
+        menu.Close();
+        PressEscape(dialog);
+        owner.Close();
+    }
+
+    [AvaloniaFact]
+    public void ACopyAddressThatFailsShowsItsLine()
+    {
+        Window owner = ShownOwner();
+        bool fail = true;
+        string? copied = null;
+        var dialog = new NewAddressesDialog(SampleNewAddresses(),
+            text =>
+            {
+                if (fail)
+                    return Task.FromException(new InvalidOperationException("clipboard unavailable"));
+                copied = text;
+                return Task.CompletedTask;
+            }, NoPage);
+        Task result = dialog.ShowDialog(owner);
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        TextBlock status = dialog.FindControl<TextBlock>("CopyStatusText")!;
+
+        (ContextMenu menu, _, _, MenuItem copy) = RightClickRowGap(dialog, 0);
+        copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(AppText.AddressCopyFailed, status.Text);
+        Assert.DoesNotContain("placeholder", status.Classes);
+        Assert.False(result.IsCompleted);
+
+        // A copy that works afterwards clears the failure it would otherwise leave standing
+        fail = false;
+        copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Dispatcher.UIThread.RunJobs();
+        Assert.NotNull(copied);
+        Assert.Equal("", status.Text);
+        Assert.Contains("placeholder", status.Classes);
+
+        menu.Close();
+        PressEscape(dialog);
+        owner.Close();
+    }
+
+    [AvaloniaFact]
     public void APageThatWontOpenShowsItsLine()
     {
         Window owner = ShownOwner();
@@ -708,7 +801,7 @@ public sealed class DialogTests
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();
         TextBlock status = dialog.FindControl<TextBlock>("CopyStatusText")!;
 
-        (ContextMenu menu, MenuItem ipinfo, _) = RightClickRowGap(dialog, 0);
+        (ContextMenu menu, MenuItem ipinfo, _, _) = RightClickRowGap(dialog, 0);
         ipinfo.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         Dispatcher.UIThread.RunJobs();
 
@@ -719,5 +812,30 @@ public sealed class DialogTests
         menu.Close();
         PressEscape(dialog);
         owner.Close();
+    }
+
+    // A Retire or Remove title carries the feed's name, which can be far wider than the dialog
+    [AvaloniaFact]
+    public void AConfirmationTitleWrapsSoALongFeedNameIsWhole()
+    {
+        var shortTitle = new GraphiteUi.ConfirmationDialog("Retire the feed?", "Body", AppText.RetireSavedFeedButton);
+        var longTitle = new GraphiteUi.ConfirmationDialog(
+            AppText.RetireSavedFeedTitle("Azure AzureArcInfrastructure.GermanyWestCentral AzureFrontDoor.FirstParty"),
+            "Body", AppText.RetireSavedFeedButton);
+        shortTitle.Show();
+        longTitle.Show();
+        try
+        {
+            TextBlock shortText = shortTitle.FindControl<TextBlock>("TitleText")!;
+            TextBlock longText = longTitle.FindControl<TextBlock>("TitleText")!;
+            Assert.Equal(TextWrapping.Wrap, longText.TextWrapping);
+            Assert.True(longText.Bounds.Height > shortText.Bounds.Height * 1.5,
+                $"The long title is {longText.Bounds.Height} high, the short one {shortText.Bounds.Height}");
+        }
+        finally
+        {
+            shortTitle.Close();
+            longTitle.Close();
+        }
     }
 }

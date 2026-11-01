@@ -6,6 +6,9 @@ using PoorMansFeed.Core;
 
 namespace PoorMansFeed.Core.GoogleCloud;
 
+/// <summary>Body is the bytes as served, set only when Failure is None, so an over-cap read is never saved.</summary>
+internal sealed record GoogleFetch(CatalogueFailure Failure, CloudRangeCatalogue? Catalogue, byte[]? Body);
+
 internal sealed class GoogleCloudRangeClient
 {
     internal const int MaxBodyBytes = 8 * 1024 * 1024;
@@ -25,7 +28,7 @@ internal sealed class GoogleCloudRangeClient
         _options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
-    public async Task<CatalogueResult> FetchAsync(CancellationToken ct)
+    public async Task<GoogleFetch> FetchAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -39,40 +42,43 @@ internal sealed class GoogleCloudRangeClient
             if (!response.IsSuccessStatusCode)
             {
                 Trace.TraceWarning($"Google Cloud ranges request failed with HTTP {(int)response.StatusCode}.");
-                return new CatalogueResult(CatalogueFailure.ServiceError, null);
+                return new GoogleFetch(CatalogueFailure.ServiceError, null, null);
             }
 
             if (response.Content.Headers.ContentLength is long length && length > MaxBodyBytes)
             {
                 Trace.TraceWarning("Google Cloud ranges response was larger than the size cap.");
-                return new CatalogueResult(CatalogueFailure.Unreadable, null);
+                return new GoogleFetch(CatalogueFailure.Unreadable, null, null);
             }
 
             byte[] body = await ReadCappedAsync(response, linked.Token);
             if (body.Length > MaxBodyBytes)
-                return new CatalogueResult(CatalogueFailure.Unreadable, null);
+                return new GoogleFetch(CatalogueFailure.Unreadable, null, null);
 
-            return Parse(body, new Uri(_options.GoogleCloudRangesUrl));
+            CatalogueResult parsed = Parse(body, new Uri(_options.GoogleCloudRangesUrl));
+            return parsed.Failure == CatalogueFailure.None
+                ? new GoogleFetch(CatalogueFailure.None, parsed.Catalogue, body)
+                : new GoogleFetch(parsed.Failure, null, null);
         }
         catch (JsonException)
         {
             Trace.TraceWarning("Google Cloud ranges response was not valid JSON.");
-            return new CatalogueResult(CatalogueFailure.Unreadable, null);
+            return new GoogleFetch(CatalogueFailure.Unreadable, null, null);
         }
         catch (HttpRequestException)
         {
             Trace.TraceWarning("Google Cloud ranges endpoint could not be reached.");
-            return new CatalogueResult(CatalogueFailure.Offline, null);
+            return new GoogleFetch(CatalogueFailure.Offline, null, null);
         }
         catch (IOException)
         {
             Trace.TraceWarning("Google Cloud ranges response could not be read.");
-            return new CatalogueResult(CatalogueFailure.Offline, null);
+            return new GoogleFetch(CatalogueFailure.Offline, null, null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             Trace.TraceWarning("Google Cloud ranges request timed out.");
-            return new CatalogueResult(CatalogueFailure.Offline, null);
+            return new GoogleFetch(CatalogueFailure.Offline, null, null);
         }
     }
 
@@ -94,6 +100,30 @@ internal sealed class GoogleCloudRangeClient
         }
 
         return body.ToArray();
+    }
+
+    /// <summary>The saved file, parsed as a fetch's body is, under its record's Url; null if it isn't one.</summary>
+    internal static CloudRangeCatalogue? TryParseSaved(byte[] json, Uri url)
+    {
+        try
+        {
+            CatalogueResult parsed = Parse(json, url);
+            if (parsed.Failure != CatalogueFailure.None || parsed.Catalogue is null)
+                return null;
+
+            if (parsed.Catalogue.Prefixes.Count == 0)
+            {
+                Trace.TraceWarning("The saved Google Cloud ranges hold no usable range, so they are not used.");
+                return null;
+            }
+
+            return parsed.Catalogue;
+        }
+        catch (JsonException)
+        {
+            Trace.TraceWarning("The saved Google Cloud ranges could not be parsed, so they are not used.");
+            return null;
+        }
     }
 
     private static CatalogueResult Parse(byte[] body, Uri url)

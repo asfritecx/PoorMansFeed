@@ -88,17 +88,27 @@ public sealed class IpInfoClient
         }
     }
 
-    public async Task<DownloadOutcome> DownloadAsync(string token, string tmpPath, IProgress<UpdateProgress>? progress, CancellationToken ct)
+    public async Task<DownloadOutcome> DownloadAsync(string token, string tmpPath, IProgress<UpdateProgress>? progress,
+                                                  Func<UpdateFailure> beforeRequest, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(beforeRequest);
         ct.ThrowIfCancellationRequested();
         int maxAttempts = Math.Max(1, _options.MaxRetries);
         bool succeeded = false;
+        DownloadOutcome? previous = null;
 
         try
         {
             for (int attempt = 1; ; attempt++)
             {
+                // IPinfo counts each download request against its daily limit, retries included. A retry refused
+                // ends on the failure that asked for it
+                UpdateFailure refusal = beforeRequest();
+                if (refusal != UpdateFailure.None)
+                    return previous ?? new DownloadOutcome(refusal, null);
+
                 DownloadOutcome outcome = await AttemptDownloadAsync(token, tmpPath, progress, ct);
+                previous = outcome;
                 if (outcome.Failure == UpdateFailure.None)
                 {
                     succeeded = true;

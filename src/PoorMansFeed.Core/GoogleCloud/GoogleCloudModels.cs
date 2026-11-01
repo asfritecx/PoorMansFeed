@@ -40,6 +40,10 @@ public sealed record CloudPrefix(CidrBlock Block, GoogleCloudScope Scope);
 /// <summary>The file's own identity, copied into the feed header verbatim.</summary>
 public sealed record CloudRangeSource(Uri Url, string SyncToken, string CreationTime);
 
+/// <summary>The record saved beside cloud.json: its source, when it was fetched, and its SHA-256 and length.</summary>
+public sealed record GoogleRangeFileSource(Uri Url, string SyncToken, string CreationTime,
+                                           DateTimeOffset DownloadedUtc, string Sha256, long Length);
+
 /// <summary>One picker entry. Counts per family so the picker can honour IPv6Enabled without reloading.</summary>
 public sealed record CloudRegion(GoogleCloudScope Scope, int Ipv4Count, int Ipv6Count)
 {

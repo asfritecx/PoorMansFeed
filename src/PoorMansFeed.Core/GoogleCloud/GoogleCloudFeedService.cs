@@ -1,16 +1,23 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.CloudFeeds;
+using PoorMansFeed.Core.History;
 
 namespace PoorMansFeed.Core.GoogleCloud;
 
 public sealed class GoogleCloudFeedService : IGoogleCloudFeedService
 {
+    public event EventHandler<CloudSourceUpdated<CloudRangeCatalogue>>? SourceUpdated;
+
     private readonly IIpInfoService _ipinfo;
     private readonly GoogleCloudRangeClient _client;
     private readonly CloudFeedEngine _engine;
+    private readonly TimeProvider _time;
+    private readonly GoogleRangeCache _cache;
 
     public GoogleCloudFeedService(IIpInfoService ipinfo, HttpClient http, CoreOptions options, TimeProvider time,
-                                  string defaultExportFolder)
+                                  AppPaths? paths, string defaultExportFolder)
     {
         _ipinfo = ipinfo ?? throw new ArgumentNullException(nameof(ipinfo));
         ArgumentNullException.ThrowIfNull(http);
@@ -19,14 +26,71 @@ public sealed class GoogleCloudFeedService : IGoogleCloudFeedService
         ArgumentNullException.ThrowIfNull(defaultExportFolder);
         _client = new GoogleCloudRangeClient(http, options);
         _engine = new CloudFeedEngine(ipinfo, time, defaultExportFolder);
+        _time = time;
+        _cache = new GoogleRangeCache(paths, GoogleCloudRangeClient.MaxBodyBytes);
     }
 
-    public Task<CatalogueResult> LoadCatalogueAsync(CancellationToken ct) => _client.FetchAsync(ct);
+    public async Task<CatalogueResult> LoadCatalogueAsync(CancellationToken ct)
+    {
+        GoogleFetch fetch = await _client.FetchAsync(ct);
+        CloudSourceUpdated<CloudRangeCatalogue>? updated = null;
+        if (fetch.Failure == CatalogueFailure.None && fetch.Body is byte[] body && fetch.Catalogue is CloudRangeCatalogue catalogue
+            && catalogue.Prefixes.Count > 0)
+        {
+            CloudRangeSource from = catalogue.Source;
+            string sha256 = Convert.ToHexStringLower(SHA256.HashData(body));
+            var source = new GoogleRangeFileSource(from.Url, from.SyncToken, from.CreationTime, _time.GetUtcNow(),
+                                                   sha256, body.Length);
+            bool replaced = await Task.Run(() =>
+            {
+                // The same bytes keep their pair, so the record's download time stays when they were first downloaded.
+                // The text is compared, because Uri's == ignores user info and the fragment.
+                CachedGoogleRanges? saved = _cache.TryRead();
+                bool sameBytes = saved is not null
+                                 && string.Equals(saved.Source.Sha256, sha256, StringComparison.OrdinalIgnoreCase);
+                if (sameBytes && string.Equals(saved?.Source.Url.AbsoluteUri, from.Url.AbsoluteUri, StringComparison.Ordinal))
+                    return false;
+                // Only other bytes are told to listeners; a pair that doesn't read back counts as other bytes
+                return _cache.TryWrite(body, source) && !sameBytes;
+            }, ct);
+            if (replaced)
+                updated = new CloudSourceUpdated<CloudRangeCatalogue>(catalogue, source.DownloadedUtc);
+        }
+
+        var result = new CatalogueResult(fetch.Failure, fetch.Catalogue);
+        if (updated is not null)
+            CloudSourceEvents.Tell(this, SourceUpdated, updated);
+        return result;
+    }
+
+    public Task<SavedRanges<CloudRangeCatalogue>> LoadSavedAsync(CancellationToken ct) => Task.Run(() =>
+    {
+        try
+        {
+            if (!_cache.AnyFileExists())
+                return new SavedRanges<CloudRangeCatalogue>(SavedRangesState.NotSaved, null, null);
+
+            CachedGoogleRanges? cached = _cache.TryRead();
+            if (cached is not null && GoogleCloudRangeClient.TryParseSaved(cached.Json, cached.Source.Url) is CloudRangeCatalogue catalogue)
+                return new SavedRanges<CloudRangeCatalogue>(SavedRangesState.Read, catalogue, cached.Source.DownloadedUtc);
+
+            return new SavedRanges<CloudRangeCatalogue>(SavedRangesState.Unusable, null, null);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+        {
+            Trace.TraceWarning("The saved Google Cloud ranges could not be read: " + ex.GetType().Name);
+            return new SavedRanges<CloudRangeCatalogue>(SavedRangesState.Unusable, null, null);
+        }
+    }, ct);
 
     public Task<CheckResult> CheckAsync(CloudRangeCatalogue catalogue, RegionSelection selection, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         ct.ThrowIfCancellationRequested();
+        // Gone before the dataset is asked, so a pick that is gone is told apart from no dataset
+        if (!catalogue.Regions.Any(region => region.Scope == selection.Region)
+            || (selection.AddsGlobal && !catalogue.Regions.Any(region => region.Scope.IsGlobal)))
+            return Task.FromResult(new CheckResult(CheckFailure.PickGone, null));
 
         // Filter first, then sort: List.Sort is unstable, so the list that is sorted must be the one that was always sorted.
         UserSettings settings = _ipinfo.Settings;
@@ -45,7 +109,8 @@ public sealed class GoogleCloudFeedService : IGoogleCloudFeedService
         foreach (CloudPrefix prefix in selected)
             ordered.Add(new FeedPrefix(prefix.Block, prefix.Scope.Id));
 
-        return _engine.CheckAsync(Describe(catalogue.Source, selection), ordered, ct);
+        var pick = new CloudFeedPick(FeedKind.GoogleCloud, selection.Region.Id, selection.AddsGlobal, null, null, null);
+        return _engine.CheckAsync(Describe(catalogue.Source, selection), ordered, pick, ct);
     }
 
     public CloudFeedPlan PlanWrite(CloudFeedCheck check, IReadOnlyCollection<CidrBlock> ticked) =>
@@ -53,6 +118,10 @@ public sealed class GoogleCloudFeedService : IGoogleCloudFeedService
 
     public Task<CloudFeedWriteResult> WriteAsync(CloudFeedPlan plan, IReadOnlyCollection<CidrBlock> includedLargeRanges, CancellationToken ct) =>
         _engine.WriteAsync(plan, includedLargeRanges, ct);
+
+    Task<CloudFeedRefresh> ICloudFeedService.RefreshAsync(CloudFeedCheck check, DateTimeOffset checkStartedUtc,
+                                                         CancellationToken ct) =>
+        _engine.RefreshAsync(check, checkStartedUtc, ct);
 
     private static FeedDescription Describe(CloudRangeSource source, RegionSelection selection)
     {

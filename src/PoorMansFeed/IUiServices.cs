@@ -48,6 +48,15 @@ public interface IUiServices
     /// <summary>Says no feed type is ticked and offers the Settings page. Completes however it is dismissed.</summary>
     Task<ConfigureFeedsChoice> AskToConfigureFeedsAsync();
 
+    /// <summary>
+    /// Shows the dataset update window, or brings it forward when it is already open, and returns at once: closing the
+    /// window only hides it, so nothing waits on it.
+    /// </summary>
+    void ShowDatasetUpdate();
+
     /// <summary>Shows the Settings page, as its nav item does; while start-up has stopped it does nothing.</summary>
     void ShowSettingsPage();
+
+    /// <summary>Runs the action later on the UI thread, without waiting; a Core event's listener posts here.</summary>
+    void PostToUiThread(Action action);
 }

@@ -87,6 +87,32 @@ public sealed partial class NewAddressesDialog : Window
 
     private void OpenInAbuseIpDbClicked(object? sender, RoutedEventArgs e) => OpenPage(_menuRow?.AbuseIpDbPage);
 
+    // Not on _copying, which guards Copy's every-address copy; only a failure gets a line, which a later success clears
+    private async void CopyAddressClicked(object? sender, RoutedEventArgs e)
+    {
+        string? address = _menuRow?.Address;
+        if (address is null || _copy is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _copy(address);
+        }
+        catch (Exception)
+        {
+            // Nothing escapes the handler
+            ShowCopyStatus(AppText.AddressCopyFailed);
+            return;
+        }
+
+        if (this.FindControl<TextBlock>("CopyStatusText")!.Text == AppText.AddressCopyFailed)
+        {
+            ShowCopyStatus("");
+        }
+    }
+
     private async void OpenPage(WebPage? page)
     {
         if (page is null || _openPage is null)

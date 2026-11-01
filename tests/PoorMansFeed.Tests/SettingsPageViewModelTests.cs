@@ -223,6 +223,44 @@ public sealed class SettingsPageViewModelTests
     }
 
     [Fact]
+    public async Task TheRefreshTimerFieldsAreUnsavedUntilSavedAndASaveSendsBoth()
+    {
+        var page = NewPage();
+        var vm = page.Vm;
+        vm.Settings.RefreshAllOnTimer = true;
+        Assert.True(vm.HasUnsavedChanges);
+        vm.Settings.RefreshAllOnTimer = false;
+        Assert.False(vm.HasUnsavedChanges);
+        vm.Settings.RefreshAllEveryHours = 3;
+        Assert.True(vm.HasUnsavedChanges);
+        vm.Settings.RefreshAllOnTimer = true;
+
+        await vm.SaveSettingsCommand.ExecuteAsync(null);
+
+        UserSettings saved = page.Service.SavedSettings!;
+        Assert.True(saved.RefreshAllOnTimer);
+        Assert.Equal(3, saved.RefreshAllEveryHours);
+        Assert.False(vm.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void RevertPutsTheRefreshTimerFieldsBack()
+    {
+        var settings = new UserSettings { RefreshAllOnTimer = true, RefreshAllEveryHours = 10 };
+        var vm = NewPage(new FakeIpInfoService { Settings = settings }).Vm;
+        vm.Settings.RefreshAllEveryHours = 20;
+        vm.Settings.RefreshAllOnTimer = false;
+        Assert.True(vm.HasUnsavedChanges);
+
+        vm.RevertSettingsCommand.Execute(null);
+
+        Assert.True(vm.Settings.RefreshAllOnTimer);
+        Assert.Equal(10m, vm.Settings.RefreshAllEveryHours);
+        Assert.True(vm.Settings.CanEditRefreshAllHours);
+        Assert.False(vm.HasUnsavedChanges);
+    }
+
+    [Fact]
     public void RevertPutsTheFeedTypeFieldsBack()
     {
         var settings = new UserSettings
@@ -415,6 +453,100 @@ public sealed class SettingsPageViewModelTests
         Assert.False(vm.SaveExceptionsCommand.CanExecute(null));
         Assert.Empty(page.Saved);
         Assert.True(page.Gate.CanStart);
+    }
+
+    [Fact]
+    public async Task CopyNetworkCopiesTheRowsNetworkAndRaisesNothingOnTheEditor()
+    {
+        var page = NewPage(new FakeIpInfoService { Exceptions = OneException() });
+        var vm = page.Vm;
+        int raised = 0;
+        vm.Exceptions.PropertyChanged += (_, _) => raised++;
+        ExceptionRow row = vm.Exceptions.Rows[0];
+
+        Assert.True(vm.CopyExceptionNetworkCommand.CanExecute(row));
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(row);
+
+        Assert.Equal("192.0.2.0/24", page.Ui.ClipboardText);
+        Assert.Equal(0, raised);
+        Assert.Equal("", vm.Exceptions.FeedbackText);
+    }
+
+    [Fact]
+    public async Task ACopyKeepsChangesNotSavedAndASavedLine()
+    {
+        var page = NewPage(new FakeIpInfoService { Exceptions = OneException() });
+        var vm = page.Vm;
+        vm.Exceptions.NetworkText = "203.0.113.0/24";
+        vm.AddExceptionCommand.Execute(null);
+        string added = vm.Exceptions.FeedbackText;
+        Assert.Equal(AppText.ChangesNotSaved, vm.ExceptionsStatusText);
+
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(vm.Exceptions.Rows[1]);
+        Assert.Equal("203.0.113.0/24", page.Ui.ClipboardText);
+        Assert.Equal(AppText.ChangesNotSaved, vm.ExceptionsStatusText);
+        Assert.Equal(added, vm.Exceptions.FeedbackText);
+
+        await vm.SaveExceptionsCommand.ExecuteAsync(null);
+        Assert.Equal(AppText.ExceptionsSaved(2), vm.ExceptionsStatusText);
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(vm.Exceptions.Rows[0]);
+        Assert.Equal("192.0.2.0/24", page.Ui.ClipboardText);
+        Assert.Equal(AppText.ExceptionsSaved(2), vm.ExceptionsStatusText);
+    }
+
+    [Fact]
+    public async Task ACopyThatFailsSaysSoAsAnErrorAndTheNextSuccessClearsOnlyThatLine()
+    {
+        var page = NewPage(new FakeIpInfoService { Exceptions = OneException() });
+        var vm = page.Vm;
+        ExceptionRow row = vm.Exceptions.Rows[0];
+
+        page.Ui.FailClipboard = true;
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(row);
+        Assert.Equal(AppText.NetworkCopyFailed, vm.Exceptions.FeedbackText);
+        Assert.True(vm.Exceptions.IsFeedbackError);
+        Assert.True(vm.Exceptions.HasFeedback);
+
+        page.Ui.FailClipboard = false;
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(row);
+        Assert.Equal("192.0.2.0/24", page.Ui.ClipboardText);
+        Assert.Equal("", vm.Exceptions.FeedbackText);
+        Assert.False(vm.Exceptions.IsFeedbackError);
+        Assert.False(vm.Exceptions.HasFeedback);
+
+        vm.Exceptions.NetworkText = "not a network";
+        vm.AddExceptionCommand.Execute(null);
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(row);
+        Assert.Equal(AppText.ExceptionInvalid, vm.Exceptions.FeedbackText);
+    }
+
+    [Fact]
+    public async Task CopyNetworkRunsWhileSomethingElseHoldsTheGate()
+    {
+        var page = NewPage(new FakeIpInfoService { Exceptions = OneException() });
+        var vm = page.Vm;
+        using IDisposable other = page.Gate.Hold();
+        ExceptionRow row = vm.Exceptions.Rows[0];
+
+        Assert.False(page.Gate.CanStart);
+        Assert.True(vm.CopyExceptionNetworkCommand.CanExecute(row));
+        await vm.CopyExceptionNetworkCommand.ExecuteAsync(row);
+        Assert.Equal("192.0.2.0/24", page.Ui.ClipboardText);
+    }
+
+    [Fact]
+    public void CopyNetworkIsOffAfterDisposeAndDisposeSaysSo()
+    {
+        var page = NewPage(new FakeIpInfoService { Exceptions = OneException() });
+        var vm = page.Vm;
+        ExceptionRow row = vm.Exceptions.Rows[0];
+        int raised = 0;
+        vm.CopyExceptionNetworkCommand.CanExecuteChanged += (_, _) => raised++;
+
+        vm.Dispose();
+
+        Assert.False(vm.CopyExceptionNetworkCommand.CanExecute(row));
+        Assert.True(raised > 0);
     }
 
     [Fact]

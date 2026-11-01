@@ -39,7 +39,8 @@ public sealed class AzureFeedViewModel : CloudFeedPageViewModel
         _azure = feeds;
         _ipinfo = ipinfo;
         _time = time ?? throw new ArgumentNullException(nameof(time));
-        CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync, () => !IsDisposed && !IsWorking);
+        CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync, () => !IsDisposed && !IsWorking && !IsRefreshing);
+        _azure.SourceUpdated += HearSourceUpdated;
     }
 
     public IAsyncRelayCommand CheckForUpdatesCommand { get; }
@@ -96,7 +97,13 @@ public sealed class AzureFeedViewModel : CloudFeedPageViewModel
         if (Interlocked.Exchange(ref _activated, 1) == 1)
             return Task.CompletedTask;
 
-        return UpdateAsync(loadSavedFirst: true);
+        return ActivateWhenFreeAsync(() => UpdateAsync(loadSavedFirst: true));
+    }
+
+    public override void Dispose()
+    {
+        _azure.SourceUpdated -= HearSourceUpdated;
+        base.Dispose();
     }
 
     protected override void RefreshCommands()
@@ -116,7 +123,7 @@ public sealed class AzureFeedViewModel : CloudFeedPageViewModel
 
     private async Task CheckForUpdatesAsync()
     {
-        if (IsDisposed || IsWorking)
+        if (IsDisposed || IsWorking || IsRefreshing)
             return;
 
         Interlocked.Exchange(ref _activated, 1);
@@ -188,7 +195,20 @@ public sealed class AzureFeedViewModel : CloudFeedPageViewModel
         }
     }
 
-    private void ApplyCatalogue(AzureTagCatalogue catalogue)
+    // Refresh all may raise this off the UI thread, so it only posts
+    private void HearSourceUpdated(object? sender, CloudSourceUpdated<AzureTagCatalogue> update) =>
+        PostSourceUpdate(
+            () => Volatile.Read(ref _activated) == 0 || ReferenceEquals(update.Catalogue, _catalogue),
+            () =>
+            {
+                AzureTagCatalogue catalogue = update.Catalogue;
+                bool pickKept = ApplyCatalogue(catalogue);
+                StatusText = AppText.AzureStatusUpdated(catalogue.Source.FileDate, catalogue.Source.ChangeNumber,
+                                                  LocalTime(update.UpdatedUtc));
+                return pickKept;
+            });
+
+    private bool ApplyCatalogue(AzureTagCatalogue catalogue)
     {
         string? previousTag = _selectedRegion?.TagName;
         string? previousService = _selectedService?.BaseName;
@@ -209,6 +229,7 @@ public sealed class AzureFeedViewModel : CloudFeedPageViewModel
         OnPropertyChanged(nameof(SelectedService));
         ShowRegions(service, previousTag);
         ClearRows();
+        return previousTag is not null && catalogue.Find(previousTag) is not null;
     }
 
     private void ShowUnavailable(AzureSourceFailure failure)

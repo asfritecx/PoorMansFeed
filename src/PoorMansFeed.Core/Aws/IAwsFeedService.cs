@@ -9,8 +9,16 @@ namespace PoorMansFeed.Core.Aws;
 /// </summary>
 public interface IAwsFeedService : ICloudFeedService
 {
+
+    /// <summary>Raised after an update replaced the saved file; never for UpToDate or a save that failed.</summary>
+    event EventHandler<CloudSourceUpdated<AwsRangeCatalogue>>? SourceUpdated;
     /// <summary>Reads the saved file and nothing else: no network. Null when there is no usable saved file.</summary>
     Task<AwsRangeCatalogue?> LoadCachedAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Reads only the saved file and sends nothing. NotSaved: neither file is there; Unusable: the pair won't read.
+    /// </summary>
+    Task<SavedRanges<AwsRangeCatalogue>> LoadSavedAsync(CancellationToken ct);
 
     /// <summary>
     /// Nothing is replaced (UpToDate) on a 304 for the saved ETag or a file identical to current. Any failure leaves

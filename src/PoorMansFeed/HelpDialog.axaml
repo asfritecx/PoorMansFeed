@@ -55,6 +55,27 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
         </StackPanel>
+
+        <StackPanel Spacing="4">
+          <TextBlock x:Name="CloudSearchHeading" Text="{x:Static vm:AppText.HelpCloudSearchHeading}" Classes="card-title" />
+          <ItemsControl x:Name="HelpCloudSearchList" ItemsSource="{x:Static vm:AppText.HelpCloudSearchTexts}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Spacing="8" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+          <TextBlock x:Name="SavedFeedsHeading" Text="{x:Static vm:AppText.HelpSavedFeedsHeading}" Classes="card-title" />
+          <TextBlock x:Name="SavedFeedsText" Text="{x:Static vm:AppText.HelpSavedFeedsText}" TextWrapping="Wrap" />
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
 

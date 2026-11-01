@@ -21,7 +21,7 @@ using GraphiteUi;
 namespace PoorMansFeed.Tests;
 
 /// <summary>The real main window, driven headlessly through the fake core and fake UI services.</summary>
-public sealed class MainWindowTests
+public sealed partial class MainWindowTests
 {
     private static readonly DatasetInfo SampleDataset = new(new DateOnly(2026, 10, 8), 1234567, "abc", DateTimeOffset.UtcNow, true);
 
@@ -41,11 +41,21 @@ public sealed class MainWindowTests
             ProgressFactory = handler => new ImmediateProgress<UpdateProgress>(handler),
         };
 
-    // The dataset card's two progress bars: the determinate one and the indeterminate one
-    private static (ProgressBar Determinate, ProgressBar Indeterminate) ProgressBars(Border dataset)
+    // The update window's two progress bars: the determinate one and the indeterminate one
+    private static (ProgressBar Determinate, ProgressBar Indeterminate) ProgressBars(Control dataset)
     {
         List<ProgressBar> bars = dataset.GetVisualDescendants().OfType<ProgressBar>().ToList();
         return (bars.Single(bar => !bar.IsIndeterminate), bars.Single(bar => bar.IsIndeterminate));
+    }
+
+    // Opens the dataset pill's drop-down as a click would; headless, its content sits in the window's overlay layer
+    private static Flyout OpenDatasetFlyout(Window window)
+    {
+        Button pill = window.FindControl<Button>("DatasetPillButton")!;
+        var flyout = Assert.IsType<Flyout>(pill.Flyout);
+        flyout.ShowAt(pill);
+        Settle(window);
+        return flyout;
     }
 
     // Starts the view model and waits for its background check, as the window does on open
@@ -166,6 +176,12 @@ public sealed class MainWindowTests
         ? window.FindControl<Border>("ResultsCard")!
         : page == "AbuseIpDbPage"
         ? window.FindControl<Border>("AbuseNetworksCard")!
+        : page == "CloudSearchPage"
+        ? window.FindControl<Border>("CloudSearchCard")!
+        : page == "SavedFeedsPage"
+        ? window.FindControl<Border>("SavedFeedsCard")!
+        : page == "ChangeHistoryPage"
+        ? window.FindControl<Border>("HistoryCard")!
         : window.FindControl<Control>(page)!.GetVisualDescendants().OfType<CloudRangesPanel>().Single()
             .FindControl<Border>("CloudRangesCard")!;
 
@@ -184,7 +200,10 @@ public sealed class MainWindowTests
         ("NavGoogleCloud", "ToolsPage", "ToolsHeading"),
         ("NavAzure", "AzurePage", "AzureHeading"),
         ("NavAws", "AwsPage", "AwsHeading"),
+        ("NavCloudSearch", "CloudSearchPage", "CloudSearchHeading"),
         ("NavAbuseIpDb", "AbuseIpDbPage", "AbuseIpDbHeading"),
+        ("NavSavedFeeds", "SavedFeedsPage", "SavedFeedsHeading"),
+        ("NavChangeHistory", "ChangeHistoryPage", "ChangeHistoryHeading"),
         ("NavSettings", "SettingsPage", "SettingsHeading"),
     ];
 
@@ -198,6 +217,8 @@ public sealed class MainWindowTests
         }
 
         Assert.Equal(item == "NavLookup", window.FindControl<Button>("SearchButton")!.IsDefault);
+        // Cloud Address Lookup's box takes Enter itself, so its button is never the default
+        Assert.False(window.FindControl<Button>("CloudSearchButton")!.IsDefault);
         // Add is never the default button: only the exception boxes take Enter
         Assert.False(window.FindControl<Button>("AddExceptionButton")!.IsDefault);
     }
@@ -343,8 +364,11 @@ public sealed class MainWindowTests
         window.Show();
         try
         {
+            window.ShowDatasetUpdateWindow();
             Settle(window);
-            Border dataset = window.FindControl<Border>("DatasetCard")!;
+            Settle(window.UpdateWindow!);
+            // The update window's content stands for the card the pages no longer carry
+            var dataset = (Control)window.UpdateWindow!.Content!;
             Border results = window.FindControl<Border>("ResultsCard")!;
             double datasetHeight = dataset.Bounds.Height;
             double resultsHeight = results.Bounds.Height;
@@ -431,6 +455,17 @@ public sealed class MainWindowTests
         {
             window.Close();
         }
+    }
+
+    // Fluent's scroll bar is drawn over the content, so the one page that scrolls inside the frame, Settings, keeps
+    // its right-most controls (the exceptions buttons) out from under it
+    [AvaloniaFact]
+    public void ThePagesThatScrollInsideTheFrameKeepTheirControlsClearOfTheScrollBar()
+    {
+        var window = new MainWindow();
+        var content = (Control)window.FindControl<ScrollViewer>("SettingsScroll")!.Content!;
+        Assert.True(content.Margin.Right >= 12, $"SettingsScroll's content is {content.Margin.Right} from its right edge");
+        Assert.Null(window.FindControl<ScrollViewer>("SavedFeedsPageScroll"));
     }
 
     [AvaloniaFact]
@@ -621,7 +656,12 @@ public sealed class MainWindowTests
             Assert.Equal(AppText.GoogleCloudTitle, AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavGoogleCloud")!));
             Assert.Equal(AppText.AzureTitle, AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavAzure")!));
             Assert.Equal(AppText.AwsTitle, AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavAws")!));
+            Assert.Equal(AppText.CloudSearchTitle, AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavCloudSearch")!));
             Assert.Equal(AppText.AbuseIpDbTitle, AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavAbuseIpDb")!));
+            Assert.Equal(AppText.SavedFeedsTitle,
+                         AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavSavedFeeds")!));
+            Assert.Equal(AppText.HistoryTitle,
+                         AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavChangeHistory")!));
             Assert.Equal(AppText.SettingsTitle, AutomationProperties.GetName(window.FindControl<ListBoxItem>("NavSettings")!));
 
             ListBoxItem azure = window.FindControl<ListBoxItem>("NavAzure")!;
@@ -667,6 +707,57 @@ public sealed class MainWindowTests
 
             Navigate(window, "NavAzure");
             Assert.Equal(1, feeds.UpdateCalls);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task TheCloudPanelsTickButtonsAreNamedAndTickEveryRangeShown()
+    {
+        var service = WithDataset();
+        var vm = await StartAsync(service);
+        AzureFeedViewModel azure = NewAzureViewModel(service, out _);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, azure: azure);
+        window.Show();
+        try
+        {
+            Navigate(window, "NavAzure");
+            CloudRangesPanel panel = PanelOf(window, azure);
+            Button tick = panel.FindControl<Button>("CloudTickAllButton")!;
+            Button untick = panel.FindControl<Button>("CloudUntickAllButton")!;
+            Assert.Same(azure.TickAllCommand, tick.Command);
+            Assert.Same(azure.UntickAllCommand, untick.Command);
+            Assert.Equal(AppText.CloudTickAll, tick.Content);
+            Assert.Equal(AppText.CloudUntickAll, untick.Content);
+            Assert.Equal(AppText.CloudTickAll, AutomationProperties.GetName(tick));
+            Assert.Equal(AppText.CloudUntickAll, AutomationProperties.GetName(untick));
+            Assert.Equal(AppText.CloudTickAllTooltip, ToolTip.GetTip(tick));
+            Assert.Equal(AppText.CloudUntickAllTooltip, ToolTip.GetTip(untick));
+            Assert.False(tick.IsEffectivelyEnabled);
+            Assert.False(untick.IsEffectivelyEnabled);
+
+            azure.SelectedService = azure.Services.Single(option => option.BaseName == "Storage");
+            azure.SelectedRegion = azure.Regions.Single(option => option.TagName == "Storage.SoutheastAsia");
+            await azure.CheckCommand.ExecuteAsync(null);
+            Settle(window);
+            Assert.True(tick.IsEffectivelyEnabled);
+            Assert.True(untick.IsEffectivelyEnabled);
+
+            untick.Command!.Execute(null);
+            Settle(window);
+            Assert.All(azure.Rows, row => Assert.False(row.IsIncluded));
+            Assert.All(panel.FindControl<ItemsControl>("CloudRangeList")!.GetVisualDescendants().OfType<CheckBox>(),
+                box => Assert.False(box.IsChecked));
+
+            tick.Command!.Execute(null);
+            Settle(window);
+            Assert.All(azure.Rows, row => Assert.True(row.IsIncluded));
+            Assert.All(panel.FindControl<ItemsControl>("CloudRangeList")!.GetVisualDescendants().OfType<CheckBox>(),
+                box => Assert.True(box.IsChecked));
         }
         finally
         {
@@ -864,6 +955,31 @@ public sealed class MainWindowTests
     // ----- the AbuseIPDB Blacklist page -----
 
     [AvaloniaFact]
+    public async Task TheAbuseIpDbPageKnowsWhileItIsOnShow()
+    {
+        var abuse = new FakeAbuseIpDbService();
+        (MainViewModel vm, AbuseIpDbViewModel page) = await StartWithAbusePageAsync(WithDataset(), abuse);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, abuseIpDb: page);
+        window.Show();
+        try
+        {
+            Settle(window);
+            Assert.False(page.IsOnShow);
+
+            Navigate(window, "NavAbuseIpDb");
+            Assert.True(page.IsOnShow);
+
+            Navigate(window, "NavLookup");
+            Assert.False(page.IsOnShow);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task TheAbuseIpDbPageOpensFromTheNavPaneAndReadsTheListOnEveryShow()
     {
         var abuse = new FakeAbuseIpDbService();
@@ -891,6 +1007,10 @@ public sealed class MainWindowTests
             Assert.Same(page.ClearListCommand, window.FindControl<Button>("ClearListButton")!.Command);
             Assert.Same(page.OpenFolderCommand, window.FindControl<Button>("AbuseOpenFolderButton")!.Command);
             Assert.Same(page.EmptyFeedCommand, window.FindControl<Button>("EmptyFeedButton")!.Command);
+            Button retire = window.FindControl<Button>("EmptyFeedButton")!;
+            Assert.Equal("Retire feed", AutomationProperties.GetName(retire));
+            Assert.Equal(AppText.RetireFeedTooltip, ToolTip.GetTip(retire));
+            Assert.Equal(["Retire feed"], retire.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text));
             Assert.Same(page.WriteFeedCommand, window.FindControl<Button>("AbuseWriteFeedButton")!.Command);
             Assert.Equal(page.WriteFeedTooltip, ToolTip.GetTip(window.FindControl<Button>("AbuseWriteFeedButton")!));
             foreach (string name in AbuseButtons)
@@ -1060,8 +1180,15 @@ public sealed class MainWindowTests
 
             ContextMenu menu = row.ContextMenu!;
             Assert.True(menu.IsOpen);
-            MenuItem open = Assert.Single(menu.Items.OfType<MenuItem>());
+            List<MenuItem> items = menu.Items.OfType<MenuItem>().ToList();
+            Assert.Equal(2, items.Count);
+            MenuItem open = items[0];
             Assert.Equal(AppText.OpenInIpinfo, open.Header);
+            MenuItem copy = items[1];
+            Assert.Equal(AppText.CopyAsNumber, copy.Header);
+            Assert.Same(page.CopyAsNumberCommand, copy.Command);
+            Assert.Same(page.Rows[1], copy.CommandParameter);
+            Assert.True(copy.IsEffectivelyEnabled);
             // The cast parent binding resolves from the row's menu to the page's command, with the row as its parameter
             Assert.Same(page.OpenNetworkInIpinfoCommand, open.Command);
             Assert.Same(page.Rows[1], open.CommandParameter);
@@ -1072,6 +1199,11 @@ public sealed class MainWindowTests
             Settle(window);
 
             Assert.Equal("https://ipinfo.io/AS15170", Assert.Single(ui.OpenedPages).Uri.AbsoluteUri);
+            Assert.Equal("", page.ActionText);
+
+            copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntilAsync(() => ui.ClipboardText is not null);
+            Assert.Equal("AS15170", ui.ClipboardText);
             Assert.Equal("", page.ActionText);
             menu.Close();
         }
@@ -1208,7 +1340,8 @@ public sealed class MainWindowTests
         {
             Navigate(window, "NavAbuseIpDb");
 
-            Assert.Equal(AppText.AbuseKeysUnavailable, window.FindControl<TextBlock>("AbuseFacts")!.Text);
+            Assert.Equal(AppText.AbuseUnavailableHead, window.FindControl<TextBlock>("AbuseFacts")!.Text);
+            Assert.Equal(AppText.AbuseUnavailableDetail, window.FindControl<TextBlock>("AbuseFactsDetail")!.Text);
             foreach (string name in AbuseButtons)
             {
                 Button button = window.FindControl<Button>(name)!;
@@ -1401,7 +1534,7 @@ public sealed class MainWindowTests
         AzureFeedViewModel azure = NewAzureViewModel(service, out _);
         AwsFeedViewModel aws = NewAwsViewModel(service, out _);
         var google = new GoogleCloudFeedViewModel(
-            new GoogleCloudFeedService(service, new HttpClient(), new CoreOptions(), TimeProvider.System, Path.GetTempPath()),
+            new GoogleCloudFeedService(service, new HttpClient(), new CoreOptions(), TimeProvider.System, null, Path.GetTempPath()),
             service, new FakeUi(), new WorkGate());
         var abuseGate = new WorkGate();
         abuseGate.SetStarted(true);
@@ -1410,10 +1543,25 @@ public sealed class MainWindowTests
         await abuse.ActivateAsync();
         await abuse.PendingGrouping!;
         OffendingNetworkRow row = Assert.Single(abuse.Rows);
+        var savedFeedsService = new FakeSavedFeedsService
+        {
+            Saved = new SavedFeedsRead(true,
+                [SavedFeedsTextTests.Feed("AS64500", PoorMansFeed.Core.History.FeedKind.Asn)]),
+        };
+        var savedFeeds = new SavedFeedsViewModel(savedFeedsService, new FakeUi(), abuseGate, TimeProvider.System);
+        await savedFeeds.ActivateAsync();
+        SavedFeedRow savedRow = Assert.Single(savedFeeds.Feeds);
         var window = new MainWindow();
-        window.AttachViewModel(vm, google, azure, aws, settings, abuseIpDb: abuse);
+        window.AttachViewModel(vm, google, azure, aws, settings, abuseIpDb: abuse, savedFeeds: savedFeeds);
         window.Show();
         Settle(window);
+        Assert.True(savedFeeds.RetireCommand.CanExecute(savedRow));
+        Assert.True(savedFeeds.ClearHistoryCommand.CanExecute(null));
+        // A query left with the service ends only when the page is disposed, which cancels it
+        savedFeedsService.HistoryGates.Enqueue(new TaskCompletionSource<PoorMansFeed.Core.History.HistoryRead>());
+        savedFeeds.SelectedPeriod = savedFeeds.PeriodChoices[1];
+        Task savedQuery = savedFeeds.PendingQuery!;
+        Assert.False(savedQuery.IsCompleted);
         Assert.All(AbusePageCommands(abuse), command => Assert.True(command.CanExecute(null)));
         Assert.True(abuse.LookUpCommand.CanExecute(row));
         settings.Settings.AbuseIpDbKeepDays = 60;
@@ -1430,6 +1578,11 @@ public sealed class MainWindowTests
         Assert.False(settings.SaveSettingsCommand.CanExecute(null));
         Assert.All(AbusePageCommands(abuse), command => Assert.False(command.CanExecute(null)));
         Assert.False(abuse.LookUpCommand.CanExecute(row));
+        Assert.False(savedFeeds.RetireCommand.CanExecute(savedRow));
+        Assert.False(savedFeeds.RemoveCommand.CanExecute(savedRow));
+        Assert.False(savedFeeds.ClearHistoryCommand.CanExecute(null));
+        Assert.False(savedFeeds.SearchCommand.CanExecute(null));
+        await savedQuery.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     private static IEnumerable<IAsyncRelayCommand> AbusePageCommands(AbuseIpDbViewModel page) =>
@@ -1682,6 +1835,292 @@ public sealed class MainWindowTests
             {
                 window.Close();
             }
+        }
+    }
+
+    private sealed record RefreshWindow(MainWindow Window, MainViewModel Vm, WorkGate Gate, RefreshAllRunner Runner,
+                                        FakeFeedRefresher Refresher, FakeUi Ui, FakeAbuseIpDbService Abuse,
+                                        AbuseIpDbViewModel AbusePage, SettingsPageViewModel Settings, IFeedRecords Records);
+
+    // Every page shares one gate with the runner; the refresher ends its run when the run is cancelled
+    private static async Task<RefreshWindow> ShowWithRefreshAsync(WorkGate? sharedGate = null,
+                                                                  GoogleCloudFeedViewModel? google = null,
+                                                                  SavedFeedsViewModel? savedFeeds = null,
+                                                                  FakeUi? sharedUi = null)
+    {
+        var service = WithDataset();
+        var ui = sharedUi ?? new FakeUi();
+        var abuse = new FakeAbuseIpDbService();
+        var gate = sharedGate ?? new WorkGate();
+        var keys = new AbuseKeyPrompt(ui, abuse, gate);
+        var vm = new MainViewModel(service, ui, null, abuse, gate, keys)
+        {
+            ProgressFactory = handler => new ImmediateProgress<UpdateProgress>(handler),
+        };
+        var settings = new SettingsPageViewModel(service, ui, "/exports/default", gate, vm.ResetTokenAsync, abuse, keys);
+        var page = new AbuseIpDbViewModel(abuse, service, ui, gate, keys, TimeProvider.System, "/exports/default");
+        var saved = savedFeeds ?? new SavedFeedsViewModel(new FakeSavedFeedsService(), ui, gate, TimeProvider.System);
+        await vm.InitializeAsync();
+        if (vm.PendingCheck is { } check)
+        {
+            await check;
+        }
+
+        IFeedRecords records = FeedRecords.None;
+        var refresher = new FakeFeedRefresher { FinishWhenCancelled = true };
+        var runner = new RefreshAllRunner(refresher, gate, ui)
+        {
+            ProgressFactory = handler => new ImmediateProgress<RefreshProgress>(handler),
+        };
+        var window = new MainWindow();
+        window.AttachViewModel(vm, google: google, settings: settings, abuseIpDb: page, savedFeeds: saved, records: records,
+                               ui: ui, gate: gate, refreshAll: runner);
+        window.Show();
+        Settle(window);
+        return new RefreshWindow(window, vm, gate, runner, refresher, ui, abuse, page, settings, records);
+    }
+
+    private static IDisposable HoldFeedWrite(IFeedRecords records, string key) =>
+        Task.Run(() => records.EnterWrite(key)).GetAwaiter().GetResult();
+
+    [AvaloniaFact]
+    public async Task ClosingDuringARefreshAsksOnlyItsQuestionStopsItAndClosesOnceTheWriteEnds()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        IDisposable write = HoldFeedWrite(w.Records, "AS64500");
+        bool closed = false;
+        w.Window.Closed += (_, _) => closed = true;
+        try
+        {
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            Assert.False(w.AbusePage.AsksBeforeClose);
+
+            w.Window.Close();
+            Settle(w.Window);
+
+            Assert.Equal(AppText.CloseRefreshTitle, Assert.Single(w.Ui.Confirms).Title);
+            Assert.True(w.Refresher.Token.IsCancellationRequested);
+            Assert.False(w.Runner.IsRunning);
+            Assert.True(w.Runner.LastRun!.Cancelled);
+            Assert.False(closed);
+            write.Dispose();
+            await WaitUntilAsync(() => closed);
+            Assert.Single(w.Ui.Confirms);
+        }
+        finally
+        {
+            write.Dispose();
+            if (!closed)
+            {
+                w.Window.Close();
+            }
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task WithNoRefreshRunningAFeedWriteInFlightIsStillAskedAbout()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        IDisposable write = HoldFeedWrite(w.Records, "AS64500");
+        bool closed = false;
+        w.Window.Closed += (_, _) => closed = true;
+        try
+        {
+            w.Ui.ConfirmResult = false;
+            w.Window.Close();
+            Settle(w.Window);
+
+            Assert.Equal(AppText.CloseFeedWriteTitle, Assert.Single(w.Ui.Confirms).Title);
+            Assert.False(closed);
+        }
+        finally
+        {
+            write.Dispose();
+            w.Ui.ConfirmResult = true;
+            if (!closed)
+            {
+                w.Window.Close();
+            }
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ANoToTheRefreshQuestionKeepsTheWindowOpenAndTheRunGoing()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        bool closed = false;
+        w.Window.Closed += (_, _) => closed = true;
+        try
+        {
+            w.Runner.TryStart();
+            w.Ui.ConfirmResult = false;
+
+            w.Window.Close();
+            Settle(w.Window);
+            await Task.Delay(50);
+            Settle(w.Window);
+
+            Assert.Equal(AppText.CloseRefreshTitle, Assert.Single(w.Ui.Confirms).Title);
+            Assert.False(closed);
+            Assert.True(w.Runner.IsRunning);
+            Assert.False(w.Refresher.Token.IsCancellationRequested);
+            Assert.False(w.Gate.IsHeld);
+            Assert.Equal(RefreshStartRefusal.Running, w.Runner.TryStart());
+        }
+        finally
+        {
+            w.Ui.ConfirmResult = true;
+            if (w.Runner.IsRunning)
+            {
+                w.Refresher.Finish(FakeFeedRefresher.Of());
+            }
+
+            if (!closed)
+            {
+                w.Window.Close();
+            }
+        }
+    }
+
+    // The AbuseIPDB page can't start under a refresh, so only Settings is asked before it and the page asks nothing
+    [AvaloniaFact]
+    public async Task TheRefreshIsAskedAfterUnsavedSettingsAndTheAbuseIpDbPageCantStartUnderIt()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        var held = new TaskCompletionSource();
+        bool closed = false;
+        w.Window.Closed += (_, _) => closed = true;
+        var runningAtEachQuestion = new List<bool>();
+        w.Ui.OnDialogOpen = () => runningAtEachQuestion.Add(w.Runner.IsRunning);
+        try
+        {
+            w.Settings.Settings.AbuseIpDbKeepDays = 60;
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            w.Abuse.DownloadGate = held;
+            Assert.False(w.AbusePage.DownloadCommand.CanExecute(null));
+            w.AbusePage.DownloadCommand.Execute(null);
+            Settle(w.Window);
+            Assert.True(w.Settings.HasUnsavedChanges);
+            Assert.False(w.AbusePage.IsWorking);
+            Assert.False(w.AbusePage.AsksBeforeClose);
+
+            w.Window.Close();
+            await WaitUntilAsync(() => closed);
+
+            Assert.Equal([AppText.CloseUnsavedTitle, AppText.CloseRefreshTitle],
+                w.Ui.Confirms.Select(confirm => confirm.Title));
+            Assert.Equal([true, true], runningAtEachQuestion);
+            Assert.True(w.Refresher.Token.IsCancellationRequested);
+            Assert.Empty(w.Abuse.DownloadTokens);
+        }
+        finally
+        {
+            w.Ui.OnDialogOpen = null;
+            held.TrySetResult();
+            if (!closed)
+            {
+                w.Settings.RevertSettingsCommand.Execute(null);
+                w.Window.Close();
+            }
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ThroughTheWindowARefreshStopsThePagesWritesAndAPageCallStopsTheRefresh()
+    {
+        var gate = new WorkGate();
+        var ui = new FakeUi();
+        using CheckedGooglePage google = await CheckedGooglePage.CreateAsync(gate);
+        var feeds = new FakeSavedFeedsService
+        {
+            Saved = new SavedFeedsRead(true, [SavedFeedsTextTests.Feed("AS64500", PoorMansFeed.Core.History.FeedKind.Asn)]),
+        };
+        var saved = new SavedFeedsViewModel(feeds, ui, gate, TimeProvider.System);
+        await saved.ActivateAsync();
+        RefreshWindow w = await ShowWithRefreshAsync(gate, google.Page, saved, ui);
+        MainWindow window = w.Window;
+        await WaitUntilAsync(() => saved.Feeds.Count == 1);
+        SavedFeedRow row = Assert.Single(saved.Feeds);
+        var held = new TaskCompletionSource();
+        try
+        {
+            Assert.True(w.AbusePage.DownloadCommand.CanExecute(null));
+            Assert.True(google.Page.CheckCommand.CanExecute(null));
+            Assert.True(google.Page.WriteFeedCommand.CanExecute(null));
+            Assert.True(saved.RetireCommand.CanExecute(row));
+
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            Settle(window);
+
+            Assert.False(w.AbusePage.DownloadCommand.CanExecute(null));
+            Assert.False(google.Page.CheckCommand.CanExecute(null));
+            Assert.False(google.Page.WriteFeedCommand.CanExecute(null));
+            Assert.False(saved.RetireCommand.CanExecute(row));
+            Assert.False(saved.RemoveCommand.CanExecute(row));
+            Assert.False(saved.ClearHistoryCommand.CanExecute(null));
+            Assert.True(saved.SearchCommand.CanExecute(null));
+            w.Refresher.Finish(FakeFeedRefresher.Of());
+            await w.Runner.PendingRun!;
+            Settle(window);
+            Assert.True(w.AbusePage.DownloadCommand.CanExecute(null));
+            Assert.True(google.Page.WriteFeedCommand.CanExecute(null));
+            Assert.True(saved.ClearHistoryCommand.CanExecute(null));
+
+            feeds.ClearGate = held;
+            saved.ClearHistoryCommand.Execute(null);
+            Settle(window);
+            Assert.True(saved.IsWorking);
+            Assert.Equal(RefreshStartRefusal.PageWorking, w.Runner.TryStart());
+            held.TrySetResult();
+            await WaitUntilAsync(() => !saved.IsWorking);
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            w.Refresher.Finish(FakeFeedRefresher.Of());
+            await w.Runner.PendingRun!;
+        }
+        finally
+        {
+            held.TrySetResult();
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task WhileARefreshRunsNothingElseStartsAndAfterItThePagesAndTheGateStillRefuse()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        var held = new TaskCompletionSource();
+        try
+        {
+            Assert.True(w.Vm.UpdateDatasetCommand.CanExecute(null));
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            Settle(w.Window);
+
+            Assert.False(w.Vm.UpdateDatasetCommand.CanExecute(null));
+            Assert.Equal(RefreshStartRefusal.Running, w.Runner.TryStart());
+            w.Refresher.Finish(FakeFeedRefresher.Of());
+            await w.Runner.PendingRun!;
+            Settle(w.Window);
+            Assert.True(w.Vm.UpdateDatasetCommand.CanExecute(null));
+
+            w.Abuse.DownloadGate = held;
+            w.AbusePage.DownloadCommand.Execute(null);
+            Settle(w.Window);
+            Assert.True(w.AbusePage.IsWorking);
+            Assert.Equal(RefreshStartRefusal.PageWorking, w.Runner.TryStart());
+            using (w.Gate.Hold())
+            {
+                Assert.Equal(RefreshStartRefusal.GateBusy, w.Runner.TryStart());
+            }
+
+            held.TrySetResult();
+            await WaitUntilAsync(() => !w.AbusePage.IsWorking);
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            w.Refresher.Finish(FakeFeedRefresher.Of());
+        }
+        finally
+        {
+            held.TrySetResult();
+            w.Window.Close();
         }
     }
 
@@ -2071,6 +2510,10 @@ public sealed class MainWindowTests
             Assert.False(page.HasActionText);
             Assert.Contains("placeholder", action.Classes);
             Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(action));
+            // Both lines hold two lines of text in a fixed height, the status's beside the grouping bar
+            Assert.Equal(36, action.Bounds.Height);
+            Assert.Equal(36, ((Control)status.Parent!).Bounds.Height);
+            Assert.All(new[] { status, action }, line => Assert.Equal((TextWrapping.Wrap, 2), (line.TextWrapping, line.MaxLines)));
 
             // The facts: the last download over the downloads left and the counts, each with the whole line as its tip
             TextBlock facts = window.FindControl<TextBlock>("AbuseFacts")!;
@@ -2228,12 +2671,135 @@ public sealed class MainWindowTests
         }
     }
 
-    // A right-click in the gap between the first row's first two columns, where no text is: the row's own
-    // background is all that can take it there
-    private static (ContextMenu Menu, MenuItem Ipinfo, MenuItem AbuseIpDb) RightClickFirstRowGap(MainWindow window)
+    [AvaloniaFact]
+    public async Task ACloudRangeRowsMenuCopiesThatRowsNetworkAndAsNumber()
+    {
+        var service = WithDataset();
+        var vm = await StartAsync(service);
+        AzureFeedViewModel azure = NewAzureViewModel(service, out _);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, azure: azure);
+        window.Show();
+        try
+        {
+            Navigate(window, "NavAzure");
+            azure.SelectedService = azure.Services.Single(option => option.BaseName == "Storage");
+            azure.SelectedRegion = azure.Regions.Single(option => option.TagName == "Storage.SoutheastAsia");
+            await azure.CheckCommand.ExecuteAsync(null);
+            Settle(window);
+
+            ItemsControl list = PanelOf(window, azure).FindControl<ItemsControl>("CloudRangeList")!;
+            CloudRangeRow shown = azure.Rows[1];
+            Border row = RightClickGap(window, list, shown, textIndex: 0);
+            ContextMenu menu = row.ContextMenu!;
+            Assert.True(menu.IsOpen);
+            List<MenuItem> items = menu.Items.OfType<MenuItem>().ToList();
+            Assert.Equal([AppText.CopyNetwork, AppText.CopyAsNumber], items.Select(item => item.Header as string));
+            // The cast parent binding reaches the page's commands from the row's menu, the row as their parameter
+            Assert.Same(azure.CopyNetworkCommand, items[0].Command);
+            Assert.Same(azure.CopyAsNumberCommand, items[1].Command);
+            Assert.Same(shown, items[0].CommandParameter);
+            Assert.Same(shown, items[1].CommandParameter);
+            Assert.True(items[0].IsEffectivelyEnabled);
+            Assert.True(items[1].IsEffectivelyEnabled);
+            menu.Close();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // The menu sits on the list card, which is off while the page's inputs are (a save, before start-up): a known limit
+    [AvaloniaFact]
+    public async Task AnExceptionRowsMenuCopiesThatRowsNetworkAndIsOffWhileTheInputsAre()
+    {
+        var service = WithDataset();
+        service.Exceptions = ExceptionList.Create([ExceptionEntryTests.Entry("192.0.2.0/24", "Head office"),
+                                                   ExceptionEntryTests.Entry("2001:db8::/32", "Lab")]);
+        var ui = new FakeUi();
+        (MainViewModel vm, SettingsPageViewModel page) = await StartWithSettingsPageAsync(service, ui);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, settings: page);
+        window.Show();
+        try
+        {
+            Navigate(window, "NavSettings");
+            // The list sits low on the page, and a virtualised list makes no row until it is in view
+            ScrollViewer scroll = window.FindControl<ScrollViewer>("SettingsScroll")!;
+            Border card = window.FindControl<Border>("ExceptionsListCard")!;
+            scroll.Offset = new Vector(0, card.TranslatePoint(new Point(0, 0), (Visual)scroll.Content!)!.Value.Y);
+            Settle(window);
+            ItemsControl list = window.FindControl<ItemsControl>("ExceptionItems")!;
+            ExceptionRow shown = page.Exceptions.Rows[1];
+            Border row = RightClickGap(window, list, shown, textIndex: 0);
+            ContextMenu menu = row.ContextMenu!;
+            Assert.True(menu.IsOpen);
+            MenuItem copy = Assert.Single(menu.Items.OfType<MenuItem>());
+            Assert.Equal(AppText.CopyNetwork, copy.Header);
+            Assert.Same(page.CopyExceptionNetworkCommand, copy.Command);
+            Assert.Same(shown, copy.CommandParameter);
+            Assert.True(copy.IsEffectivelyEnabled);
+
+            copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await WaitUntilAsync(() => ui.ClipboardText is not null);
+            Assert.Equal("2001:db8::/32", ui.ClipboardText);
+            menu.Close();
+            Settle(window);
+
+            service.SaveExceptionsPending = new TaskCompletionSource();
+            page.Exceptions.Remove(page.Exceptions.Rows[0]);
+            Task save = page.SaveExceptionsCommand.ExecuteAsync(null);
+            Settle(window);
+            Assert.False(page.CanEditInputs);
+            Assert.True(page.CopyExceptionNetworkCommand.CanExecute(shown));
+            // The command would run, but a disabled row takes no right-click, so its menu doesn't open
+            row = list.GetVisualDescendants().OfType<Border>()
+                .First(border => border.Classes.Contains("row") && ReferenceEquals(border.DataContext, shown));
+            Assert.False(row.IsEffectivelyEnabled);
+            TextBlock network = row.GetVisualDescendants().OfType<TextBlock>().First();
+            Point gap = network.TranslatePoint(new Point(network.Bounds.Width + 6, network.Bounds.Height / 2), window)!.Value;
+            window.MouseDown(gap, MouseButton.Right);
+            window.MouseUp(gap, MouseButton.Right);
+            Settle(window);
+            Assert.False(row.ContextMenu!.IsOpen);
+
+            service.SaveExceptionsPending.SetResult();
+            await save;
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // A right-click just after one of the row's texts, where no text is: only the row's own background takes it there
+    private static Border RightClickGap(MainWindow window, ItemsControl list, object shown, int textIndex)
+    {
+        Border row = list.GetVisualDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("row") && ReferenceEquals(border.DataContext, shown));
+        TextBlock text = row.GetVisualDescendants().OfType<TextBlock>().ElementAt(textIndex);
+        Point gap = text.TranslatePoint(new Point(text.Bounds.Width + 6, text.Bounds.Height / 2), window)!.Value;
+        Assert.Same(row, window.InputHitTest(gap));
+        // Headless drawing hit-tests a border's whole rectangle, with or without a fill, so the fill that makes the
+        // gap hit-testable on a real renderer is pinned here
+        Assert.Equal(Colors.Transparent, Assert.IsAssignableFrom<ISolidColorBrush>(row.Background).Color);
+
+        window.MouseDown(gap, MouseButton.Right);
+        window.MouseUp(gap, MouseButton.Right);
+        Settle(window);
+        return row;
+    }
+
+    // A right-click in the gap between a row's first two columns, where no text is: the row's own background is all
+    // that can take it there
+    private static (ContextMenu Menu, MenuItem Ipinfo, MenuItem AbuseIpDb, MenuItem CopyNetwork, MenuItem CopyAsNumber)
+        RightClickRowGap(MainWindow window, int index = 0)
     {
         ItemsControl list = window.FindControl<ItemsControl>("ResultsList")!;
-        Border row = list.GetVisualDescendants().OfType<Border>().First(border => border.Classes.Contains("row"));
+        object shown = ((MainViewModel)window.DataContext!).Results[index];
+        Border row = list.GetVisualDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("row") && ReferenceEquals(border.DataContext, shown));
         TextBlock network = row.GetVisualDescendants().OfType<TextBlock>().First();
         Point gap = network.TranslatePoint(new Point(network.Bounds.Width + 6, network.Bounds.Height / 2), window)!.Value;
         IInputElement? hit = window.InputHitTest(gap);
@@ -2249,8 +2815,9 @@ public sealed class MainWindowTests
         ContextMenu menu = list.ContextMenu!;
         Assert.True(menu.IsOpen);
         List<MenuItem> items = menu.Items.OfType<MenuItem>().ToList();
-        Assert.Equal([AppText.OpenInIpinfo, AppText.OpenInAbuseIpDb], items.Select(item => item.Header as string));
-        return (menu, items[0], items[1]);
+        Assert.Equal([AppText.OpenInIpinfo, AppText.OpenInAbuseIpDb, AppText.CopyNetwork, AppText.CopyAsNumber],
+                     items.Select(item => item.Header as string));
+        return (menu, items[0], items[1], items[2], items[3]);
     }
 
     [AvaloniaFact]
@@ -2269,7 +2836,7 @@ public sealed class MainWindowTests
         try
         {
             Settle(window);
-            (ContextMenu menu, MenuItem ipinfo, MenuItem abuse) = RightClickFirstRowGap(window);
+            (ContextMenu menu, MenuItem ipinfo, MenuItem abuse, _, _) = RightClickRowGap(window);
 
             Assert.Same(vm.OpenInIpinfoCommand, ipinfo.Command);
             Assert.Same(vm.OpenInAbuseIpDbCommand, abuse.Command);
@@ -2302,7 +2869,7 @@ public sealed class MainWindowTests
         try
         {
             Settle(window);
-            (ContextMenu menu, MenuItem ipinfo, MenuItem abuse) = RightClickFirstRowGap(window);
+            (ContextMenu menu, MenuItem ipinfo, MenuItem abuse, _, _) = RightClickRowGap(window);
 
             Assert.True(ipinfo.IsEffectivelyEnabled);
             Assert.False(abuse.IsEffectivelyEnabled);
@@ -2315,6 +2882,153 @@ public sealed class MainWindowTests
         }
         finally
         {
+            window.Close();
+        }
+    }
+
+    private static readonly NetworkRecord[] MenuRows =
+    [
+        new("8.8.8.0/24", "US", "United States", "NA", "AS15169", "Google LLC", "google.com"),
+        new("8.0.0.0/9", "US", "United States", "NA", "AS3356", "Level 3", "lumen.com"),
+        new("8.8.0.0/16", "US", "United States", "NA", null, null, null),
+        new("8.0.0.0/8", "US", "United States", "NA", "AS15169 AS3356", "Example", null),
+    ];
+
+    private static async Task<(MainWindow Window, MainViewModel Vm, FakeUi Ui)> MenuRowsShownAsync()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var vm = NewViewModel(service, ui);
+        await vm.InitializeAsync();
+        var address = new SearchQuery(SearchKind.IpAddress, "8.8.8.8", 0, new byte[] { 8, 8, 8, 8 });
+        service.SearchFunc = (_, _) => new SearchResult(SearchOutcome.Found, address, MenuRows, MenuRows.Length);
+        vm.SearchText = "8.8.8.8";
+        await vm.SearchCommand.ExecuteAsync(null);
+        var window = new MainWindow(vm);
+        window.Show();
+        Settle(window);
+        return (window, vm, ui);
+    }
+
+    [AvaloniaFact]
+    public async Task TheSecondRowsMenuCopiesThatRowsNetworkAndAsNumber()
+    {
+        var (window, vm, ui) = await MenuRowsShownAsync();
+        try
+        {
+            string searchLine = vm.ResultsActionText;
+            (ContextMenu menu, MenuItem ipinfo, MenuItem abuse, MenuItem network, MenuItem asNumber) = RightClickRowGap(window, 1);
+
+            Assert.Same(vm.Results[1], vm.MenuRow);
+            Assert.Same(vm.OpenInIpinfoCommand, ipinfo.Command);
+            Assert.Same(vm.OpenInAbuseIpDbCommand, abuse.Command);
+            Assert.Same(vm.CopyNetworkCommand, network.Command);
+            Assert.Same(vm.CopyAsNumberCommand, asNumber.Command);
+            Assert.True(network.IsEffectivelyEnabled);
+            Assert.True(asNumber.IsEffectivelyEnabled);
+
+            network.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Settle(window);
+            Assert.Equal("8.0.0.0/9", ui.ClipboardText);
+            menu.Close();
+            Settle(window);
+
+            (menu, _, _, _, asNumber) = RightClickRowGap(window, 1);
+            asNumber.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Settle(window);
+            Assert.Equal("AS3356", ui.ClipboardText);
+            Assert.Equal(searchLine, vm.ResultsActionText);
+            Assert.Empty(ui.OpenedPages);
+            menu.Close();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task CopyAsNumberIsOffOnARowWithNoAsNumberAndCopyNetworkStaysOn()
+    {
+        var (window, vm, _) = await MenuRowsShownAsync();
+        try
+        {
+            foreach (int index in new[] { 2, 3 })
+            {
+                (ContextMenu menu, _, _, MenuItem network, MenuItem asNumber) = RightClickRowGap(window, index);
+
+                Assert.Same(vm.Results[index], vm.MenuRow);
+                Assert.True(network.IsEffectivelyEnabled);
+                Assert.False(asNumber.IsEffectivelyEnabled);
+                menu.Close();
+                Settle(window);
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task AMenuRequestFromNoRowLeavesNothingToCopy()
+    {
+        var (window, vm, _) = await MenuRowsShownAsync();
+        try
+        {
+            // A row's menu first, so the row recorded then can't carry over to a request from no row
+            (ContextMenu menu, _, _, _, _) = RightClickRowGap(window, 0);
+            menu.Close();
+            Settle(window);
+            Assert.NotNull(vm.MenuRow);
+
+            window.FindControl<ItemsControl>("ResultsList")!.RaiseEvent(new ContextRequestedEventArgs());
+            Settle(window);
+
+            Assert.True(menu.IsOpen);
+            Assert.Null(vm.MenuRow);
+            List<MenuItem> items = menu.Items.OfType<MenuItem>().ToList();
+            Assert.False(items[2].IsEffectivelyEnabled);
+            Assert.False(items[3].IsEffectivelyEnabled);
+            Assert.True(items[0].IsEffectivelyEnabled);
+            menu.Close();
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task TheMenuCopiesAreOffWhileASearchIsOut()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var vm = NewViewModel(service, ui);
+        await vm.InitializeAsync();
+        var address = new SearchQuery(SearchKind.IpAddress, "8.8.8.8", 0, new byte[] { 8, 8, 8, 8 });
+        service.SearchFunc = (_, _) => new SearchResult(SearchOutcome.Found, address, MenuRows, MenuRows.Length);
+        vm.SearchText = "8.8.8.8";
+        await vm.SearchCommand.ExecuteAsync(null);
+        var window = new MainWindow(vm);
+        window.Show();
+        var gate = new TaskCompletionSource();
+        service.SearchGate = gate;
+        Task search = Task.CompletedTask;
+        try
+        {
+            Settle(window);
+            search = vm.SearchCommand.ExecuteAsync(null);
+            (ContextMenu menu, _, _, MenuItem network, MenuItem asNumber) = RightClickRowGap(window, 1);
+
+            Assert.False(network.IsEffectivelyEnabled);
+            Assert.False(asNumber.IsEffectivelyEnabled);
+            menu.Close();
+        }
+        finally
+        {
+            gate.TrySetResult();
+            await search;
             window.Close();
         }
     }
@@ -2350,13 +3064,16 @@ public sealed class MainWindowTests
         try
         {
             Navigate(window, "NavSettings");
-            Button update = window.FindControl<Button>("UpdateButton")!;
+            window.ShowDatasetUpdateWindow();
+            OpenDatasetFlyout(window);
+            // The drop-down's check and the update window's Cancel update stand for the card's buttons
+            Button update = window.FindControl<Button>("CheckForUpdatesButton")!;
             // The page's buttons wait on the same gate as Lookup's
             Button settings = window.FindControl<Button>("ChooseFolderButton")!;
             Button resetToken = window.FindControl<Button>("ResetTokenButton")!;
             Button setKey = window.FindControl<Button>("SetAbuseKeyButton")!;
             Button export = window.FindControl<Button>("ExportButton")!;
-            Button cancel = window.FindControl<Button>("CancelUpdateButton")!;
+            Button cancel = window.UpdateWindow!.FindControl<Button>("CancelUpdateButton")!;
             Assert.Same(page.ResetTokenCommand, resetToken.Command);
             Assert.True(update.IsEffectivelyEnabled);
             Assert.True(settings.IsEffectivelyEnabled);
@@ -2559,7 +3276,7 @@ public sealed class MainWindowTests
             Navigate(window, "NavSettings");
             page.Exceptions.NetworkText = "192.0.2.0/24";
             page.AddExceptionCommand.Execute(null);
-            foreach (string other in new[] { "NavLookup", "NavGoogleCloud", "NavAzure", "NavAws" })
+            foreach (string other in new[] { "NavLookup", "NavGoogleCloud", "NavAzure", "NavAws", "NavCloudSearch" })
             {
                 Navigate(window, other);
                 Assert.True(page.HasUnsavedChanges);
@@ -2730,7 +3447,7 @@ public sealed class MainWindowTests
         if (vm.PendingCheck is { } check)
             await check;
         var google = new GoogleCloudFeedViewModel(
-            new GoogleCloudFeedService(service, new HttpClient(), new CoreOptions(), TimeProvider.System, Path.GetTempPath()),
+            new GoogleCloudFeedService(service, new HttpClient(), new CoreOptions(), TimeProvider.System, null, Path.GetTempPath()),
             service, ui, new WorkGate());
         var window = new MainWindow();
         window.AttachViewModel(vm, google);
@@ -3859,5 +4576,297 @@ public sealed class MainWindowTests
         {
             owner.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public async Task The_saved_feeds_heading_has_the_Refresh_all_button()
+    {
+        MainViewModel vm = await StartAsync(WithDataset());
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        using var runner = new RefreshAllRunner(new FakeFeedRefresher(), gate, new FakeUi());
+        using var page = new SavedFeedsViewModel(new FakeSavedFeedsService(), new FakeUi(), gate, TimeProvider.System,
+            runner);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, savedFeeds: page, gate: gate);
+        window.Show();
+        try
+        {
+            Navigate(window, "NavSavedFeeds");
+            Grid heading = window.FindControl<Grid>("SavedFeedsHeading")!;
+            Button button = heading.GetVisualDescendants().OfType<Button>()
+                .Single(candidate => AutomationProperties.GetName(candidate) == AppText.RefreshAllButton);
+            Assert.Equal(1, Grid.GetColumn(button));
+            Assert.Equal(AppText.RefreshAllButton, button.Content);
+            Assert.Equal(AppText.RefreshAllTip, ToolTip.GetTip(button));
+            Assert.Same(page.RefreshAllCommand, button.Command);
+            Assert.True(button.IsEffectivelyEnabled);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+    // ---- the Refresh all timer ----
+
+    private sealed record TimerWindow(MainWindow Window, MainViewModel Vm, SettingsPageViewModel Settings,
+                                      RefreshTimer Timer, RefreshAllRunner Runner, FakeFeedRefresher Refresher,
+                                      FakeUi Ui, Microsoft.Extensions.Time.Testing.FakeTimeProvider Time);
+
+    // Not started: the window starts the timer when the main view model's start-up opens the service
+    private static TimerWindow NewTimerWindow(FakeIpInfoService service)
+    {
+        var ui = new FakeUi();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(new DateTimeOffset(2026, 11, 1, 8, 0, 0, TimeSpan.Zero));
+        (MainViewModel vm, SettingsPageViewModel settings) = NewWithSettingsPage(service, ui);
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        var refresher = new FakeFeedRefresher();
+        var runner = new RefreshAllRunner(refresher, gate, ui)
+        {
+            ProgressFactory = handler => new ImmediateProgress<RefreshProgress>(handler),
+        };
+        var timer = new RefreshTimer(runner, () => service.Settings, () => false, ui, time);
+        var window = new MainWindow();
+        window.AttachViewModel(vm, settings: settings, refreshAll: runner, refreshTimer: timer);
+        return new TimerWindow(window, vm, settings, timer, runner, refresher, ui, time);
+    }
+
+    private static async Task InitializeAsync(MainViewModel vm)
+    {
+        await vm.InitializeAsync();
+        if (vm.PendingCheck is { } check)
+            await check;
+    }
+
+    [AvaloniaFact]
+    public async Task The_timer_starts_when_start_up_opens_the_service_and_a_Settings_save_reaches_it()
+    {
+        var service = WithDataset();
+        TimerWindow w = NewTimerWindow(service);
+        w.Window.Show();
+        try
+        {
+            Assert.Null(w.Timer.NextDueUtc);
+            service.Settings = service.Settings with { RefreshAllOnTimer = true, RefreshAllEveryHours = 3 };
+            await InitializeAsync(w.Vm);
+            Assert.Equal(w.Time.GetUtcNow().AddHours(3), w.Timer.NextDueUtc);
+
+            w.Settings.Settings.RefreshAllOnTimer = false;
+            await w.Settings.SaveSettingsCommand.ExecuteAsync(null);
+            Assert.Null(w.Timer.NextDueUtc);
+            w.Time.Advance(TimeSpan.FromMinutes(30));
+            w.Settings.Settings.RefreshAllOnTimer = true;
+            w.Settings.Settings.RefreshAllEveryHours = 2;
+            await w.Settings.SaveSettingsCommand.ExecuteAsync(null);
+
+            Assert.True(service.Settings.RefreshAllOnTimer);
+            Assert.Equal(w.Time.GetUtcNow().AddHours(2), w.Timer.NextDueUtc);
+        }
+        finally
+        {
+            w.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task The_close_disposes_the_timer_so_a_tick_posted_before_it_starts_nothing()
+    {
+        var service = WithDataset();
+        service.Settings = service.Settings with { RefreshAllOnTimer = true, RefreshAllEveryHours = 1 };
+        TimerWindow w = NewTimerWindow(service);
+        w.Window.Show();
+        await InitializeAsync(w.Vm);
+        Assert.NotNull(w.Timer.NextDueUtc);
+
+        w.Time.Advance(TimeSpan.FromHours(1));
+        int posted = w.Ui.PostedCount;
+        Assert.True(posted > 0);
+        w.Window.Close();
+
+        Assert.Null(w.Timer.NextDueUtc);
+        w.Ui.RunPosted();
+        Assert.Equal(0, w.Refresher.Calls);
+        Assert.False(w.Runner.IsRunning);
+    }
+
+    private sealed class FakeHold : IDisposable
+    {
+        public int Disposed { get; private set; }
+
+        public void Dispose() => Disposed++;
+    }
+
+    private static async Task EndRunAsync(RefreshWindow w)
+    {
+        Task run = w.Runner.PendingRun!;
+        w.Refresher.Finish(FakeFeedRefresher.Of());
+        await run;
+    }
+
+    [AvaloniaFact]
+    public async Task A_run_takes_one_App_Nap_hold_and_its_end_gives_it_back()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        var holds = new List<FakeHold>();
+        w.Window.RequestAppNapHold = () =>
+        {
+            var hold = new FakeHold();
+            holds.Add(hold);
+            return Task.FromResult<IDisposable>(hold);
+        };
+        try
+        {
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            Settle(w.Window);
+            FakeHold held = Assert.Single(holds);
+            Assert.Equal(0, held.Disposed);
+
+            await EndRunAsync(w);
+            Settle(w.Window);
+            Assert.Equal(1, held.Disposed);
+
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart(RefreshTrigger.Timer));
+            Settle(w.Window);
+            Assert.Equal(2, holds.Count);
+            await EndRunAsync(w);
+            Assert.All(holds, hold => Assert.Equal(1, hold.Disposed));
+        }
+        finally
+        {
+            w.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task A_hold_that_arrives_after_its_run_ended_is_given_back_at_once()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        var request = new TaskCompletionSource<IDisposable>();
+        int requests = 0;
+        w.Window.RequestAppNapHold = () =>
+        {
+            requests++;
+            return request.Task;
+        };
+        try
+        {
+            w.Runner.TryStart();
+            await EndRunAsync(w);
+            var hold = new FakeHold();
+            request.SetResult(hold);
+            Settle(w.Window);
+            await WaitUntilAsync(() => hold.Disposed > 0);
+
+            Assert.Equal(1, requests);
+            Assert.Equal(1, hold.Disposed);
+        }
+        finally
+        {
+            w.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task A_run_started_while_the_hold_is_on_its_way_asks_for_no_second_and_keeps_the_first()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        var request = new TaskCompletionSource<IDisposable>();
+        int requests = 0;
+        w.Window.RequestAppNapHold = () =>
+        {
+            requests++;
+            return request.Task;
+        };
+        try
+        {
+            w.Runner.TryStart();
+            await EndRunAsync(w);
+            w.Runner.TryStart(RefreshTrigger.Timer);
+            var hold = new FakeHold();
+            request.SetResult(hold);
+            Settle(w.Window);
+            await Task.Delay(20);
+            Settle(w.Window);
+
+            Assert.Equal(1, requests);
+            Assert.Equal(0, hold.Disposed);
+
+            await EndRunAsync(w);
+            Assert.Equal(1, hold.Disposed);
+        }
+        finally
+        {
+            w.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task A_failed_hold_request_is_ignored_and_the_run_goes_on()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        w.Window.RequestAppNapHold = () => Task.FromException<IDisposable>(new InvalidOperationException("no hold"));
+        try
+        {
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            Settle(w.Window);
+            Assert.True(w.Runner.IsRunning);
+            await EndRunAsync(w);
+            Assert.False(w.Runner.IsRunning);
+        }
+        finally
+        {
+            w.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task A_failed_hold_request_is_made_once_a_run_not_at_every_progress_report()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        int requests = 0;
+        w.Window.RequestAppNapHold = () =>
+        {
+            requests++;
+            return Task.FromException<IDisposable>(new InvalidOperationException("no hold"));
+        };
+        try
+        {
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart());
+            Settle(w.Window);
+            w.Refresher.Progress!.Report(new RefreshProgress(RefreshStep.Dataset, 0, 1, null, null));
+            w.Refresher.Progress!.Report(new RefreshProgress(RefreshStep.Sources, 0, 1, null, null));
+            Settle(w.Window);
+            Assert.Equal(1, requests);
+
+            await EndRunAsync(w);
+            Settle(w.Window);
+            Assert.Equal(RefreshStartRefusal.None, w.Runner.TryStart(RefreshTrigger.Timer));
+            Settle(w.Window);
+            Assert.Equal(2, requests);
+            await EndRunAsync(w);
+        }
+        finally
+        {
+            w.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task The_close_gives_back_the_hold_a_run_holds()
+    {
+        RefreshWindow w = await ShowWithRefreshAsync();
+        var hold = new FakeHold();
+        w.Window.RequestAppNapHold = () => Task.FromResult<IDisposable>(hold);
+        bool closed = false;
+        w.Window.Closed += (_, _) => closed = true;
+        w.Runner.TryStart();
+        Settle(w.Window);
+        Assert.Equal(0, hold.Disposed);
+
+        w.Window.Close();
+        await WaitUntilAsync(() => closed);
+
+        Assert.Equal(1, hold.Disposed);
     }
 }

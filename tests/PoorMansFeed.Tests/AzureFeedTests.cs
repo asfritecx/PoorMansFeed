@@ -2,6 +2,7 @@ using System.Text;
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.Azure;
 using PoorMansFeed.Core.CloudFeeds;
+using PoorMansFeed.Core.History;
 using Microsoft.Extensions.Time.Testing;
 
 namespace PoorMansFeed.Tests;
@@ -85,15 +86,28 @@ public sealed class AzureFeedTests : IDisposable
     }
 
     [Fact]
-    public async Task An_Unknown_Tag_Selects_Nothing_And_No_Dataset_Is_Still_Reported_First()
+    public async Task A_Tag_That_Is_Gone_Fails_As_PickGone_Before_The_Dataset_Is_Asked()
     {
-        CheckResult unknown = await Service().CheckAsync(Catalogue(), new AzureTagSelection("Nope"), Ct);
-        Assert.Equal(CheckFailure.NothingSelected, unknown.Failure);
+        CheckResult gone = await Service().CheckAsync(Catalogue(), new AzureTagSelection("Nope"), Ct);
+        Assert.Equal(CheckFailure.PickGone, gone.Failure);
+        Assert.Null(gone.Check);
+        Assert.Equal(0, _ipinfo.OverlapCalls);
 
         _ipinfo.Dataset = null;
+        Assert.Equal(CheckFailure.PickGone, (await Service().CheckAsync(Catalogue(), new AzureTagSelection("Nope"), Ct)).Failure);
         CheckResult noDataset = await Service().CheckAsync(Catalogue(), new AzureTagSelection("Storage"), Ct);
         Assert.Equal(CheckFailure.NoDataset, noDataset.Failure);
         Assert.Null(noDataset.Check);
+    }
+
+    [Fact]
+    public async Task The_Check_Carries_The_Tag_It_Was_Found_Under()
+    {
+        _ipinfo.OverlapFunc = Found(_ => [Group("microsoft.com")]);
+
+        CheckResult result = await Service().CheckAsync(Catalogue(), new AzureTagSelection("Storage.SoutheastAsia"), Ct);
+
+        Assert.Equal(new CloudFeedPick(FeedKind.Azure, null, false, "Storage.SoutheastAsia", null, null), result.Check!.Pick);
     }
 
     [Fact]

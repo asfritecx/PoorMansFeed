@@ -94,8 +94,8 @@ public static partial class AppText
         ModSecurityStartFreshRuleIds,
         "Unticking a feed type in Settings leaves its files as they were, and they stop updating: Write feed and "
             + "Export no longer write or delete them.",
-        "Empty feed, on " + AbuseIpDbTitle + ", empties the AbuseIPDB files in both the fortigate and modsecurity "
-            + "folders, whatever is ticked. To retire the AbuseIPDB list of a type you unticked, press Empty feed and "
+        "Retire feed, on " + AbuseIpDbTitle + ", empties the AbuseIPDB files in both the fortigate and modsecurity "
+            + "folders, whatever is ticked. To retire the AbuseIPDB list of a type you unticked, press Retire feed and "
             + "then Write feed, which fills the ticked type's files again.",
         "On nginx, ModSecurity writes a log-only match to the error_log at info, so an error_log at notice or above "
             + "hides it; the audit log has it too while SecAuditEngine is On. On Apache it writes log-only, deny and "

@@ -423,7 +423,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             WriteUnreadableList();
         string before = Sha(ListPath);
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal(Failed(newer ? AbuseIpDbFailure.ListNewer : AbuseIpDbFailure.ListUnreadable), result);
         Assert.Equal(0, _handler.Calls);
@@ -471,17 +471,17 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         DateTimeOffset reset = Now.AddHours(2);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", reset);
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         int reads = _store.Reads;
 
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await service.DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(1, _handler.Calls);
         Assert.Equal(reads, _store.Reads);
         Assert.Equal(reset, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
 
         _time.Advance(TimeSpan.FromHours(2));
         Assert.Null((await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.Equal(2, _handler.Calls);
     }
 
@@ -492,8 +492,8 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", null);
         AbuseIpDbService service = Service();
 
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(2, _handler.Calls);
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
@@ -508,10 +508,10 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         DateTimeOffset reset = Now.AddHours(1);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", reset);
         AbuseIpDbService service = Service();
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
         _time.Advance(TimeSpan.FromHours(2));
 
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(2, _handler.Calls);
     }
@@ -524,7 +524,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         for (int i = 0; i < AbuseIpDbLimits.FreeBlacklistDownloadsPerDay + 1; i++)
-            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay + 1, _handler.Calls);
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
@@ -539,11 +539,11 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
         for (int i = 0; i < AbuseIpDbLimits.FreeBlacklistDownloadsPerDay; i++)
-            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         int reads = _store.Reads;
 
         Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, NextUtcMidnight),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay, _handler.Calls);
         Assert.Equal(reads, _store.Reads);
@@ -560,13 +560,13 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
         for (int i = 0; i < AbuseIpDbLimits.FreeBlacklistDownloadsPerDay; i++)
-            await service.DownloadBlacklistAsync(CancellationToken.None);
+            await service.DownloadBlacklistAsync(null, CancellationToken.None);
         _time.Advance(NextUtcMidnight - Now);
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
         Assert.Equal(0, status.DownloadsToday);
         Assert.Null(status.RefusedUntil);
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay + 1, _handler.Calls);
         Assert.Equal(1, (await service.GetStatusAsync(CancellationToken.None)).DownloadsToday);
@@ -580,8 +580,8 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.TooManyRequests, "{\"errors\":[]}", "5", "0", reset);
         AbuseIpDbService service = Service();
 
-        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, reset), await service.DownloadBlacklistAsync(CancellationToken.None));
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, reset), await service.DownloadBlacklistAsync(null, CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(1, _handler.Calls);
         Assert.Equal(new AbuseListStatus(AbuseListState.Usable, 0, 0, null, null, new AbuseRateLimit(5, 0, reset), 0, reset),
@@ -601,8 +601,8 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         DateTimeOffset retry = Now.AddMinutes(30);
 
-        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, retry), await service.DownloadBlacklistAsync(CancellationToken.None));
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, retry), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, retry), await service.DownloadBlacklistAsync(null, CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, retry), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(1, _handler.Calls);
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
@@ -616,7 +616,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => Answer(request, HttpStatusCode.Unauthorized, "{\"errors\":[]}");
 
-        Assert.Equal(Failed(AbuseIpDbFailure.KeyRejected), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.KeyRejected), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.True(_store.Marker);
         Assert.True(Encoding.UTF8.GetString(_store.Secret!) == Key, "The stored key changed.");
@@ -629,12 +629,12 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.Unauthorized, "{\"errors\":[]}", "5", "0", Now.AddHours(2));
         AbuseIpDbService service = Service();
         for (int i = 0; i < AbuseIpDbLimits.FreeBlacklistDownloadsPerDay; i++)
-            Assert.Equal(Failed(AbuseIpDbFailure.KeyRejected), await service.DownloadBlacklistAsync(CancellationToken.None));
+            Assert.Equal(Failed(AbuseIpDbFailure.KeyRejected), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         // The attempt made the list before the request; the answers left nothing in it
         Assert.Equal(EmptyStatus(AbuseListState.Usable), await service.GetStatusAsync(CancellationToken.None));
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay + 1, _handler.Calls);
         Assert.Equal(1, (await service.GetStatusAsync(CancellationToken.None)).DownloadsToday);
@@ -643,7 +643,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
     [Fact]
     public async Task No_key_sends_no_download()
     {
-        Assert.Equal(Failed(AbuseIpDbFailure.NoKey), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.NoKey), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(0, _handler.Calls);
     }
@@ -654,7 +654,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _store.ReadFailure = new SecretStoreException("The Keychain couldn't read the secret.");
 
-        Assert.Equal(Failed(AbuseIpDbFailure.KeyUnavailable), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.KeyUnavailable), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(0, _handler.Calls);
         Assert.True(_store.Marker);
@@ -666,7 +666,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
     {
         StoreKey("short-key-01234");
 
-        Assert.Equal(Failed(AbuseIpDbFailure.NoKey), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.NoKey), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(0, _handler.Calls);
         Assert.True(Encoding.UTF8.GetString(_store.Secret!) == "short-key-01234", "The stored key changed.");
@@ -684,7 +684,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             return ListAnswer(request, HttpStatusCode.OK, ListBody());
         };
 
-        await Service().DownloadBlacklistAsync(CancellationToken.None);
+        await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.True(sentKey == Key, "The Key header was not the saved key.");
         Assert.Equal("https://api.abuseipdb.com/api/v2/blacklist", Assert.Single(_handler.RequestedUris).OriginalString);
@@ -699,7 +699,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         int before = _ipinfo.SettingsReads;
 
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal("https://api.abuseipdb.com/api/v2/blacklist?ipVersion=4", Assert.Single(_handler.RequestedUris).OriginalString);
         // One read gives both the keep days and the switch, so a save during the key read can't split them
@@ -715,10 +715,10 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, true, 3, 2, 3, 0, 0, Generated, null, Counted: true),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
         _time.Advance(TimeSpan.FromMinutes(10));
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, false, 3, 2, 0, 0, 0, Generated, null, Counted: true),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(new AbuseListStatus(AbuseListState.Usable, 2, 1, Now.AddMinutes(10), Generated,
                                          new AbuseRateLimit(5, 3, reset), 2, null),
@@ -736,7 +736,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         Assert.Equal(Failed(AbuseIpDbFailure.BadResponse) with { Counted = true },
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(new AbuseListStatus(AbuseListState.Usable, 0, 0, null, null, null, 1, null),
                      await service.GetStatusAsync(CancellationToken.None));
@@ -753,7 +753,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, code, "{}", "5", "0", reset);
         AbuseIpDbService service = Service();
 
-        Assert.Equal(failure, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(failure, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(new AbuseListStatus(AbuseListState.Usable, 0, 0, null, null, new AbuseRateLimit(5, 0, reset), 0, reset),
                      await service.GetStatusAsync(CancellationToken.None));
@@ -770,7 +770,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         Assert.Equal(readable ? AbuseIpDbFailure.None : AbuseIpDbFailure.BadResponse,
-                     (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+                     (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
         Assert.Equal(1, status.DownloadsToday);
@@ -783,10 +783,10 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.TooManyRequests, "{\"errors\":[]}", "5", "3", Now.AddHours(21));
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.RateLimited, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.RateLimited, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
 
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(2, _handler.Calls);
     }
@@ -803,13 +803,13 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         int reads = _store.Reads;
         UnixFileMode mode = File.GetUnixFileMode(ListPath);
         File.SetUnixFileMode(ListPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
         try
         {
-            Assert.Equal(Failed(AbuseIpDbFailure.StorageError), await service.DownloadBlacklistAsync(CancellationToken.None));
+            Assert.Equal(Failed(AbuseIpDbFailure.StorageError), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
             Assert.Equal(1, _handler.Calls);
             Assert.Equal(reads, _store.Reads);
@@ -832,13 +832,13 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         int reads = _store.Reads;
         UnixFileMode mode = File.GetUnixFileMode(ListPath);
         File.SetUnixFileMode(ListPath, UnixFileMode.None);
         try
         {
-            Assert.Equal(Failed(AbuseIpDbFailure.StorageError), await service.DownloadBlacklistAsync(CancellationToken.None));
+            Assert.Equal(Failed(AbuseIpDbFailure.StorageError), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
             Assert.Equal(1, _handler.Calls);
             Assert.Equal(reads, _store.Reads);
@@ -856,11 +856,11 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = _ => throw new InvalidOperationException("unexpected");
         AbuseIpDbService service = Service();
         Assert.Equal(Failed(AbuseIpDbFailure.ServiceError),
-                     await service.DownloadBlacklistAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
 
         // Bounded, so a gate left held fails here rather than hanging the run
-        AbuseDownloadResult second = await service.DownloadBlacklistAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        AbuseDownloadResult second = await service.DownloadBlacklistAsync(null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(AbuseIpDbFailure.None, second.Failure);
         Assert.Equal(2, _handler.Calls);
@@ -876,7 +876,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         var time = new CancellingTimeProvider(_time, cancelOnCall: 2, cancel);
         var service = new AbuseIpDbService(_http, _ipinfo, _temp.Paths, new CoreOptions(), time, _store, _accounting, _freeBytes);
 
-        AbuseDownloadResult result = await service.DownloadBlacklistAsync(cancel.Token);
+        AbuseDownloadResult result = await service.DownloadBlacklistAsync(null, cancel.Token);
 
         Assert.True(cancel.IsCancellationRequested);
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, true, 3, 2, 3, 0, 0, Generated, null, Counted: true), result);
@@ -896,7 +896,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
                                          await Task.Delay(20, token);
                                      });
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(cancel.Token);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, cancel.Token);
 
         Assert.True(cancel.IsCancellationRequested);
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, true, 3, 2, 3, 0, 0, Generated, null, Counted: true), result);
@@ -912,7 +912,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => Bodied(ListAnswer(request, HttpStatusCode.OK, "{}", "5", "4", NextUtcMidnight), ListBody(),
                                      _ => throw new IOException("reset"));
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal(Failed(AbuseIpDbFailure.BadResponse) with { Counted = true }, result);
         Assert.Equal((new AbuseRateLimit(5, 4, NextUtcMidnight), Now, true), Assert.Single(_accounting.Writes));
@@ -937,7 +937,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             return ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight);
         };
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal(Failed(newer ? AbuseIpDbFailure.ListNewer : AbuseIpDbFailure.ListUnreadable) with { Counted = true }, result);
         Assert.Equal((new AbuseRateLimit(5, 4, NextUtcMidnight), Now, true), Assert.Single(_accounting.Writes));
@@ -967,7 +967,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         };
         try
         {
-            AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+            AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
             Assert.Equal(Failed(AbuseIpDbFailure.StorageError) with { Counted = true }, result);
             Assert.Equal((new AbuseRateLimit(5, 4, NextUtcMidnight), Now, true), Assert.Single(_accounting.Writes));
@@ -985,7 +985,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => Dated(ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight), Now.AddHours(-30));
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal(Failed(AbuseIpDbFailure.ClockWrong) with { Counted = true }, result);
     }
@@ -1010,7 +1010,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             _ => HttpStatusCode.OK,
         }, ListBody(), "5", "0", NextUtcMidnight);
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.NotEqual(AbuseIpDbFailure.None, result.Failure);
         Assert.False(result.Counted);
@@ -1033,11 +1033,11 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => Dated(ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", Now.AddHours(resetHours)),
                                     Now.AddHours(dateHours));
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         DateTimeOffset until = Now.AddHours(refusedHours);
 
         Assert.Equal(until, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, until), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, until), await service.DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(1, _handler.Calls);
     }
 
@@ -1059,7 +1059,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         // The result keeps the client's time, which is never earlier than now
         Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, reset > Now ? reset : Now),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
 
@@ -1077,7 +1077,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         DateTimeOffset until = Now.AddHours(1);
 
-        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, until), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, until), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
         Assert.Equal(until, status.RateLimit?.ResetAt);
@@ -1102,7 +1102,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         DateTimeOffset until = Now.AddMinutes(30);
 
-        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, until), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, until), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(until, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
     }
@@ -1116,10 +1116,10 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         DateTimeOffset reset = Now.AddHours(resetHours);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", reset);
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(refused ? reset : null, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
-        AbuseDownloadResult next = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult next = await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal(refused ? AbuseIpDbFailure.LimitReached : AbuseIpDbFailure.None, next.Failure);
         Assert.Equal(refused ? 1 : 2, _handler.Calls);
@@ -1130,7 +1130,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
     {
         StoreKey(Key);
         _respond = request => Dated(ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", Now.AddHours(12)), Now);
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         // The same data folder, read by a service whose clock is a day earlier (further back refuses the download for
         // the clock itself): the reset is 36 hours ahead of it
         var earlier = new FakeTimeProvider(Now.AddHours(-AbuseIpDbLimits.MaxClockDifferenceHours));
@@ -1138,7 +1138,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
 
         Assert.Null((await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.Equal(2, _handler.Calls);
     }
 
@@ -1147,7 +1147,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
     {
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight);
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         AbuseIpDbService ClockedAt(DateTimeOffset time) =>
             new(_http, _ipinfo, _temp.Paths, new CoreOptions(), new FakeTimeProvider(time), _store, _accounting, _freeBytes);
 
@@ -1178,14 +1178,14 @@ public sealed class AbuseIpDbServiceTests : IDisposable
     {
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight);
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         var earlier = new FakeTimeProvider(Now.AddHours(-AbuseIpDbLimits.MaxClockDifferenceHours).AddSeconds(-extraSeconds));
         AbuseIpDbService service = new(_http, _ipinfo, _temp.Paths, new CoreOptions(), earlier, _store, _accounting, _freeBytes);
         string before = Sha(ListPath);
         int reads = _store.Reads;
         int writes = _accounting.Writes.Count;
 
-        AbuseDownloadResult result = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         if (refused)
         {
@@ -1210,14 +1210,14 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         DateTimeOffset reset = Now.AddHours(6);
         _respond = request => Dated(ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", reset), Now);
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         var earlier = new FakeTimeProvider(reset - TimeSpan.FromHours(AbuseIpDbLimits.MaxResetAheadHours)
                                            - TimeSpan.FromSeconds(extraSeconds));
         AbuseIpDbService service = new(_http, _ipinfo, _temp.Paths, new CoreOptions(), earlier, _store, _accounting, _freeBytes);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
 
         Assert.Equal(refused ? reset : null, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
-        AbuseDownloadResult next = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult next = await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         if (refused)
             Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), next);
@@ -1237,7 +1237,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => Dated(ListAnswer(request, HttpStatusCode.OK, body), date);
         AbuseIpDbService service = Service();
 
-        AbuseDownloadResult first = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult first = await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal((AbuseIpDbFailure.None, true, generated), (first.Failure, first.NewGeneration, first.GeneratedAt));
         // The list's own times stay this computer's
@@ -1247,7 +1247,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         // The same list again 30 minutes later is no new generation
         _time.Advance(TimeSpan.FromMinutes(30));
         _respond = request => Dated(ListAnswer(request, HttpStatusCode.OK, body), date.AddMinutes(30));
-        AbuseDownloadResult again = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult again = await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         Assert.Equal((AbuseIpDbFailure.None, false, generated), (again.Failure, again.NewGeneration, again.GeneratedAt));
         status = await service.GetStatusAsync(CancellationToken.None);
@@ -1270,7 +1270,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         DateTimeOffset retryAt = Now.AddMinutes(retryMinutes);
 
-        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, retryAt), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, retryAt), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(remaining == "0" ? retryAt : null, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
     }
@@ -1288,7 +1288,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         };
         AbuseIpDbService service = Service();
 
-        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, reset), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.RateLimited, reset), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(reset, (await service.GetStatusAsync(CancellationToken.None)).RefusedUntil);
     }
@@ -1314,7 +1314,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         DateTimeOffset? refusedUntil = refusedMinutes is int minutes ? Now.AddMinutes(minutes) : null;
 
-        AbuseDownloadResult first = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult first = await service.DownloadBlacklistAsync(null, CancellationToken.None);
         Assert.Equal(AbuseIpDbFailure.RateLimited, first.Failure);
         Assert.Equal(Now.AddMinutes(namedMinutes), first.RetryAt);
 
@@ -1323,7 +1323,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         Assert.Equal(Now.AddMinutes(storedResetMinutes), status.RateLimit?.ResetAt);
         if (refusedUntil is DateTimeOffset until)
         {
-            Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, until), await service.DownloadBlacklistAsync(CancellationToken.None));
+            Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, until), await service.DownloadBlacklistAsync(null, CancellationToken.None));
             Assert.Equal(1, _handler.Calls);
         }
     }
@@ -1342,7 +1342,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, true, 3, 2, 3, 0, 0, Generated, null, Counted: true),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
         Assert.Equal((2, 1, 1), (status.IPv4Count, status.IPv6Count, status.DownloadsToday));
@@ -1363,7 +1363,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         Assert.Equal(Failed(AbuseIpDbFailure.BadResponse) with { Counted = true },
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
         Assert.Equal((0, 0, 1), (status.IPv4Count, status.IPv6Count, status.DownloadsToday));
@@ -1377,7 +1377,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = _ => throw new HttpRequestException("failed");
         AbuseIpDbService service = Service();
 
-        Assert.Equal(Failed(AbuseIpDbFailure.Offline), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.Offline), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(EmptyStatus(AbuseListState.Usable), await service.GetStatusAsync(CancellationToken.None));
     }
@@ -1389,13 +1389,13 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _ipinfo.Settings = new UserSettings { AbuseIpDbKeepDays = 0 };
         AbuseIpDbService service = Service();
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(Generated, Entry("8.8.8.8"), Entry("9.9.9.9")));
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         // Half a day: inside the one day that 0 is clamped to
         _time.Advance(TimeSpan.FromHours(12));
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(Generated.AddHours(12), Entry("8.8.8.8")));
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, true, 1, 0, 0, 0, 0, Generated.AddHours(12), null, Counted: true),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(2, (await service.GetStatusAsync(CancellationToken.None)).IPv4Count);
 
         // Past the day with no download: the keep days count from the last download, so the count doesn't change
@@ -1405,7 +1405,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         // Hidden by the keep days, not removed: nothing is removed before the year is up. 9.9.9.9 was within the keep
         // days of the last download and isn't within this one's, so it lapsed
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, true, 1, 0, 0, 1, 0, Generated.AddHours(24), null, Counted: true),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(1, (await service.GetStatusAsync(CancellationToken.None)).IPv4Count);
     }
 
@@ -1417,7 +1417,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
         _respond = request => ListAnswer(request, HttpStatusCode.OK,
                                          ListBody(Generated, Entry("8.8.8.8"), Entry("9.9.9.9"), Entry("2001:4860::8888")));
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
         AbuseListStatus before = await service.GetStatusAsync(CancellationToken.None);
 
         foreach (int days in new[] { 2, 400 - 2 })
@@ -1438,15 +1438,15 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _ipinfo.Settings = new UserSettings { AbuseIpDbKeepDays = 1 };
         AbuseIpDbService service = Service();
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(Generated, Entry("8.8.8.8"), Entry("9.9.9.9")));
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
         _time.Advance(TimeSpan.FromHours(1));
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(Generated.AddMinutes(30), Entry("8.8.8.8")));
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         _time.Advance(TimeSpan.FromDays(1));
         // 9.9.9.9 was within the keep day of the last download and isn't within this one's
         Assert.Equal(new AbuseDownloadResult(AbuseIpDbFailure.None, false, 1, 0, 0, 1, 0, Generated.AddMinutes(30), null, Counted: true),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(1, (await service.GetStatusAsync(CancellationToken.None)).IPv4Count);
     }
@@ -1458,13 +1458,13 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _ipinfo.Settings = new UserSettings { AbuseIpDbKeepDays = 1000 };
         AbuseIpDbService service = Service();
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(Generated, Entry("8.8.8.8"), Entry("9.9.9.9")));
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         _time.Advance(TimeSpan.FromDays(AbuseIpDbLimits.MaxKeepDays) + TimeSpan.FromSeconds(1));
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(Now.AddDays(AbuseIpDbLimits.MaxKeepDays), Entry("8.8.8.8")));
 
         // Without the clamp the cutoff would fall before the year the list keeps, and the merge would refuse it
-        AbuseDownloadResult result = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await service.DownloadBlacklistAsync(null, CancellationToken.None);
         Assert.Equal((AbuseIpDbFailure.None, 1), (result.Failure, result.Expired));
     }
 
@@ -1475,7 +1475,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         using var cancel = new CancellationTokenSource();
         cancel.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Service().DownloadBlacklistAsync(cancel.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Service().DownloadBlacklistAsync(null, cancel.Token));
 
         Assert.Equal(0, _store.Reads);
         Assert.Equal(0, _handler.Calls);
@@ -1498,9 +1498,9 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         using var http = new HttpClient(gated);
         AbuseIpDbService service = Service(http);
 
-        Task<AbuseDownloadResult> first = service.DownloadBlacklistAsync(CancellationToken.None);
+        Task<AbuseDownloadResult> first = service.DownloadBlacklistAsync(null, CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Task<AbuseDownloadResult> second = service.DownloadBlacklistAsync(CancellationToken.None);
+        Task<AbuseDownloadResult> second = service.DownloadBlacklistAsync(null, CancellationToken.None);
         await Task.WhenAny(second, Task.Delay(TimeSpan.FromMilliseconds(300)));
         Assert.False(second.IsCompleted);
         Assert.Equal(1, gated.Calls);
@@ -1526,12 +1526,12 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         });
         using var http = new HttpClient(gated);
         AbuseIpDbService service = Service(http);
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
         // The attempt is written before the request, so the file changes; its rows and what it knows of downloads don't
         AbuseListStatus before = await service.GetStatusAsync(CancellationToken.None);
         using var cancel = new CancellationTokenSource();
 
-        Task<AbuseDownloadResult> download = service.DownloadBlacklistAsync(cancel.Token);
+        Task<AbuseDownloadResult> download = service.DownloadBlacklistAsync(null, cancel.Token);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         cancel.Cancel();
 
@@ -1554,12 +1554,12 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         });
         using var http = new HttpClient(gated);
         AbuseIpDbService service = Service(http);
-        Task<AbuseDownloadResult> first = service.DownloadBlacklistAsync(CancellationToken.None);
+        Task<AbuseDownloadResult> first = service.DownloadBlacklistAsync(null, CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         int reads = _store.Reads;
         using var cancel = new CancellationTokenSource();
 
-        Task<AbuseDownloadResult> second = service.DownloadBlacklistAsync(cancel.Token);
+        Task<AbuseDownloadResult> second = service.DownloadBlacklistAsync(null, cancel.Token);
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
         release.SetResult();
@@ -1579,7 +1579,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         AbuseIpDbService service = Service();
 
         Assert.Equal(Failed(AbuseIpDbFailure.ClockWrong) with { Counted = true },
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(new AbuseListStatus(AbuseListState.Usable, 0, 0, null, null, null, 1, null),
                      await service.GetStatusAsync(CancellationToken.None));
@@ -1600,7 +1600,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             return hours is int h ? Dated(response, Now.AddHours(h)) : response;
         };
 
-        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult result = await Service().DownloadBlacklistAsync(null, CancellationToken.None);
 
         // The generation time is clamped to an hour past the Date, AbuseIPDB's clock, so a Date far behind moves it back
         DateTimeOffset latest = (hours is int at ? Now.AddHours(at) : Now).AddHours(1);
@@ -1614,7 +1614,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
-        await service.DownloadBlacklistAsync(CancellationToken.None);
+        await service.DownloadBlacklistAsync(null, CancellationToken.None);
         Assert.True(File.Exists(ListPath));
 
         Assert.Equal(AbuseIpDbFailure.None, await service.ClearListAsync(CancellationToken.None));
@@ -1631,13 +1631,13 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         DateTimeOffset reset = Now.AddHours(2);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", reset);
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(AbuseIpDbFailure.None, await service.ClearListAsync(CancellationToken.None));
 
         Assert.Equal(new AbuseListStatus(AbuseListState.Missing, 0, 0, null, null, new AbuseRateLimit(5, 0, reset), 1, reset),
                      await service.GetStatusAsync(CancellationToken.None));
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(1, _handler.Calls);
         Assert.False(File.Exists(ListPath));
     }
@@ -1654,7 +1654,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             return 0;
         };
 
-        Assert.Equal(Failed(AbuseIpDbFailure.DiskNearlyFull), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.DiskNearlyFull), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal([_temp.Paths.DataFolder], asked);
         Assert.Equal(0, _handler.Calls);
@@ -1672,7 +1672,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         _freeBytes = _ => AbuseIpDbLimits.MinFreeBytesForDownload + offset;
 
-        Assert.Equal(failure, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(failure, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(failure == AbuseIpDbFailure.None ? 1 : 0, _handler.Calls);
     }
@@ -1683,15 +1683,15 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.True(new FileInfo(ListPath).Length > 0);
 
         _freeBytes = _ => AbuseIpDbLimits.MinFreeBytesForDownload + new FileInfo(ListPath).Length - 1;
-        Assert.Equal(Failed(AbuseIpDbFailure.DiskNearlyFull), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.DiskNearlyFull), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(1, _handler.Calls);
 
         _freeBytes = _ => AbuseIpDbLimits.MinFreeBytesForDownload + new FileInfo(ListPath).Length;
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.Equal(2, _handler.Calls);
     }
 
@@ -1702,7 +1702,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         _freeBytes = _ => null;
 
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(1, _handler.Calls);
     }
@@ -1720,7 +1720,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             return 0;
         };
 
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(0, measured);
         Assert.Equal(0, _handler.Calls);
@@ -1733,7 +1733,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         _accounting.IsAvailable = false;
 
-        Assert.Equal(Failed(AbuseIpDbFailure.StorageError), await Service().DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(Failed(AbuseIpDbFailure.StorageError), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(0, _handler.Calls);
         Assert.Equal(0, _store.Reads);
@@ -1750,8 +1750,8 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _accounting.FailWrites = true;
         AbuseIpDbService service = Service();
 
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
-        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await service.DownloadBlacklistAsync(CancellationToken.None));
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
+        Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, reset), await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(1, _handler.Calls);
         Assert.Single(_accounting.Writes);
@@ -1761,7 +1761,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
                      await service.GetStatusAsync(CancellationToken.None));
 
         // A new session has only what the store holds
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.Equal(2, _handler.Calls);
     }
 
@@ -1773,15 +1773,15 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _accounting.FailWrites = true;
         AbuseIpDbService service = Service();
         for (int i = 0; i < AbuseIpDbLimits.FreeBlacklistDownloadsPerDay; i++)
-            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, NextUtcMidnight),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
 
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay, _handler.Calls);
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay, _accounting.Writes.Count);
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay, (await service.GetStatusAsync(CancellationToken.None)).DownloadsToday);
-        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await Service().DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
     }
 
     [Fact]
@@ -1791,15 +1791,15 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         _accounting.FailWrites = true;
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         _accounting.FailWrites = false;
         for (int i = 1; i < AbuseIpDbLimits.FreeBlacklistDownloadsPerDay; i++)
-            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         // The store has four of the five, the session all five
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay - 1, _accounting.Current.DownloadsOnDay);
         Assert.Equal(Failed(AbuseIpDbFailure.LimitReached, NextUtcMidnight),
-                     await service.DownloadBlacklistAsync(CancellationToken.None));
+                     await service.DownloadBlacklistAsync(null, CancellationToken.None));
         Assert.Equal(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay, _handler.Calls);
     }
 
@@ -1831,7 +1831,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "0", reset);
         AbuseIpDbService service = Service();
         if (downloaded)
-            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         else
             _accounting.Current = new AbuseAccounting(new AbuseRateLimit(5, 0, reset), UtcDay(Now), 3);
         _accounting.IsAvailable = false;
@@ -1856,7 +1856,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         Assert.Equal(newer ? AbuseListState.Newer : AbuseListState.Unreadable,
                      (await service.GetStatusAsync(CancellationToken.None)).State);
         Assert.Equal(newer ? AbuseIpDbFailure.ListNewer : AbuseIpDbFailure.ListUnreadable,
-                     (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+                     (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.Equal(0, _handler.Calls);
         Assert.Equal(0, _store.Reads);
     }
@@ -1867,7 +1867,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody());
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         string reset = Now.AddHours(2).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
         ExecuteOnList("INSERT INTO metadata (key, value) VALUES ('rl_limit', '5'), ('rl_remaining', '0'), "
                       + "('rl_reset', '" + reset + "'), ('downloads_day', '2026-10-19'), ('downloads_count', '5');");
@@ -1878,7 +1878,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         Assert.Null(status.RefusedUntil);
         Assert.Equal(1, status.DownloadsToday);
 
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         Assert.Equal(2, _handler.Calls);
     }
 
@@ -1895,7 +1895,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         {
             Assert.Equal(StartupFailure.None, (await first.InitializeAsync(CancellationToken.None)).Failure);
             var service = new AbuseIpDbService(_http, first, _temp.Paths, new CoreOptions(), _time, _store, first.AbuseAccounting, _ => null);
-            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+            Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         }
 
         using IpInfoService second = RealIpInfo(tokens, configKeys);
@@ -1952,7 +1952,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         Trace.Listeners.Add(listener);
         try
         {
-            Assert.Equal(Failed(AbuseIpDbFailure.ServiceError), await Service().DownloadBlacklistAsync(CancellationToken.None));
+            Assert.Equal(Failed(AbuseIpDbFailure.ServiceError), await Service().DownloadBlacklistAsync(null, CancellationToken.None));
 
             Assert.Contains("System.InvalidOperationException", listener.Text, StringComparison.Ordinal);
             Assert.DoesNotContain(message, listener.Text, StringComparison.Ordinal);
@@ -1985,9 +1985,9 @@ public sealed class AbuseIpDbServiceTests : IDisposable
             })
             {
                 _respond = respond;
-                await service.DownloadBlacklistAsync(CancellationToken.None);
+                await service.DownloadBlacklistAsync(null, CancellationToken.None);
             }
-            await service.DownloadBlacklistAsync(CancellationToken.None);
+            await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
             string text = listener.Text;
             Assert.Contains("The computer's clock is 25 hours from AbuseIPDB's", text, StringComparison.Ordinal);
@@ -2042,11 +2042,11 @@ public sealed class AbuseIpDbServiceTests : IDisposable
                 new AbuseIpDbList(ListPath).RecordAttempt(Now);
                 break;
             case "stale":
-                Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+                Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
                 ExecuteOnList("UPDATE metadata SET value = '1' WHERE key = 'new_addresses_at';");
                 break;
             case "no table":
-                Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+                Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
                 ExecuteOnList("DROP TABLE new_addresses;");
                 break;
         }
@@ -2069,7 +2069,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _ipinfo.Settings = new UserSettings { IPv6Enabled = false };
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight);
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
         int keyReads = _store.Reads;
         int settingsReads = _ipinfo.SettingsReads;
 
@@ -2094,7 +2094,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         StoreKey(Key);
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight);
         AbuseIpDbService service = Service();
-        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(CancellationToken.None)).Failure);
+        Assert.Equal(AbuseIpDbFailure.None, (await service.DownloadBlacklistAsync(null, CancellationToken.None)).Failure);
 
         AbuseNewAddresses result = await service.GetNewAddressesAsync(CancellationToken.None);
 
@@ -2113,7 +2113,7 @@ public sealed class AbuseIpDbServiceTests : IDisposable
         _respond = request => ListAnswer(request, HttpStatusCode.OK, ListBody(), "5", "4", NextUtcMidnight);
         AbuseIpDbService service = Service();
         Assert.Equal(0, (await service.GetStatusAsync(CancellationToken.None)).NewCount);
-        AbuseDownloadResult download = await service.DownloadBlacklistAsync(CancellationToken.None);
+        AbuseDownloadResult download = await service.DownloadBlacklistAsync(null, CancellationToken.None);
 
         AbuseListStatus status = await service.GetStatusAsync(CancellationToken.None);
 

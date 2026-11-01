@@ -39,7 +39,8 @@ public sealed class AwsFeedViewModel : CloudFeedPageViewModel
         _aws = feeds;
         _ipinfo = ipinfo;
         _time = time ?? throw new ArgumentNullException(nameof(time));
-        CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync, () => !IsDisposed && !IsWorking);
+        CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync, () => !IsDisposed && !IsWorking && !IsRefreshing);
+        _aws.SourceUpdated += HearSourceUpdated;
     }
 
     public IAsyncRelayCommand CheckForUpdatesCommand { get; }
@@ -97,7 +98,13 @@ public sealed class AwsFeedViewModel : CloudFeedPageViewModel
         if (Interlocked.Exchange(ref _activated, 1) == 1)
             return Task.CompletedTask;
 
-        return UpdateAsync(loadSavedFirst: true);
+        return ActivateWhenFreeAsync(() => UpdateAsync(loadSavedFirst: true));
+    }
+
+    public override void Dispose()
+    {
+        _aws.SourceUpdated -= HearSourceUpdated;
+        base.Dispose();
     }
 
     protected override void RefreshCommands()
@@ -117,7 +124,7 @@ public sealed class AwsFeedViewModel : CloudFeedPageViewModel
 
     private async Task CheckForUpdatesAsync()
     {
-        if (IsDisposed || IsWorking)
+        if (IsDisposed || IsWorking || IsRefreshing)
             return;
 
         Interlocked.Exchange(ref _activated, 1);
@@ -191,7 +198,19 @@ public sealed class AwsFeedViewModel : CloudFeedPageViewModel
         }
     }
 
-    private void ApplyCatalogue(AwsRangeCatalogue catalogue)
+    // Refresh all may raise this off the UI thread, so it only posts
+    private void HearSourceUpdated(object? sender, CloudSourceUpdated<AwsRangeCatalogue> update) =>
+        PostSourceUpdate(
+            () => Volatile.Read(ref _activated) == 0 || ReferenceEquals(update.Catalogue, _catalogue),
+            () =>
+            {
+                AwsRangeCatalogue catalogue = update.Catalogue;
+                bool pickKept = ApplyCatalogue(catalogue);
+                StatusText = AppText.AwsStatusUpdated(catalogue.Source.CreatedUtc, LocalTime(update.UpdatedUtc));
+                return pickKept;
+            });
+
+    private bool ApplyCatalogue(AwsRangeCatalogue catalogue)
     {
         string? previousRegion = _selectedRegion?.Region;
         string? previousService = _selectedService?.Name;
@@ -207,6 +226,8 @@ public sealed class AwsFeedViewModel : CloudFeedPageViewModel
         OnPropertyChanged(nameof(SelectedService));
         ShowRegions(service, sameService ? previousRegion : null);
         ClearRows();
+        // A null region is All regions, which a service still in the file always has
+        return sameService && _selectedRegion is not null && _selectedRegion.Region == previousRegion;
     }
 
     private void ShowUnavailable(AwsSourceFailure failure)

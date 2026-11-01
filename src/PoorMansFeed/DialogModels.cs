@@ -49,7 +49,10 @@ public sealed record NewAddressRow(string Address, string Score, string LastRepo
 public sealed record NewAddressesPrompt(string Title, string Message, string CountText, IReadOnlyList<NewAddressRow> Rows,
                                         string CopyText, string CopiedText);
 
-/// <summary>One large range in the dialog. Unticked by default, so a large range is left out unless the user ticks it.</summary>
+/// <summary>
+/// One large range in the dialog. It starts from the saved feed's choice, unticked when it has none, so a large range
+/// is left out unless the user or the saved feed ticks it.
+/// </summary>
 public sealed class LargeRangeChoice : ObservableObject
 {
     private bool _isIncluded;
@@ -78,7 +81,7 @@ public sealed class LargeRangeChoice : ObservableObject
         string size = range.IsIpv6 && range.PrefixLength <= 64
             ? AppText.Subnets64(System.Numerics.BigInteger.Pow(2, 64 - range.PrefixLength))
             : AppText.Addresses(range.AddressCount);
-        return new LargeRangeChoice(range.Network, size);
+        return new LargeRangeChoice(range.Network, size) { IsIncluded = range.SavedIncluded };
     }
 }
 

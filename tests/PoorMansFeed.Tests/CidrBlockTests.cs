@@ -100,6 +100,52 @@ public sealed class CidrBlockTests
         Assert.Empty(block.AncestorStarts());
     }
 
+    [Theory]
+    [InlineData("10.1.2.0/24", "10.1.2.0", true)]
+    [InlineData("10.1.2.0/24", "10.1.2.255", true)]
+    [InlineData("10.1.2.0/24", "10.1.1.255", false)]
+    [InlineData("10.1.2.0/24", "10.1.3.0", false)]
+    [InlineData("2001:4860::/32", "2001:4860::", true)]
+    [InlineData("2001:4860::/32", "2001:4860:ffff:ffff:ffff:ffff:ffff:ffff", true)]
+    [InlineData("2001:4860::/32", "2001:485f:ffff:ffff:ffff:ffff:ffff:ffff", false)]
+    [InlineData("2001:4860::/32", "2001:4861::", false)]
+    [InlineData("8.8.8.8/32", "8.8.8.8", true)]
+    [InlineData("8.8.8.8/32", "8.8.8.7", false)]
+    [InlineData("8.8.8.8/32", "8.8.8.9", false)]
+    [InlineData("2001:4860::8888/128", "2001:4860::8888", true)]
+    [InlineData("2001:4860::8888/128", "2001:4860::8887", false)]
+    [InlineData("2001:4860::8888/128", "2001:4860::8889", false)]
+    [InlineData("0.0.0.0/0", "0.0.0.0", true)]
+    [InlineData("0.0.0.0/0", "255.255.255.255", true)]
+    [InlineData("::/0", "::", true)]
+    [InlineData("::/0", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true)]
+    public void ContainsHoldsFromTheFirstAddressToTheLast(string blockText, string addressText, bool contained)
+    {
+        Assert.True(CidrBlock.TryParse(blockText, out CidrBlock? block));
+
+        Assert.Equal(contained, block.Contains(Bytes(addressText)));
+    }
+
+    // Each address's bytes sit strictly between the other family's start and end, so only the length check refuses it
+    [Theory]
+    [InlineData("2001::/16", "32.1.13.184")]
+    [InlineData("10.0.0.0/8", "a00:1::")]
+    [InlineData("0.0.0.0/0", "::1")]
+    [InlineData("0.0.0.0/0", "2001:4860::8888")]
+    [InlineData("::/0", "8.8.8.8")]
+    public void AnAddressOfTheOtherFamilyIsNeverContained(string blockText, string addressText)
+    {
+        Assert.True(CidrBlock.TryParse(blockText, out CidrBlock? block));
+
+        Assert.False(block.Contains(Bytes(addressText)));
+    }
+
+    private static byte[] Bytes(string text)
+    {
+        Assert.True(IpAddressText.TryParse(text, out IPAddress? address));
+        return address.GetAddressBytes();
+    }
+
     private static List<string> Starts(CidrBlock block) =>
         block.AncestorStarts().Select(start => new IPAddress(start).ToString()).ToList();
 }

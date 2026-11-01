@@ -107,6 +107,7 @@ public sealed class SettingsStore(string path)
             IPv4MinPrefix = Math.Clamp(settings.IPv4MinPrefix, 1, 32),
             IPv6MinPrefix = Math.Clamp(settings.IPv6MinPrefix, 1, 128),
             AbuseIpDbKeepDays = Math.Clamp(settings.AbuseIpDbKeepDays, AbuseIpDbLimits.MinKeepDays, AbuseIpDbLimits.MaxKeepDays),
+            RefreshAllEveryHours = Math.Clamp(settings.RefreshAllEveryHours, RefreshAllLimits.MinHours, RefreshAllLimits.MaxHours),
             ModSecurityAction = Enum.IsDefined(settings.ModSecurityAction) ? settings.ModSecurityAction : ModSecurityAction.LogOnly,
             ModSecurityFirstRuleId = Math.Clamp(settings.ModSecurityFirstRuleId, ModSecurityLimits.RuleIdMin, ModSecurityLimits.RuleIdMax),
             ModSecurityLocation = settings.ModSecurityLocation is null

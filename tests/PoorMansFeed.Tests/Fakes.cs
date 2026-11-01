@@ -42,6 +42,7 @@ internal sealed class FakeIpInfoService : IIpInfoService
     public bool HasToken { get; set; }
     public DatasetInfo? Dataset { get; set; }
     public ExceptionList Exceptions { get; set; } = ExceptionList.Empty;
+    public IFeedRecords Records { get; set; } = FeedRecords.None;
 
     public StartupResult StartupResult { get; set; } = new(StartupFailure.None, null, false);
     public StartupResult StartFreshResult { get; set; } = new(StartupFailure.None, null, false);
@@ -87,6 +88,7 @@ internal sealed class FakeIpInfoService : IIpInfoService
 
     /// <summary>The progress object the view model passed to the most recent update.</summary>
     public IProgress<UpdateProgress>? LastProgress { get; private set; }
+    public IpInfoUpdatePolicy? LastPolicy { get; private set; }
 
     public int CheckCalls { get; private set; }
     public int UpdateCalls { get; private set; }
@@ -193,10 +195,12 @@ internal sealed class FakeIpInfoService : IIpInfoService
         return CheckResult;
     }
 
-    public async Task<UpdateResult> UpdateDatasetAsync(IProgress<UpdateProgress>? progress, CancellationToken ct)
+    public async Task<UpdateResult> UpdateDatasetAsync(IProgress<UpdateProgress>? progress, CancellationToken ct,
+                                                       IpInfoUpdatePolicy? policy = null)
     {
         UpdateCalls++;
         LastProgress = progress;
+        LastPolicy = policy;
         OnUpdateStarted?.Invoke(progress);
         TaskCompletionSource? gate = UpdateGate;
         UpdateGate = null;
@@ -233,6 +237,14 @@ internal sealed class FakeIpInfoService : IIpInfoService
         }
 
         return SearchFunc(input, displayLimit);
+    }
+
+    public Dictionary<uint, string> AsNames { get; } = [];
+
+    public Task<IReadOnlyDictionary<uint, string>> FindAsNamesAsync(IReadOnlyCollection<uint> asns, CancellationToken ct)
+    {
+        IReadOnlyDictionary<uint, string> found = asns.Where(AsNames.ContainsKey).ToDictionary(asn => asn, asn => AsNames[asn]);
+        return Task.FromResult(found);
     }
 
     public Task<OverlapResult> LookUpOverlapsAsync(IReadOnlyList<CidrBlock> blocks, CancellationToken ct)
@@ -591,6 +603,36 @@ internal sealed class FakeUi : IUiServices
     }
 
     public void ShowSettingsPage() => SettingsPageShows++;
+
+    /// <summary>How many times the dataset update window was asked to show.</summary>
+    public int DatasetUpdateShows { get; private set; }
+
+    /// <summary>Runs inside each show, as the window would show before the update starts.</summary>
+    public Action? OnDatasetUpdateShow { get; set; }
+
+    public void ShowDatasetUpdate()
+    {
+        DatasetUpdateShows++;
+        OnDatasetUpdateShow?.Invoke();
+    }
+
+    private readonly Queue<Action> _posted = new();
+
+    /// <summary>Every action posted so far, run or not.</summary>
+    public int PostedCount { get; private set; }
+
+    public void PostToUiThread(Action action)
+    {
+        PostedCount++;
+        _posted.Enqueue(action);
+    }
+
+    /// <summary>Runs the posted actions in order, those posted while it runs included.</summary>
+    public void RunPosted()
+    {
+        while (_posted.TryDequeue(out Action? action))
+            action();
+    }
 }
 
 /// <summary>
@@ -790,7 +832,7 @@ internal sealed class FakeAbuseIpDbService : IAbuseIpDbService
         return NewAddresses;
     }
 
-    public async Task<AbuseDownloadResult> DownloadBlacklistAsync(CancellationToken ct)
+    public async Task<AbuseDownloadResult> DownloadBlacklistAsync(AbuseDownloadPolicy? policy, CancellationToken ct)
     {
         DownloadCalls++;
         DownloadTokens.Add(ct);
@@ -799,10 +841,20 @@ internal sealed class FakeAbuseIpDbService : IAbuseIpDbService
         DownloadGate = null;
         bool ignoresToken = DownloadIgnoresToken;
         DownloadIgnoresToken = false;
-        await TakeGateAsync(gate, ignoresToken ? CancellationToken.None : ct);
-        return DownloadResults.TryDequeue(out AbuseDownloadResult? result)
-            ? result
-            : throw new InvalidOperationException("no download result queued");
+        RaiseWorkStarted(AbuseWorkKind.Download);
+        try
+        {
+            await TakeGateAsync(gate, ignoresToken ? CancellationToken.None : ct);
+            if (!DownloadResults.TryDequeue(out AbuseDownloadResult? result))
+                throw new InvalidOperationException("no download result queued");
+            if (DownloadMerges)
+                RaiseListChanged(ListVersion + 1, AbuseListChangeKind.Merged);
+            return result;
+        }
+        finally
+        {
+            RaiseWorkEnded();
+        }
     }
 
     public async Task<AbuseIpDbFailure> ClearListAsync(CancellationToken ct)
@@ -812,8 +864,19 @@ internal sealed class FakeAbuseIpDbService : IAbuseIpDbService
         Calls.Add(nameof(ClearListAsync));
         TaskCompletionSource? gate = ClearGate;
         ClearGate = null;
-        await TakeGateAsync(gate, ct);
-        return ClearResults.TryDequeue(out AbuseIpDbFailure result) ? result : AbuseIpDbFailure.None;
+        RaiseWorkStarted(AbuseWorkKind.ClearList);
+        try
+        {
+            await TakeGateAsync(gate, ct);
+            AbuseIpDbFailure result = ClearResults.TryDequeue(out AbuseIpDbFailure queued) ? queued : AbuseIpDbFailure.None;
+            if (ClearRaisesListChanged)
+                RaiseListChanged(ListVersion + 1, AbuseListChangeKind.Cleared);
+            return result;
+        }
+        finally
+        {
+            RaiseWorkEnded();
+        }
     }
 
     /// <summary>Dequeued by each feed write; an empty queue throws, like a download with nothing queued.</summary>
@@ -827,10 +890,18 @@ internal sealed class FakeAbuseIpDbService : IAbuseIpDbService
         Calls.Add(nameof(WriteFeedAsync));
         TaskCompletionSource? gate = FeedGate;
         FeedGate = null;
-        await TakeGateAsync(gate, ct);
-        return FeedResults.TryDequeue(out AbuseFeedWriteResult? result)
-            ? result
-            : throw new InvalidOperationException("no feed result queued");
+        RaiseWorkStarted(AbuseWorkKind.WriteFeed);
+        try
+        {
+            await TakeGateAsync(gate, ct);
+            return FeedResults.TryDequeue(out AbuseFeedWriteResult? result)
+                ? result
+                : throw new InvalidOperationException("no feed result queued");
+        }
+        finally
+        {
+            RaiseWorkEnded();
+        }
     }
 
     /// <summary>Dequeued by each Empty feed; an empty queue throws, like a feed write with nothing queued.</summary>
@@ -844,10 +915,58 @@ internal sealed class FakeAbuseIpDbService : IAbuseIpDbService
         Calls.Add(nameof(EmptyFeedAsync));
         TaskCompletionSource? gate = EmptyGate;
         EmptyGate = null;
-        await TakeGateAsync(gate, ct);
-        return EmptyResults.TryDequeue(out AbuseFeedWriteResult? result)
-            ? result
-            : throw new InvalidOperationException("no empty result queued");
+        RaiseWorkStarted(AbuseWorkKind.RetireFeed);
+        try
+        {
+            await TakeGateAsync(gate, ct);
+            return EmptyResults.TryDequeue(out AbuseFeedWriteResult? result)
+                ? result
+                : throw new InvalidOperationException("no empty result queued");
+        }
+        finally
+        {
+            RaiseWorkEnded();
+        }
+    }
+
+    public long ListVersion { get; set; }
+    public event EventHandler<AbuseListChange>? ListChanged;
+    public AbuseWork? WorkUnderWay { get; set; }
+    public event EventHandler? WorkChanged;
+
+    public int ListenerCount => (ListChanged?.GetInvocationList().Length ?? 0) + (WorkChanged?.GetInvocationList().Length ?? 0);
+
+    /// <summary>A download that returns a result raises a merged change first, as the service's merge does.</summary>
+    public bool DownloadMerges { get; set; }
+
+    public void RaiseListChanged(long version, AbuseListChangeKind kind)
+    {
+        ListVersion = version;
+        ListChanged?.Invoke(this, new AbuseListChange(version, kind));
+    }
+
+    public void RaiseWorkChanged() => WorkChanged?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>When set, a download, Clear list, Write feed and Retire raise work set, then cleared.</summary>
+    public bool RaisesWork { get; set; }
+
+    /// <summary>When set, a Clear list raises a cleared change before it returns, as the service does.</summary>
+    public bool ClearRaisesListChanged { get; set; }
+
+    private void RaiseWorkStarted(AbuseWorkKind kind)
+    {
+        if (!RaisesWork)
+            return;
+        WorkUnderWay = new AbuseWork(kind);
+        RaiseWorkChanged();
+    }
+
+    private void RaiseWorkEnded()
+    {
+        if (!RaisesWork)
+            return;
+        WorkUnderWay = null;
+        RaiseWorkChanged();
     }
 
     /// <summary>What each offending-networks call gives when NetworksResults is empty; a list with no download until it is set.</summary>
@@ -890,6 +1009,10 @@ internal sealed class ImmediateProgress<T>(Action<T> handler) : IProgress<T>
 /// </summary>
 internal sealed class FakeAzureFeedService(AzureFeedService inner) : IAzureFeedService
 {
+    public event EventHandler<CloudSourceUpdated<AzureTagCatalogue>>? SourceUpdated;
+
+    public void RaiseSourceUpdated(CloudSourceUpdated<AzureTagCatalogue> update) => SourceUpdated?.Invoke(this, update);
+
     public AzureTagCatalogue? Cached { get; set; }
 
     public Func<AzureTagCatalogue?, AzureLoadResult> UpdateFunc { get; set; } =
@@ -899,6 +1022,8 @@ internal sealed class FakeAzureFeedService(AzureFeedService inner) : IAzureFeedS
     public TaskCompletionSource? UpdateGate { get; set; }
 
     public int LoadCachedCalls { get; private set; }
+
+    public int LoadSavedCalls { get; private set; }
 
     public int UpdateCalls { get; private set; }
 
@@ -916,6 +1041,12 @@ internal sealed class FakeAzureFeedService(AzureFeedService inner) : IAzureFeedS
         LoadCachedCalls++;
         Calls.Add("cache");
         return Task.FromResult(Cached);
+    }
+
+    public Task<SavedRanges<AzureTagCatalogue>> LoadSavedAsync(CancellationToken ct)
+    {
+        LoadSavedCalls++;
+        return inner.LoadSavedAsync(ct);
     }
 
     public async Task<AzureLoadResult> CheckForUpdateAsync(AzureTagCatalogue? current, CancellationToken ct)
@@ -950,6 +1081,10 @@ internal sealed class FakeAzureFeedService(AzureFeedService inner) : IAzureFeedS
 /// </summary>
 internal sealed class FakeAwsFeedService(AwsFeedService inner) : IAwsFeedService
 {
+    public event EventHandler<CloudSourceUpdated<AwsRangeCatalogue>>? SourceUpdated;
+
+    public void RaiseSourceUpdated(CloudSourceUpdated<AwsRangeCatalogue> update) => SourceUpdated?.Invoke(this, update);
+
     public AwsRangeCatalogue? Cached { get; set; }
 
     public Func<AwsRangeCatalogue?, AwsLoadResult> UpdateFunc { get; set; } =
@@ -959,6 +1094,8 @@ internal sealed class FakeAwsFeedService(AwsFeedService inner) : IAwsFeedService
     public TaskCompletionSource? UpdateGate { get; set; }
 
     public int LoadCachedCalls { get; private set; }
+
+    public int LoadSavedCalls { get; private set; }
 
     public int UpdateCalls { get; private set; }
 
@@ -976,6 +1113,12 @@ internal sealed class FakeAwsFeedService(AwsFeedService inner) : IAwsFeedService
         LoadCachedCalls++;
         Calls.Add("cache");
         return Task.FromResult(Cached);
+    }
+
+    public Task<SavedRanges<AwsRangeCatalogue>> LoadSavedAsync(CancellationToken ct)
+    {
+        LoadSavedCalls++;
+        return inner.LoadSavedAsync(ct);
     }
 
     public async Task<AwsLoadResult> CheckForUpdateAsync(AwsRangeCatalogue? current, CancellationToken ct)
@@ -1002,4 +1145,57 @@ internal sealed class FakeAwsFeedService(AwsFeedService inner) : IAwsFeedService
 
     public Task<CloudFeedWriteResult> WriteAsync(CloudFeedPlan plan, IReadOnlyCollection<CidrBlock> includedLargeRanges, CancellationToken ct) =>
         inner.WriteAsync(plan, includedLargeRanges, ct);
+}
+
+/// <summary>
+/// Records each request and answers NotAsked, with the history Recorded for a change; Locks, when set, gives the locks.
+/// </summary>
+internal sealed class RecordingRecords : IFeedRecords
+{
+    public List<FeedRecordRequest> Requests { get; } = [];
+    public Exception? Failure { get; set; }
+    public IFeedRecords? Locks { get; init; }
+
+    public FeedRecordResult Record(FeedRecordRequest request)
+    {
+        Requests.Add(request);
+        if (Failure is not null)
+            throw Failure;
+        return new FeedRecordResult(FeedSaveOutcome.NotAsked,
+                                    request.Change is null ? HistoryOutcome.NothingToRecord : HistoryOutcome.Recorded);
+    }
+
+    public IDisposable EnterWrite(string feedKey) => Locks?.EnterWrite(feedKey) ?? throw new NotSupportedException();
+    public int WritesInFlight => Locks?.WritesInFlight ?? 0;
+    public Task StopWritesAsync(CancellationToken ct) => Locks?.StopWritesAsync(ct) ?? Task.CompletedTask;
+    public Task<PoorMansFeed.Core.History.HistoryRead> SearchHistoryAsync(PoorMansFeed.Core.History.HistoryQuery query,
+                                                                          int limit, CancellationToken ct) =>
+        throw new NotSupportedException();
+    public Task<PoorMansFeed.Core.History.HistoryState> ClearHistoryAsync(CancellationToken ct) =>
+        throw new NotSupportedException();
+    public SavedFeedsRead ReadSavedFeeds() => new(false, []);
+    public Task<SavedFeedsFailure> RemoveSavedFeedAsync(string key, CancellationToken ct) =>
+        throw new NotSupportedException();
+    IReadOnlyList<SavedFeedStampOutcome> IFeedRecords.CommitRefresh(IReadOnlyList<SavedFeedStamp> stamps) =>
+        throw new NotSupportedException();
+    bool IFeedRecords.SaveRefusedThisSession(string feedKey) => false;
+}
+
+/// <summary>A schedule a test sets by hand; Set raises Changed as the timer does.</summary>
+internal sealed class FakeRefreshSchedule : IRefreshSchedule
+{
+    public DateTimeOffset? NextDueUtc { get; private set; }
+
+    public bool IsWaiting { get; private set; }
+
+    public event EventHandler? Changed;
+
+    public int Listeners => Changed?.GetInvocationList().Length ?? 0;
+
+    public void Set(DateTimeOffset? nextDueUtc, bool isWaiting = false)
+    {
+        NextDueUtc = nextDueUtc;
+        IsWaiting = isWaiting;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 }

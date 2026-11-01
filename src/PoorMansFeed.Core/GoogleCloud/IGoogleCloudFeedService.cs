@@ -9,8 +9,16 @@ namespace PoorMansFeed.Core.GoogleCloud;
 /// </summary>
 public interface IGoogleCloudFeedService : ICloudFeedService
 {
+
+    /// <summary>Raised after a load saved bytes other than the saved file's; never for a save that failed.</summary>
+    event EventHandler<CloudSourceUpdated<CloudRangeCatalogue>>? SourceUpdated;
     /// <summary>Downloads and parses cloud.json. Never calls the live URL in tests (stub handler).</summary>
     Task<CatalogueResult> LoadCatalogueAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Reads only the saved file and sends nothing. NotSaved: neither file is there; Unusable: the pair won't read.
+    /// </summary>
+    Task<SavedRanges<CloudRangeCatalogue>> LoadSavedAsync(CancellationToken ct);
 
     /// <summary>
     /// Selects the prefixes the pick matches, drops IPv6 when IPv6Enabled is off, confirms each against the

@@ -18,7 +18,7 @@ public sealed class AzureFeedViewModelTests : IDisposable
 
     private readonly ServiceTempFolder _temp = new();
     private readonly FakeTimeProvider _time = new(Now);
-    private readonly FakeIpInfoService _ipinfo = new() { Dataset = Dataset };
+    private readonly FakeIpInfoService _ipinfo = new() { Dataset = Dataset, Records = new RecordingRecords { Locks = FeedRecords.None } };
     private readonly FakeUi _ui = new();
     private readonly HttpClient _http = new(new StubHttpHandler((_, _) => throw new InvalidOperationException("no request expected")));
 
@@ -426,6 +426,21 @@ public sealed class AzureFeedViewModelTests : IDisposable
             "Service tags of 12 October 2026\u00A0\u00B7\u00A0change 422\u00A0\u00B7\u00A0couldn't check for a newer file",
             second.StatusText);
         second.Dispose();
+    }
+
+    [Fact]
+    public async Task A_Tag_That_Is_Gone_Shows_The_Pick_Gone_Line()
+    {
+        FakeAzureFeedService feeds = Feeds(AzureTestData.Catalogue());
+        AzureFeedViewModel vm = Vm(feeds);
+        await vm.ActivateAsync();
+        vm.SelectedService = vm.Services.Single(service => service.BaseName == "Storage");
+        vm.SelectedRegion = new AzureTagOption("Storage.Gone", "Gone");
+
+        await vm.CheckCommand.ExecuteAsync(null);
+
+        Assert.Equal(AppText.CloudPickGone, vm.EmptyText);
+        Assert.Empty(vm.Rows);
     }
 
     private AzureFeedViewModel Vm(FakeAzureFeedService feeds) =>

@@ -32,8 +32,8 @@ public sealed class ResultLineFolderTests
     {
         Assert.Equal("a.txt couldn't be written. Please try again or contact the Infra Team.",
             AppText.CloudWriteFailedLine("a.txt", [], null, unsaved: false));
-        Assert.Equal(Dash + "the old " + Named("fortigate", "a.txt") + " and b.txt were left as they were",
-            AppText.OldFeedFilesLeft([Fortigate("a.txt"), "b.txt"]));
+        Assert.Equal(Dash + Named("fortigate", "a.txt") + " and b.txt were emptied",
+            AppText.FilesEmptied([Fortigate("a.txt"), "b.txt"]));
     }
 
     [Fact]
@@ -83,20 +83,20 @@ public sealed class ResultLineFolderTests
     }
 
     [Fact]
-    public void Empty_Feed_Names_Both_Folders()
+    public void Retire_Feed_Names_Both_Folders()
     {
         AbuseFeedWriteResult emptied = new(AbuseFeedWriteFailure.None,
             [Fortigate("AbuseIPDB_rolling_ipv4.txt"), ModSecurity("AbuseIPDB_rolling_ipv4.txt")], 0, 0, 0, 0,
             [Fortigate("AbuseIPDB_rolling_ipv4.txt"), ModSecurity("AbuseIPDB_rolling_ipv4.txt")]);
 
-        Assert.Equal("Feed emptied: " + Named("fortigate", "AbuseIPDB_rolling_ipv4.txt") + " and "
-            + Named("modsecurity", "AbuseIPDB_rolling_ipv4.txt") + " in " + Exports, AppText.AbuseFeedEmptied(emptied, Exports));
-        Assert.Equal("Nothing was emptied" + Dash + "there's no AbuseIPDB feed file in the fortigate or modsecurity folder of "
-            + Exports, AppText.AbuseFeedEmptyFailureLine(new(AbuseFeedWriteFailure.NothingToWrite, [], 0, 0, 0, 0, []), Exports));
+        Assert.Equal("Feed retired: " + Named("fortigate", "AbuseIPDB_rolling_ipv4.txt") + " and "
+            + Named("modsecurity", "AbuseIPDB_rolling_ipv4.txt") + " in " + Exports, AppText.AbuseFeedRetired(emptied, Exports));
+        Assert.Equal("Nothing was retired" + Dash + "there's no AbuseIPDB feed file in the fortigate or modsecurity folder of "
+            + Exports, AppText.AbuseFeedRetireFailureLine(new(AbuseFeedWriteFailure.NothingToWrite, [], 0, 0, 0, 0, []), Exports));
         Assert.Equal("Each AbuseIPDB feed file in the export folder's fortigate and modsecurity folders, whatever is ticked, "
             + "is rewritten with no addresses, so a FortiGate or ModSecurity server matches none of them once it reads the "
-            + "file again. The AbuseIPDB list is kept, and the next Write feed fills the files again.",
-            AppText.EmptyAbuseFeedBody);
+            + "file again. The files stay so until Write feed fills them again. The AbuseIPDB list and the change history are "
+            + "kept.", AppText.RetireAbuseFeedBody);
     }
 
     [Fact]

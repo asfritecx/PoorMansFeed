@@ -15,7 +15,8 @@ public sealed class CloudRangeRow : ObservableObject
     private bool _isIncluded;
 
     private CloudRangeRow(CidrBlock block, string networkText, string regionText, string countryText, string asText,
-                          string statusText, RangeConfirmation status, bool isLargeRange, string accessibleText, bool isIncluded)
+                          string statusText, RangeConfirmation status, bool isLargeRange, string accessibleText, bool isIncluded,
+                          string? singleAsnText)
     {
         Block = block;
         NetworkText = networkText;
@@ -27,6 +28,7 @@ public sealed class CloudRangeRow : ObservableObject
         IsLargeRange = isLargeRange;
         AccessibleText = accessibleText;
         _isIncluded = isIncluded;
+        SingleAsnText = singleAsnText;
     }
 
     public static CloudRangeRow From(CheckedRange range)
@@ -48,7 +50,8 @@ public sealed class CloudRangeRow : ObservableObject
             range.Status,
             range.IsLarge,
             accessible,
-            range.StartsIncluded);
+            range.StartsIncluded,
+            SingleAsnTextOf(groups));
     }
 
     public CidrBlock Block { get; }
@@ -60,6 +63,9 @@ public sealed class CloudRangeRow : ObservableObject
     public string CountryText { get; }
 
     public string AsText { get; }
+
+    /// <summary>The one AS of every overlapping network, as "AS" and digits; null for none or several.</summary>
+    public string? SingleAsnText { get; }
 
     public string StatusText { get; }
 
@@ -107,6 +113,22 @@ public sealed class CloudRangeRow : ObservableObject
             return text;
 
         return text + " +" + (groups.Count - 1).ToString(CultureInfo.InvariantCulture);
+    }
+
+    // Groups are keyed by country, name and domain as well, so one AS can head several of them
+    private static string? SingleAsnTextOf(IReadOnlyList<OverlapGroup> groups)
+    {
+        string? single = null;
+        foreach (OverlapGroup group in groups)
+        {
+            string? asn = AsNumberText.TryNormalise(group.Asn);
+            if (asn is null || (single is not null && !string.Equals(single, asn, StringComparison.Ordinal)))
+                return null;
+
+            single = asn;
+        }
+
+        return single;
     }
 
     private static string StatusTextOf(RangeConfirmation status) => status switch

@@ -272,11 +272,19 @@ public sealed class ModSecurityRulesButtonTests : IDisposable
 
     private sealed class RulesFeeds(IGoogleCloudFeedService inner) : IGoogleCloudFeedService
     {
+        public event EventHandler<CloudSourceUpdated<CloudRangeCatalogue>>? SourceUpdated
+        {
+            add => inner.SourceUpdated += value;
+            remove => inner.SourceUpdated -= value;
+        }
+
         public CloudFeedWriteResult Result { get; set; } = new(CloudFeedWriteFailure.None, ["f.txt"], 1, 0, 0);
 
         public TaskCompletionSource? Pending { get; set; }
 
         public Task<CatalogueResult> LoadCatalogueAsync(CancellationToken ct) => inner.LoadCatalogueAsync(ct);
+
+        public Task<SavedRanges<CloudRangeCatalogue>> LoadSavedAsync(CancellationToken ct) => inner.LoadSavedAsync(ct);
 
         public Task<CheckResult> CheckAsync(CloudRangeCatalogue catalogue, RegionSelection selection, CancellationToken ct) =>
             inner.CheckAsync(catalogue, selection, ct);
@@ -297,7 +305,7 @@ public sealed class ModSecurityRulesButtonTests : IDisposable
 
     private async Task<(GoogleCloudFeedViewModel Vm, RulesFeeds Feeds)> CloudAsync()
     {
-        var feeds = new RulesFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), _folder));
+        var feeds = new RulesFeeds(new GoogleCloudFeedService(_ipinfo, _http, new CoreOptions(), new FakeTimeProvider(), null, _folder));
         var vm = new GoogleCloudFeedViewModel(feeds, _ipinfo, _ui, _gate, _folder);
         await vm.ActivateAsync();
         vm.SelectedRegion = vm.Regions.Single(region => region.Scope.Id == "us-central1");
@@ -759,7 +767,7 @@ public sealed class ModSecurityRulesButtonTests : IDisposable
     {
         Assert.True(rules.IsVisible);
         Assert.Same(header, summary.Parent);
-        Assert.Equal(2, Grid.GetColumnSpan(summary));
+        Assert.Equal(header.ColumnDefinitions.Count, Grid.GetColumnSpan(summary));
         Assert.Equal(header.Bounds.Width, summary.Bounds.Width, 1);
         Point rulesBottom = rules.TranslatePoint(new Point(0, rules.Bounds.Height), header)!.Value;
         Point summaryTop = summary.TranslatePoint(new Point(0, 0), header)!.Value;

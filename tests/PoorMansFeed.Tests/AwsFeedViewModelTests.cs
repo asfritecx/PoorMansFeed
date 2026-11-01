@@ -17,7 +17,7 @@ public sealed class AwsFeedViewModelTests : IDisposable
 
     private readonly ServiceTempFolder _temp = new();
     private readonly FakeTimeProvider _time = new(Now);
-    private readonly FakeIpInfoService _ipinfo = new() { Dataset = Dataset };
+    private readonly FakeIpInfoService _ipinfo = new() { Dataset = Dataset, Records = new RecordingRecords { Locks = FeedRecords.None } };
     private readonly FakeUi _ui = new();
     private readonly HttpClient _http = new(new StubHttpHandler((_, _) => throw new InvalidOperationException("no request expected")));
 
@@ -460,6 +460,21 @@ public sealed class AwsFeedViewModelTests : IDisposable
         Assert.Equal(4, third.Services.Count);
         Assert.Equal(FileText + "\u00A0\u00B7\u00A0couldn't check for a newer file", third.StatusText);
         third.Dispose();
+    }
+
+    [Fact]
+    public async Task A_Region_That_Is_Gone_Shows_The_Pick_Gone_Line()
+    {
+        FakeAwsFeedService feeds = Feeds(AwsTestData.Catalogue());
+        AwsFeedViewModel vm = Vm(feeds);
+        await vm.ActivateAsync();
+        vm.SelectedService = vm.Services.Single(service => service.Name == "EC2");
+        vm.SelectedRegion = new AwsRegionOption("mars-1", "mars-1");
+
+        await vm.CheckCommand.ExecuteAsync(null);
+
+        Assert.Equal(AppText.CloudPickGone, vm.EmptyText);
+        Assert.Empty(vm.Rows);
     }
 
     private AwsFeedViewModel Vm(FakeAwsFeedService feeds) =>

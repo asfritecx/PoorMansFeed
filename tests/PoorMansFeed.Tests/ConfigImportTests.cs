@@ -39,6 +39,7 @@ public sealed class ConfigImportTests : IDisposable
         { "SchemaVersion": 3, "ExportFolder": "/Users/someone/Feeds", "IPv6Enabled": false, "FortigateEnabled": false,
           "FortigateIncludeIPv4": false, "FortigateIncludeIPv6": false, "FortigateSplitByFamily": false,
           "LargeRangeCheckEnabled": false, "IPv4MinPrefix": 40, "IPv6MinPrefix": 0, "AbuseIpDbKeepDays": 999,
+          "RefreshAllOnTimer": true, "RefreshAllEveryHours": 0,
           "WriteModSecurityLists": true, "ModSecurityAction": 9, "ModSecurityFirstRuleId": 100000,
           "ModSecurityLocation": "LONG_LOCATION" }
         """.Replace("LONG_LOCATION", new string('x', ModSecurityLimits.MaxLocationLength + 1));
@@ -50,6 +51,18 @@ public sealed class ConfigImportTests : IDisposable
           { "network": "192.0.2.9/24", "note": "Repeated" },
           { "network": "198.51.100.7" } ] }
         """;
+
+    [Fact]
+    public void A_settings_file_without_the_refresh_timer_imports_it_off_every_6_hours()
+    {
+        File.WriteAllText(SettingsFile, "{ \"AbuseIpDbKeepDays\": 12 }");
+
+        using ConfigStore store = Open();
+
+        Assert.Equal(12, store.Snapshot.Settings.AbuseIpDbKeepDays);
+        Assert.False(store.Snapshot.Settings.RefreshAllOnTimer);
+        Assert.Equal(RefreshAllLimits.DefaultHours, store.Snapshot.Settings.RefreshAllEveryHours);
+    }
 
     [Fact]
     public void Both_files_are_imported_normalised_in_order_and_renamed()
@@ -74,6 +87,8 @@ public sealed class ConfigImportTests : IDisposable
                 IPv4MinPrefix = 32,
                 IPv6MinPrefix = 1,
                 AbuseIpDbKeepDays = AbuseIpDbLimits.MaxKeepDays,
+                RefreshAllOnTimer = true,
+                RefreshAllEveryHours = RefreshAllLimits.MinHours,
                 WriteFortigateFeeds = true,
                 WriteModSecurityLists = true,
                 ModSecurityAction = ModSecurityAction.LogOnly,
@@ -129,6 +144,7 @@ public sealed class ConfigImportTests : IDisposable
         "ipinfo.db", "ipinfo.next.db", "ipinfo_lite.json.gz.tmp", "ipinfo_token", ".ipinfo_token", "settings.json",
         "exceptions.json", "exceptions.unreadable.json", "config.unreadable.db", "abuseipdb_key",
         "azure_service_tags.json", "azure_service_tags.source.json", "aws_ip_ranges.json", "aws_ip_ranges.source.json",
+        "google_cloud_ranges.json", "google_cloud_ranges.source.json",
     ];
 
     [Theory]

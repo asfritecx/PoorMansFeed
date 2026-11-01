@@ -555,6 +555,114 @@ public sealed class SettingsFormModelTests
     }
 
     [Fact]
+    public void TheRefreshTimerLoadsAndSavesBothValues()
+    {
+        var saved = new UserSettings { RefreshAllOnTimer = true, RefreshAllEveryHours = 9 };
+        var model = new SettingsFormModel(saved, DefaultFolder);
+
+        Assert.True(model.RefreshAllOnTimer);
+        Assert.Equal(9m, model.RefreshAllEveryHours);
+        Assert.True(model.CanEditRefreshAllHours);
+        Assert.Equal(saved, model.ToSettings());
+
+        model.RefreshAllEveryHours = 24;
+        model.RefreshAllOnTimer = false;
+        Assert.Equal(saved with { RefreshAllOnTimer = false, RefreshAllEveryHours = 24 }, model.ToSettings());
+    }
+
+    [Fact]
+    public void TheHoursBoxIsOffWhileTheTimerIsUntickedAndItsValueIsStillSaved()
+    {
+        var model = new SettingsFormModel(new UserSettings { RefreshAllEveryHours = 12 }, DefaultFolder);
+        var raised = new List<string?>();
+        model.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        Assert.False(model.RefreshAllOnTimer);
+        Assert.False(model.CanEditRefreshAllHours);
+        Assert.Equal(12, model.ToSettings().RefreshAllEveryHours);
+
+        model.RefreshAllOnTimer = true;
+        Assert.True(model.CanEditRefreshAllHours);
+        Assert.Contains(nameof(SettingsFormModel.CanEditRefreshAllHours), raised);
+        model.RefreshAllEveryHours = 3;
+        model.RefreshAllOnTimer = false;
+
+        Assert.False(model.CanEditRefreshAllHours);
+        Assert.Equal(3, model.ToSettings().RefreshAllEveryHours);
+        Assert.True(model.HasChanges);
+    }
+
+    [Fact]
+    public void ABlankOrFractionalHoursValueIsRefusedOnlyWhileTheTimerIsTicked()
+    {
+        var model = new SettingsFormModel(new UserSettings { RefreshAllOnTimer = true }, DefaultFolder);
+
+        model.RefreshAllEveryHours = null;
+        Assert.False(model.IsValid);
+        Assert.Equal(AppText.EnterRefreshAllHours, model.ValidationText);
+        Assert.Equal(RefreshAllLimits.DefaultHours, model.ToSettings().RefreshAllEveryHours);
+
+        model.RefreshAllEveryHours = 2.5m;
+        Assert.Equal(AppText.WholeNumberRequired, model.ValidationText);
+        Assert.Equal(RefreshAllLimits.DefaultHours, model.ToSettings().RefreshAllEveryHours);
+
+        // Unticked, the box is off and the saved value stays
+        model.RefreshAllOnTimer = false;
+        Assert.True(model.IsValid);
+        Assert.Equal(RefreshAllLimits.DefaultHours, model.ToSettings().RefreshAllEveryHours);
+
+        model.RefreshAllOnTimer = true;
+        model.RefreshAllEveryHours = 4;
+        Assert.True(model.IsValid);
+        Assert.Equal(4, model.ToSettings().RefreshAllEveryHours);
+    }
+
+    [Fact]
+    public void TheHoursRuleComesAfterTheKeepDaysAndBeforeTheWholeNumberRule()
+    {
+        var model = new SettingsFormModel(new UserSettings { RefreshAllOnTimer = true }, DefaultFolder);
+        model.RefreshAllEveryHours = null;
+        model.AbuseIpDbKeepDays = null;
+        Assert.Equal(AppText.EnterKeepDays, model.ValidationText);
+
+        model.AbuseIpDbKeepDays = 2.5m;
+        Assert.Equal(AppText.EnterRefreshAllHours, model.ValidationText);
+
+        model.WriteModSecurityLists = true;
+        model.ModSecurityFirstRuleId = null;
+        Assert.Equal(AppText.EnterRefreshAllHours, model.ValidationText);
+    }
+
+    [Fact]
+    public void EitherTimerValueIsAChangeAndGoingBackIsNone()
+    {
+        var model = new SettingsFormModel(new UserSettings(), DefaultFolder);
+        var raised = new List<string?>();
+        model.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        model.RefreshAllOnTimer = true;
+        Assert.True(model.HasChanges);
+        model.RefreshAllOnTimer = false;
+        Assert.False(model.HasChanges);
+
+        model.RefreshAllEveryHours = 7;
+        Assert.True(model.HasChanges);
+        model.RefreshAllEveryHours = 6;
+        Assert.False(model.HasChanges);
+
+        Assert.Contains(nameof(SettingsFormModel.RefreshAllOnTimer), raised);
+        Assert.Contains(nameof(SettingsFormModel.RefreshAllEveryHours), raised);
+        Assert.Contains(nameof(SettingsFormModel.HasChanges), raised);
+
+        model.RefreshAllOnTimer = true;
+        model.RefreshAllEveryHours = 2;
+        model.Load(new UserSettings());
+        Assert.False(model.RefreshAllOnTimer);
+        Assert.Equal(6m, model.RefreshAllEveryHours);
+        Assert.False(model.HasChanges);
+    }
+
+    [Fact]
     public void ChangingAValueRaisesHasChanges()
     {
         var model = new SettingsFormModel(new UserSettings(), DefaultFolder);

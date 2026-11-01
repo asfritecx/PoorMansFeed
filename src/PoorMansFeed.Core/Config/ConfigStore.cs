@@ -7,6 +7,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.History;
 using PoorMansFeed.Core.ModSecurity;
 
 namespace PoorMansFeed.Core.Config;
@@ -33,6 +34,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     // A metadata value, not a fourth row, because older builds read a fourth row as a changed file and offer
     // Start fresh
     private const string RuleIdsKey = "modsecurity_rule_ids";
+    private const string SavedFeedsKey = "saved_feeds";
 
     private static readonly ConfigSection[] Sections = [ConfigSection.Settings, ConfigSection.Exceptions, ConfigSection.Accounting];
 
@@ -217,15 +219,38 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     public bool TryRecordAnswer(AbuseRateLimit rateLimit, DateTimeOffset answeredAt, bool countDownload)
     {
         ArgumentNullException.ThrowIfNull(rateLimit);
-        return Save(ConfigSection.Accounting, "save the download accounting", snapshot =>
-        {
-            byte[] json = AccountingToJson(snapshot.Accounting.After(rateLimit, answeredAt, countDownload));
-            // What was sealed, read back, so Current is what the next launch reads (whole seconds, offset zero)
-            if (!TryReadAccounting(json, out AbuseAccounting? readBack))
-                throw new InvalidOperationException("The download accounting didn't read back.");
-            return (json, snapshot with { Accounting = readBack });
-        });
+        return SaveAccounting("save the download accounting",
+                              snapshot => snapshot with { Accounting = snapshot.Accounting.After(rateLimit, answeredAt, countDownload) });
     }
+
+    /// <summary>The IPinfo download requests and refusal as last committed.</summary>
+    internal IpInfoDownloads CurrentIpInfoDownloads => _snapshot.IpInfoDownloads;
+
+    /// <summary>One IPinfo download request at now, by <see cref="IpInfoDownloads.AfterRequest"/>, in one transaction.</summary>
+    internal bool TryRecordIpInfoRequest(DateTimeOffset now) =>
+        SaveAccounting("count an IPinfo download",
+                       snapshot => snapshot with { IpInfoDownloads = snapshot.IpInfoDownloads.AfterRequest(now) });
+
+    /// <summary>IPinfo's refusal at now, by <see cref="IpInfoDownloads.AfterRefusal"/>, in one transaction.</summary>
+    internal bool TryRecordIpInfoRefusal(DateTimeOffset now, TimeSpan? retryAfter) =>
+        SaveAccounting("save the IPinfo refusal",
+                       snapshot => snapshot with { IpInfoDownloads = snapshot.IpInfoDownloads.AfterRefusal(now, retryAfter) });
+
+    /// <summary>A download IPinfo served, by <see cref="IpInfoDownloads.AfterServed"/>, in one transaction.</summary>
+    internal bool TryRecordIpInfoServed() =>
+        SaveAccounting("clear the IPinfo refusal", snapshot => snapshot with { IpInfoDownloads = snapshot.IpInfoDownloads.AfterServed() });
+
+    /// <summary>The accounting section holds the AbuseIPDB accounting and the IPinfo downloads, so each save writes both.</summary>
+    private bool SaveAccounting(string operation, Func<ConfigSnapshot, ConfigSnapshot> change) =>
+        Save(ConfigSection.Accounting, operation, snapshot =>
+        {
+            ConfigSnapshot next = change(snapshot);
+            byte[] json = AccountingToJson(next.Accounting, next.IpInfoDownloads);
+            // What was sealed, read back, so Current is what the next launch reads (whole seconds, offset zero)
+            if (!TryReadAccounting(json, out AbuseAccounting? readBack, out IpInfoDownloads? downloads))
+                throw new InvalidOperationException("The download accounting didn't read back.");
+            return (json, next with { Accounting = readBack, IpInfoDownloads = downloads });
+        });
 
     /// <summary>Disposes the seal, then the connection, which releases the lock. Every later save returns false.</summary>
     public void Dispose()
@@ -307,7 +332,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             if (read != ConfigOpenState.Opened)
                 return read;
 
-            snapshot = snapshot! with { RuleIds = ReadRuleIds(conn, seal) };
+            snapshot = snapshot! with { RuleIds = ReadRuleIds(conn, seal), SavedFeeds = ReadSavedFeeds(conn, seal) };
             return Finish(conn, seal, snapshot, paths, time, out store);
         }
         finally
@@ -396,7 +421,8 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
 
             string fileId = ConfigSeal.NewFileId();
             seal = new ConfigSeal(key, fileId);
-            var snapshot = new ConfigSnapshot(settings, exceptions, AbuseAccounting.Empty, ModSecurityRuleIds.Empty);
+            var snapshot = new ConfigSnapshot(settings, exceptions, AbuseAccounting.Empty, IpInfoDownloads.Empty,
+                                              ModSecurityRuleIds.Empty, SavedFeedList.Empty);
             string now = Stamp(time);
 
             using (SqliteTransaction tx = conn.BeginTransaction())
@@ -539,6 +565,7 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             paths.SettingsPath, paths.ExceptionsPath, paths.UnreadableExceptionsPath, paths.ConfigMadePath,
             paths.UnreadableConfigPath, paths.AbuseIpDbKeyPath, paths.AzureServiceTagsPath,
             paths.AzureServiceTagsSourcePath, paths.AwsIpRangesPath, paths.AwsIpRangesSourcePath,
+            paths.GoogleCloudRangesPath, paths.GoogleCloudRangesSourcePath,
         }.Concat(MigratedNames(paths.SettingsPath)).Concat(MigratedNames(paths.ExceptionsPath)).Any(File.Exists);
 
     private enum FileKind { Empty, Current, Newer, Unreadable }
@@ -659,13 +686,15 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             return ConfigOpenState.Unreadable;
         }
 
-        if (!TryReadAccounting(plaintexts[ConfigSection.Accounting], out AbuseAccounting? accounting))
+        if (!TryReadAccounting(plaintexts[ConfigSection.Accounting], out AbuseAccounting? accounting,
+                               out IpInfoDownloads? downloads))
         {
             Trace.TraceWarning("config.db: its download accounting can't be read.");
             return ConfigOpenState.Unreadable;
         }
 
-        snapshot = new ConfigSnapshot(SettingsStore.Normalise(settings), exceptions, accounting, ModSecurityRuleIds.Empty);
+        snapshot = new ConfigSnapshot(SettingsStore.Normalise(settings), exceptions, accounting, downloads,
+                                      ModSecurityRuleIds.Empty, SavedFeedList.Empty);
         return ConfigOpenState.Opened;
     }
 
@@ -811,18 +840,105 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
         return ModSecurityRuleIds.Unavailable;
     }
 
+    internal SavedFeedsRead SavedFeeds
+    {
+        get
+        {
+            SavedFeedList list = _snapshot.SavedFeeds;
+            return new SavedFeedsRead(list.IsAvailable, list.Feeds);
+        }
+    }
+
+    /// <summary>Saved before it returns. Nothing is written when nothing changes or on a failure.</summary>
+    internal SavedFeedsFailure ApplySavedFeed(string key, FeedKind kind, SavedFeedIntent intent, DateTimeOffset atUtc) =>
+        SaveFeeds("save a saved feed", list => list.Apply(key, kind, intent, atUtc));
+
+    /// <summary>One commit for the whole batch; a failed commit fails every stamp that would have saved.</summary>
+    internal IReadOnlyList<SavedFeedStampOutcome> ApplySavedFeedStamps(IReadOnlyList<SavedFeedStamp> stamps)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        IReadOnlyList<SavedFeedStampOutcome>? outcomes = null;
+        SavedFeedsFailure failure = SaveFeeds("save refreshed feeds", list =>
+        {
+            (outcomes, SavedFeedList next) = list.ApplyStamps(stamps, SavedFeedList.MaxJsonBytes);
+            return (SavedFeedsFailure.None, next);
+        });
+        if (outcomes is null)
+            return stamps.Select(_ => SavedFeedStampOutcome.StorageError).ToList();
+        if (failure == SavedFeedsFailure.None)
+            return outcomes;
+        return outcomes.Select(outcome => outcome == SavedFeedStampOutcome.Saved ? SavedFeedStampOutcome.StorageError : outcome)
+                       .ToList();
+    }
+
+    internal SavedFeedsFailure RemoveSavedFeed(string key) =>
+        SaveFeeds("remove a saved feed", list => list.Remove(key));
+
+    private SavedFeedsFailure SaveFeeds(string operation, Func<SavedFeedList, (SavedFeedsFailure, SavedFeedList)> change)
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return SavedFeedsFailure.StorageError;
+
+            SavedFeedList current = _snapshot.SavedFeeds;
+            (SavedFeedsFailure failure, SavedFeedList next) = change(current);
+            if (failure != SavedFeedsFailure.None || ReferenceEquals(next, current))
+                return failure;
+
+            byte[] blob = _seal.Seal(ConfigSection.SavedFeeds, SchemaVersion, next.ToJson());
+            string value = Convert.ToBase64String(blob);
+            try
+            {
+                using SqliteTransaction tx = _conn.BeginTransaction();
+                SetMetadata(_conn, tx, SavedFeedsKey, value);
+                BeforeCommit?.Invoke();
+                tx.Commit();
+            }
+            catch (Exception ex) when (IsStorageFailure(ex))
+            {
+                StateOf(ex, operation);
+                return SavedFeedsFailure.StorageError;
+            }
+
+            _snapshot = _snapshot with { SavedFeeds = next };
+            return SavedFeedsFailure.None;
+        }
+    }
+
+    /// <summary>
+    /// A value this build can't open or fully read is left as it is and gives Unavailable; the launch goes on.
+    /// </summary>
+    private static SavedFeedList ReadSavedFeeds(SqliteConnection conn, ConfigSeal seal)
+    {
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT value FROM metadata WHERE key = $key;";
+        cmd.Parameters.Add("$key", SqliteType.Text).Value = SavedFeedsKey;
+        if (cmd.ExecuteScalar() is not string value)
+            return SavedFeedList.Empty;
+
+        var blob = new byte[value.Length * 3 / 4 + 3];
+        if (Convert.TryFromBase64String(value, blob, out int length)
+            && seal.TryOpen(ConfigSection.SavedFeeds, SchemaVersion, blob.AsSpan(0, length), out byte[]? json)
+            && SavedFeedList.TryRead(json) is { } feeds)
+            return feeds;
+
+        Trace.TraceWarning("config.db: its saved feeds can't be read, so they are left as they are.");
+        return SavedFeedList.Unavailable;
+    }
+
     private static byte[] Plaintext(ConfigSection section, ConfigSnapshot snapshot) => section switch
     {
         ConfigSection.Settings => SettingsStore.ToJson(snapshot.Settings),
         ConfigSection.Exceptions => ExceptionListStore.ToJson(snapshot.Exceptions),
-        ConfigSection.Accounting => AccountingToJson(snapshot.Accounting),
+        ConfigSection.Accounting => AccountingToJson(snapshot.Accounting, snapshot.IpInfoDownloads),
         _ => throw new ArgumentOutOfRangeException(nameof(section), section, null),
     };
 
     // ----- The accounting section -----
 
-    /// <summary>Web casing; <c>resetAt</c> is Unix seconds and <c>rateLimit</c> null when no limit is stored.</summary>
-    private static byte[] AccountingToJson(AbuseAccounting accounting)
+    /// <summary>Web casing; every time is Unix seconds, and <c>rateLimit</c> null when no limit is stored.</summary>
+    private static byte[] AccountingToJson(AbuseAccounting accounting, IpInfoDownloads downloads)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
@@ -852,6 +968,18 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
             else
                 writer.WriteNull("downloadsDay");
             writer.WriteNumber("downloadsCount", accounting.DownloadsDay is null ? 0 : accounting.DownloadsOnDay);
+
+            // A field of its own, which older builds ignore when they read the section
+            writer.WriteStartObject("ipinfoDownloads");
+            writer.WriteStartArray("requests");
+            foreach (DateTimeOffset request in downloads.Requests)
+                writer.WriteNumberValue(request.ToUnixTimeSeconds());
+            writer.WriteEndArray();
+            if (downloads.RefusedUntil is DateTimeOffset until)
+                writer.WriteNumber("refusedUntil", until.ToUnixTimeSeconds());
+            else
+                writer.WriteNull("refusedUntil");
+            writer.WriteEndObject();
             writer.WriteEndObject();
         }
         return buffer.WrittenSpan.ToArray();
@@ -861,9 +989,11 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
     /// A bad field reads as absent, not as a damaged file (a limit with no <c>remaining</c> is no limit). False only
     /// when the JSON doesn't parse or isn't an object.
     /// </summary>
-    private static bool TryReadAccounting(ReadOnlySpan<byte> json, [NotNullWhen(true)] out AbuseAccounting? accounting)
+    private static bool TryReadAccounting(ReadOnlySpan<byte> json, [NotNullWhen(true)] out AbuseAccounting? accounting,
+                                          [NotNullWhen(true)] out IpInfoDownloads? downloads)
     {
         accounting = null;
+        downloads = null;
         JsonDocument document;
         try
         {
@@ -893,8 +1023,25 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
                 : null;
             int count = day is null ? 0 : Math.Max(0, IntOf(root, "downloadsCount") ?? 0);
             accounting = new AbuseAccounting(rateLimit, day, count);
+            downloads = ReadIpInfoDownloads(root);
             return true;
         }
+    }
+
+    /// <summary>A missing or bad field reads as none, and a bad time in it is left out.</summary>
+    private static IpInfoDownloads ReadIpInfoDownloads(JsonElement root)
+    {
+        if (!root.TryGetProperty("ipinfoDownloads", out JsonElement field) || field.ValueKind != JsonValueKind.Object)
+            return IpInfoDownloads.Empty;
+
+        var requests = new List<DateTimeOffset>();
+        if (field.TryGetProperty("requests", out JsonElement list) && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in list.EnumerateArray())
+                if (TimeOf(item) is DateTimeOffset request)
+                    requests.Add(request);
+        }
+        return IpInfoDownloads.FromStored(requests, TimeOf(field, "refusedUntil"));
     }
 
     private static int? IntOf(JsonElement element, string name) =>
@@ -903,8 +1050,10 @@ internal sealed class ConfigStore : IAbuseAccounting, IDisposable
 
     /// <summary>A time in Unix seconds, or null when it is absent or outside <see cref="DateTimeOffset"/>'s range.</summary>
     private static DateTimeOffset? TimeOf(JsonElement element, string name) =>
-        element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number
-        && value.TryGetInt64(out long seconds)
+        element.TryGetProperty(name, out JsonElement value) ? TimeOf(value) : null;
+
+    private static DateTimeOffset? TimeOf(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long seconds)
         && seconds >= DateTimeOffset.MinValue.ToUnixTimeSeconds() && seconds <= DateTimeOffset.MaxValue.ToUnixTimeSeconds()
             ? DateTimeOffset.FromUnixTimeSeconds(seconds)
             : null;

@@ -46,14 +46,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _checkOwnsLine;
     private bool _started;
     private bool _disposed;
+    private ResultRow? _menuRow;
     private bool _isBusy;
     private bool _isSearching;
     private bool _isCheckingAbuse;
     private string _pillBeforeUpdate = "";
     private bool _pillWarningBeforeUpdate;
+    private bool _sawRefreshing;
+    private bool _checkCancelledByRefresh;
+    // Null without a runner, when the gate's own end of the refresh ends the card's wait instead
+    private RefreshAllRunner? _refreshRunner;
+    private RefreshRunResult? _refreshShown;
+    private bool _refreshEndPending;
+    private DatasetInfo? _datasetBeforeRefresh;
+    private (DatasetState State, string Pill, bool Warning, string Title, string Detail, int Progress, bool Indeterminate)
+        _cardBeforeRefresh;
 
     private string _pillText = AppText.Starting;
+    private string _pillStateText = AppText.Starting;
+    private string _pillProgressText = "";
     private bool _isPillWarning;
+    private bool _isPillSuccess;
+    private bool _canOpenDatasetPill;
     private string _datasetStatusText = AppText.Starting;
     private string _datasetDetailText = "";
     private string _datasetFactsText = AppText.NoDatasetFacts;
@@ -121,6 +135,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         State = DatasetState.Starting;
 
         UpdateDatasetCommand = new AsyncRelayCommand(UpdateDatasetAsync, CanStart);
+        UpdateDatasetInWindowCommand = new AsyncRelayCommand(UpdateDatasetInWindowAsync, CanOfferUpdate);
+        ShowUpdateWindowCommand = new RelayCommand(_ui.ShowDatasetUpdate, () => IsBusy && !_disposed);
+        CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync, CanCheckForUpdates);
         CancelUpdateCommand = new RelayCommand(CancelUpdate, () => IsBusy);
         SearchCommand = new AsyncRelayCommand(SearchFromBoxAsync, CanSearch);
         ExportCommand = new AsyncRelayCommand(ExportAsync, CanExport);
@@ -132,12 +149,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // Outside the work gate too: a browser is not work, and a modal dialog already blocks the results menu
         OpenInIpinfoCommand = new AsyncRelayCommand(OpenInIpinfoAsync, () => CanOpenWebPage(IpinfoPage()));
         OpenInAbuseIpDbCommand = new AsyncRelayCommand(OpenInAbuseIpDbAsync, () => CanOpenWebPage(AbuseIpDbPage()));
+        // Outside the work gate, as the pages are: a copy is not work
+        CopyNetworkCommand = new AsyncRelayCommand(CopyNetworkAsync, CanCopyMenuRow);
+        CopyAsNumberCommand = new AsyncRelayCommand(CopyAsNumberAsync, () => CanCopyMenuRow() && _menuRow?.AsnText is not null);
         StartFreshCommand = new AsyncRelayCommand(StartFreshAsync, () => CanLeaveStop() && _canStartFresh);
         StartWithoutOldExceptionsCommand = new AsyncRelayCommand(StartWithoutOldExceptionsAsync,
             () => CanLeaveStop() && _canStartWithoutOldExceptions);
     }
 
     public IAsyncRelayCommand UpdateDatasetCommand { get; }
+
+    /// <summary>Shows the update window and starts the update there; offered only while the dataset isn't current.</summary>
+    public IAsyncRelayCommand UpdateDatasetInWindowCommand { get; }
+
+    /// <summary>Shows the update window again while this view model's update runs.</summary>
+    public IRelayCommand ShowUpdateWindowCommand { get; }
+
+    /// <summary>Asks IPinfo whether a newer dataset is out; never downloads it.</summary>
+    public IAsyncRelayCommand CheckForUpdatesCommand { get; }
     public IRelayCommand CancelUpdateCommand { get; }
     public IAsyncRelayCommand SearchCommand { get; }
     public IAsyncRelayCommand ExportCommand { get; }
@@ -154,6 +183,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Opens the searched public address on AbuseIPDB's website, from the results menu.</summary>
     public IAsyncRelayCommand OpenInAbuseIpDbCommand { get; }
+
+    /// <summary>The row the results menu was last opened on, or null when it was opened from no row.</summary>
+    public ResultRow? MenuRow => _menuRow;
+
+    public IAsyncRelayCommand CopyNetworkCommand { get; }
+    public IAsyncRelayCommand CopyAsNumberCommand { get; }
 
     /// <summary>Asks, then makes a new settings file; offered only for a settings file that can't be used.</summary>
     public IAsyncRelayCommand StartFreshCommand { get; }
@@ -176,7 +211,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public string PillText { get => _pillText; private set => SetProperty(ref _pillText, value); }
 
+    /// <summary>The pill's state alone, without the percent, so a screen reader hears state changes only.</summary>
+    public string PillStateText { get => _pillStateText; private set => SetProperty(ref _pillStateText, value); }
+
+    /// <summary>What follows <see cref="PillStateText"/> on the pill while an update runs: a percent or an ellipsis.</summary>
+    public string PillProgressText { get => _pillProgressText; private set => SetProperty(ref _pillProgressText, value); }
+
     public bool IsPillWarning { get => _isPillWarning; private set => SetProperty(ref _isPillWarning, value); }
+
+    /// <summary>True only while the dataset is up to date: the pill's dot turns green.</summary>
+    public bool IsPillSuccess { get => _isPillSuccess; private set => SetProperty(ref _isPillSuccess, value); }
+
+    /// <summary>The pill opens its drop-down only once start-up has opened the service, and not while closing.</summary>
+    public bool CanOpenDatasetPill
+    {
+        get => _canOpenDatasetPill;
+        private set => SetProperty(ref _canOpenDatasetPill, value);
+    }
 
     public string DatasetStatusText { get => _datasetStatusText; private set => SetProperty(ref _datasetStatusText, value); }
 
@@ -269,8 +320,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     internal async Task CloseAfterStartStepAsync()
     {
         _closingAfterStartStep = true;
-        PillText = AppText.ClosingAfterStartUp;
-        IsPillWarning = false;
+        SetPill(AppText.ClosingAfterStartUp, false);
+        RefreshPillEnabled();
         RefreshCommandStates();
         _lifetime.Cancel();
         if (_startStep is { } step)
@@ -304,6 +355,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool CanCopy() => CanStart() && _lastQuery is not null && _totalCount > 0;
 
     // Any address search counts, found or not: the score is about the address, not about a network in the dataset
+    // A dataset that is out of date, missing or failed to update offers an update; one current or being checked doesn't
+    private bool CanOfferUpdate() => CanStart()
+        && State is DatasetState.UpdateAvailable or DatasetState.CheckFailed or DatasetState.NoDataset or DatasetState.UpdateFailed;
+
+    private bool CanCheckForUpdates() => CanStart() && HasDataset && State != DatasetState.Checking;
+
     private bool CanCheckAbuse() =>
         CanStart() && _abuse is not null && !_isSearching && !_isCheckingAbuse && _lastQuery is { Kind: SearchKind.IpAddress };
 
@@ -355,13 +412,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         // As a first launch shows it, until the check, the update or the no-dataset line sets it
-        PillText = AppText.Starting;
-        IsPillWarning = false;
+        SetPill(AppText.Starting, false);
         IsStopped = false;
         CanStartFresh = false;
         CanStartWithoutOldExceptions = false;
         SetStopAction("", false);
         _started = true;
+        RefreshPillEnabled();
         _gate.SetStarted(true);
         // The settings are the saved ones only once the service has opened, so the folder is resolved again
         ExportFolder = ResolveExportFolder();
@@ -423,9 +480,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void Stop(StartupFailure failure)
     {
         _stoppedBy = failure;
-        PillText = AppText.NotStarted;
-        IsPillWarning = true;
+        SetPill(AppText.NotStarted, true);
         IsStopped = true;
+        RefreshPillEnabled();
         StopTitle = AppText.StopTitle(failure);
         StopText = AppText.StopText(failure);
         CanStartFresh = failure is StartupFailure.ConfigNewer or StartupFailure.ConfigUnreadable
@@ -552,6 +609,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await RunUpdateAsync();
     }
 
+    // The window shows first, so the token dialog, if one is needed, opens over it
+    private async Task UpdateDatasetInWindowAsync()
+    {
+        if (!CanOfferUpdate())
+        {
+            return;
+        }
+
+        _ui.ShowDatasetUpdate();
+        await UpdateDatasetAsync();
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        if (!CanCheckForUpdates())
+        {
+            return;
+        }
+
+        if (!await EnsureTokenAsync(TokenPromptReason.FirstRun) || !CanCheckForUpdates())
+        {
+            return;
+        }
+
+        StartCheck();
+    }
+
     /// <summary>
     /// Returns true when a token is saved. Asks for one only when none is saved, and holds the gate from the prompt
     /// until the save has returned.
@@ -666,31 +750,38 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             case UpdatePhase.Checking:
                 SetUpdatingText(AppText.CheckingForUpdates, "");
-                SetProgress(0, true);
+                SetUpdatingProgress(0, true);
                 break;
             case UpdatePhase.Downloading when report.Total > 0:
                 SetUpdatingText(AppText.DownloadingTitle,
                     AppText.DownloadProgress(report.Done / MegabyteBytes, report.Total / MegabyteBytes));
-                SetProgress(Percent(report.Done, report.Total), false);
+                SetUpdatingProgress(Percent(report.Done, report.Total), false);
                 break;
             case UpdatePhase.Downloading:
                 SetUpdatingText(AppText.DownloadingTitle, AppText.DownloadedSoFar(report.Done / MegabyteBytes));
-                SetProgress(0, true);
+                SetUpdatingProgress(0, true);
                 break;
             case UpdatePhase.Importing:
                 int percent = Percent(report.Done, report.Total);
                 SetUpdatingText(AppText.ImportingTitle, AppText.ImportPercentRead(percent));
-                SetProgress(percent, false);
+                SetUpdatingProgress(percent, false);
                 break;
             case UpdatePhase.Indexing:
                 SetUpdatingText(AppText.IndexingTitle, AppText.IndexingDetail);
-                SetProgress(0, true);
+                SetUpdatingProgress(0, true);
                 break;
             case UpdatePhase.Finishing:
                 SetUpdatingText(AppText.FinishingTitle, "");
-                SetProgress(0, true);
+                SetUpdatingProgress(0, true);
                 break;
         }
+    }
+
+    // The pill follows the bar: a percent while it is determinate, an ellipsis while it waits
+    private void SetUpdatingProgress(int value, bool indeterminate)
+    {
+        SetProgress(value, indeterminate);
+        SetPill(AppText.UpdatingWord, indeterminate ? AppText.UpdatingWaitSuffix : AppText.UpdatingPercentSuffix(value), false);
     }
 
     private void SetUpdatingText(string title, string detail)
@@ -714,8 +805,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             }
             else
             {
-                SetDatasetState(DatasetState.Current, AppText.UpToDate, false, AppText.UpdatedTitle, "");
-                SetProgress(100, false);
+                ShowUpdated();
             }
 
             return;
@@ -725,7 +815,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RefreshDatasetFacts();
         if (HasDataset)
         {
-            SetDatasetState(DatasetState.UpdateFailed, _pillBeforeUpdate, _pillWarningBeforeUpdate,
+            SetDatasetState(DatasetState.UpdateFailed, AppText.UpdateFailedPill, true,
                 AppText.UpdateFailedTitle, detail + " " + AppText.StillInUse);
         }
         else
@@ -734,6 +824,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         SetProgress(0, false);
+    }
+
+    private void ShowUpdated()
+    {
+        SetDatasetState(DatasetState.Current, AppText.UpToDate, false, AppText.UpdatedTitle, "");
+        SetProgress(100, false);
     }
 
     private void ShowUpdateCancelled()
@@ -793,7 +889,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         switch (result.Outcome)
         {
             case UpdateCheckOutcome.UpToDate:
-                SetDatasetState(DatasetState.Current, AppText.UpToDate, false, AppText.UpToDate, "");
+                SetDatasetState(DatasetState.Current, AppText.UpToDate, false, AppText.UpToDate, AppText.AlreadyCurrentDetail);
                 SetProgress(0, false);
                 break;
             case UpdateCheckOutcome.UpdateAvailable:
@@ -838,6 +934,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         UpdateFailure.NotEnoughDiskSpace => AppText.DiskFull,
         UpdateFailure.CorruptData => AppText.CorruptData,
         UpdateFailure.StorageError => AppText.StorageError,
+        UpdateFailure.KeptForUser => AppText.UpdateKeptForUser,
         _ => AppText.ServiceError,
     };
 
@@ -889,6 +986,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _rulesFiles.Clear();
         }
 
+        _menuRow = null;
         _isSearching = true;
         RefreshCommandStates();
         ResultsSummaryText = AppText.Searching;
@@ -1016,6 +1114,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         HasResults = Results.Count > 0;
+        SetMenuRow(null);
+    }
+
+    internal void SetMenuRow(ResultRow? row)
+    {
+        _menuRow = row;
+        CopyNetworkCommand.NotifyCanExecuteChanged();
+        CopyAsNumberCommand.NotifyCanExecuteChanged();
     }
 
     private async Task ExportAsync()
@@ -1025,6 +1131,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // A feed write from the press to the end, so Refresh all doesn't start under it
+        using IDisposable pageWork = _gate.EnterPageWork();
         int rulesMark = _rulesFiles.Clear();
         ExportPlan plan;
         try
@@ -1145,12 +1253,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return AppText.ExportFolderUnavailable;
             case ExportFailure.WriteFailed:
                 return result.FailedFile is { } failed
-                    ? AppText.ExportFileFailed(failed, result.Files, result.OldFilesLeft, unsaved)
+                    ? AppText.ExportFileFailed(failed, result.Files, result.OldFilesLeft, unsaved, result.Record)
                     : AppText.ExportWriteFailed;
             case ExportFailure.NothingToExport:
                 return AppText.NothingExported;
             case ExportFailure.ExceptionsUnreadable:
                 return AppText.ExceptionsUnreadable;
+        }
+
+        if (result.NetworksWritten == 0 && result.EmptiedFiles is { Count: > 0 } emptied)
+        {
+            return AppText.FeedRecordLead(result.Record) + AppText.Emptied(emptied.Count, AppText.AllNetworksLeftOut)
+                + (unsaved ? AppText.UnsavedSettingsNote : "");
         }
 
         if (result.NetworksWritten == 0)
@@ -1169,8 +1283,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             text += AppText.ExportWholeRangesLeftOut(result.WholeRangesLeftOut);
         }
 
-        return text + AppText.ExceptionsApplied(result.ExceptionCuts, result.ExceptionRemovals, "network", "networks")
-            + AppText.OldFeedFilesLeft(result.OldFilesLeft) + (result.NoFeedType ? AppText.ExportNoFeedType : "")
+        return AppText.FeedRecordLead(result.Record) + text
+            + AppText.ExceptionsApplied(result.ExceptionCuts, result.ExceptionRemovals, "network", "networks")
+            + AppText.FilesEmptied(result.EmptiedFiles) + (result.NoFeedType ? AppText.ExportNoFeedType : "")
             + (unsaved ? AppText.UnsavedSettingsNote : "");
     }
 
@@ -1220,6 +1335,37 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private Task OpenInIpinfoAsync() => OpenWebPageAsync(IpinfoPage());
 
     private Task OpenInAbuseIpDbAsync() => OpenWebPageAsync(AbuseIpDbPage());
+
+    private bool CanCopyMenuRow() => !_disposed && !_closingAfterStartStep && !_isSearching && _menuRow is not null;
+
+    private Task CopyNetworkAsync() =>
+        CanCopyMenuRow() && _menuRow is { } row
+            ? CopyMenuTextAsync(row.NetworkText, AppText.NetworkCopyFailed)
+            : Task.CompletedTask;
+
+    private Task CopyAsNumberAsync() =>
+        CanCopyMenuRow() && _menuRow is { AsnText: { } asn }
+            ? CopyMenuTextAsync(asn, AppText.AsNumberCopyFailed)
+            : Task.CompletedTask;
+
+    // No success line, so a check's score or an export's line stays; a success clears only a copy's own failure line
+    private async Task CopyMenuTextAsync(string text, string failedLine)
+    {
+        try
+        {
+            await _ui.CopyTextAsync(text);
+        }
+        catch (Exception)
+        {
+            SetResultsAction(failedLine);
+            return;
+        }
+
+        if (ResultsActionText is AppText.NetworkCopyFailed or AppText.AsNumberCopyFailed)
+        {
+            SetResultsAction("");
+        }
+    }
 
     private Task OpenWebPageAsync(WebPage? page)
     {
@@ -1497,6 +1643,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>The window's close, made once the pages exist, which is after this view model.</summary>
+    internal CloseChain? CloseChain { get; private set; }
+
+    internal void UseCloseChain(CloseChain chain)
+    {
+        ArgumentNullException.ThrowIfNull(chain);
+        CloseChain = chain;
+    }
+
     /// <summary>Called by the window before it closes. Closing while busy cancels the work first and waits for it.</summary>
     public async Task<bool> ConfirmCloseAsync()
     {
@@ -1603,11 +1758,38 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void SetDatasetState(DatasetState state, string pill, bool warning, string title, string detail)
     {
         State = state;
-        PillText = pill;
-        IsPillWarning = warning;
+        SetPill(pill, warning);
         DatasetStatusText = title;
         DatasetDetailText = detail;
+        UpdateDatasetInWindowCommand.NotifyCanExecuteChanged();
+        CheckForUpdatesCommand.NotifyCanExecuteChanged();
     }
+
+    // Green only for the up-to-date wording: Refresh all's pill can stand over a current dataset and claims nothing.
+    // An update's pill is its live word with the percent or ellipsis after it.
+    private void SetPill(string pill, bool warning)
+    {
+        if (pill == AppText.Updating)
+        {
+            SetPill(AppText.UpdatingWord, AppText.UpdatingWaitSuffix, warning);
+        }
+        else
+        {
+            SetPill(pill, "", warning);
+        }
+    }
+
+    private void SetPill(string state, string progress, bool warning)
+    {
+        PillStateText = state;
+        PillProgressText = progress;
+        PillText = state + progress;
+        IsPillWarning = warning;
+        IsPillSuccess = !warning && PillText == AppText.UpToDate;
+    }
+
+    private void RefreshPillEnabled() =>
+        CanOpenDatasetPill = _started && !_isStopped && !_closingAfterStartStep && !_disposed;
 
     private void SetProgress(int value, bool indeterminate)
     {
@@ -1638,11 +1820,111 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private static string FactsFor(DatasetInfo? dataset) =>
         dataset is null ? AppText.NoDatasetFacts : AppText.DatasetFacts(dataset.DownloadedOn, dataset.RangeCount, dataset.IncludesIPv6);
 
-    private void GateChanged(object? sender, EventArgs e) => RefreshCommandStates();
+    private void GateChanged(object? sender, EventArgs e)
+    {
+        RefreshCommandStates();
+        if (_disposed || _gate.IsRefreshing == _sawRefreshing)
+            return;
+
+        _sawRefreshing = _gate.IsRefreshing;
+        if (_sawRefreshing)
+            ShowRefreshRunning();
+        else if (_refreshRunner is null)
+            ShowRefreshEnded();
+    }
+
+    internal void ListenToRefresh(RefreshAllRunner runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        if (_refreshRunner is not null)
+            _refreshRunner.Changed -= RefreshRunnerChanged;
+        _refreshRunner = runner;
+        _refreshShown = runner.LastRun;
+        runner.Changed += RefreshRunnerChanged;
+    }
+
+    // The runner raises Changed after it frees the gate, so the card ends its wait on what the run learned
+    private void RefreshRunnerChanged(object? sender, EventArgs e)
+    {
+        if (_disposed || !_refreshEndPending || sender is not RefreshAllRunner runner || runner.IsRunning)
+            return;
+
+        _refreshEndPending = false;
+        RefreshRunResult? run = runner.LastRun;
+        bool newRun = run is not null && !ReferenceEquals(run, _refreshShown);
+        _refreshShown = run;
+
+        // The window closes next, so nothing is read, raised or started
+        if (runner.StoppingForClose)
+        {
+            _checkCancelledByRefresh = false;
+            return;
+        }
+
+        // A download kept back for the user isn't a failed update: the card keeps its state and the summary says why
+        if (newRun && run!.Dataset is { Failure: not UpdateFailure.KeptForUser } result)
+        {
+            _checkCancelledByRefresh = false;
+            ApplyUpdateResult(result);
+        }
+        else
+        {
+            ShowRefreshEnded();
+        }
+    }
+
+    // The refresh updates the dataset itself, so a check still out would answer for the dataset it replaces
+    private void ShowRefreshRunning()
+    {
+        _checkCancelledByRefresh = _checkCts is not null && PendingCheck is { IsCompleted: false };
+        CancelCheck();
+        if (_checkCancelledByRefresh)
+            SetProgress(0, false);
+        _datasetBeforeRefresh = _service.Dataset;
+        _cardBeforeRefresh = (State, PillText, IsPillWarning, DatasetStatusText, DatasetDetailText, ProgressValue,
+            IsProgressIndeterminate);
+        _refreshEndPending = _refreshRunner is not null;
+
+        // The card has no state for a dataset no check has answered for, so a cancelled check's pill names the refresh
+        if (_checkCancelledByRefresh)
+        {
+            SetDatasetState(DatasetState.Current, AppText.DatasetRefreshTitle, false, AppText.DatasetRefreshTitle,
+                AppText.DatasetWaitsForRefresh);
+        }
+        else
+        {
+            DatasetStatusText = AppText.DatasetRefreshTitle;
+            DatasetDetailText = AppText.DatasetWaitsForRefresh;
+        }
+    }
+
+    private void ShowRefreshEnded()
+    {
+        RefreshDatasetFacts();
+        if (_service.Dataset != _datasetBeforeRefresh)
+        {
+            ShowUpdated();
+        }
+        else if (_checkCancelledByRefresh)
+        {
+            StartCheck();
+        }
+        else
+        {
+            var card = _cardBeforeRefresh;
+            SetDatasetState(card.State, card.Pill, card.Warning, card.Title, card.Detail);
+            SetProgress(card.Progress, card.Indeterminate);
+        }
+
+        _checkCancelledByRefresh = false;
+    }
 
     private void RefreshCommandStates()
     {
         UpdateDatasetCommand.NotifyCanExecuteChanged();
+        UpdateDatasetInWindowCommand.NotifyCanExecuteChanged();
+        ShowUpdateWindowCommand.NotifyCanExecuteChanged();
+        CheckForUpdatesCommand.NotifyCanExecuteChanged();
         CancelUpdateCommand.NotifyCanExecuteChanged();
         SearchCommand.NotifyCanExecuteChanged();
         ExportCommand.NotifyCanExecuteChanged();
@@ -1652,6 +1934,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ModSecurityRulesCommand.NotifyCanExecuteChanged();
         OpenInIpinfoCommand.NotifyCanExecuteChanged();
         OpenInAbuseIpDbCommand.NotifyCanExecuteChanged();
+        CopyNetworkCommand.NotifyCanExecuteChanged();
+        CopyAsNumberCommand.NotifyCanExecuteChanged();
         RefreshStopCommands();
     }
 
@@ -1663,7 +1947,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         _disposed = true;
+        RefreshPillEnabled();
         _gate.Changed -= GateChanged;
+        if (_refreshRunner is not null)
+            _refreshRunner.Changed -= RefreshRunnerChanged;
         CancelCheck();
         _lifetime.Cancel();
         CancelUpdate();

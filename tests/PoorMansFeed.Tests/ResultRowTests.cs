@@ -70,6 +70,34 @@ public sealed class ResultRowTests
     }
 
     [Fact]
+    public void TheAsNumberToCopyIsTheAsnAloneWithAsInFront()
+    {
+        Assert.Equal("AS15169", ResultRow.From(new NetworkRecord("8.8.8.0/24", "US", "United States", "NA", "AS15169", "Google LLC", "google.com")).AsnText);
+        Assert.Equal("AS15169", ResultRow.From(new NetworkRecord("8.8.8.0/24", null, null, null, "15169", null, null)).AsnText);
+        Assert.Equal("AS15169", ResultRow.From(new NetworkRecord("8.8.8.0/24", null, null, null, " AS15169 ", "Google LLC", null)).AsnText);
+    }
+
+    [Fact]
+    public void AnAsnWithLeadingZerosOrLowerCaseIsCopiedInItsPlainFormButShownAsTheDatasetHasIt()
+    {
+        var row = ResultRow.From(new NetworkRecord("8.8.8.0/24", null, null, null, "as015169", "Google LLC", null));
+
+        Assert.Equal("as015169" + Dot + "Google LLC", row.AsText);
+        Assert.Equal("AS15169", row.AsnText);
+    }
+
+    [Fact]
+    public void ANetworkWithNoAsnOrOneThatIsntAnAsNumberHasNoneToCopy()
+    {
+        Assert.Null(ResultRow.From(new NetworkRecord("10.0.0.0/8", null, null, null, null, "Google LLC", null)).AsnText);
+        Assert.Null(ResultRow.From(new NetworkRecord("10.0.0.0/8", null, null, null, "  ", null, null)).AsnText);
+
+        var tooLarge = ResultRow.From(new NetworkRecord("10.0.0.0/8", null, null, null, "AS4294967296", "Example", null));
+        Assert.Equal("AS4294967296" + Dot + "Example", tooLarge.AsText);
+        Assert.Null(tooLarge.AsnText);
+    }
+
+    [Fact]
     public void ALargeRangeIsFlaggedAndSaysSoInItsAccessibleText()
     {
         var row = ResultRow.From(new NetworkRecord("10.0.0.0/8", "US", "United States", null, "AS1", "First ISP", "first.example", IsLargeRange: true));

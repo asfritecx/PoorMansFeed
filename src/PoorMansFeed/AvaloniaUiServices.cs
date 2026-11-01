@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using PoorMansFeed.Core;
 using GraphiteUi;
 
@@ -131,6 +132,14 @@ internal sealed class AvaloniaUiServices(Window owner, TimeProvider? time = null
         return await dialog.ShowDialog<ConfigureFeedsChoice>(owner);
     }
 
+    public void ShowDatasetUpdate()
+    {
+        if (owner is MainWindow main)
+        {
+            main.ShowDatasetUpdateWindow();
+        }
+    }
+
     public void ShowSettingsPage()
     {
         if (owner is MainWindow main)
@@ -138,4 +147,6 @@ internal sealed class AvaloniaUiServices(Window owner, TimeProvider? time = null
             main.ShowSettingsPage();
         }
     }
+
+    public void PostToUiThread(Action action) => Dispatcher.UIThread.Post(action);
 }

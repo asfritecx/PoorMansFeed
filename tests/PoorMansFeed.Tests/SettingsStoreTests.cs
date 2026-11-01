@@ -32,6 +32,8 @@ public sealed class SettingsStoreTests
             IPv4MinPrefix = 20,
             IPv6MinPrefix = 48,
             AbuseIpDbKeepDays = 90,
+            RefreshAllOnTimer = true,
+            RefreshAllEveryHours = 12,
             WriteFortigateFeeds = false,
             WriteModSecurityLists = true,
             ModSecurityAction = ModSecurityAction.Deny,
@@ -81,6 +83,31 @@ public sealed class SettingsStoreTests
 
         Assert.Equal(30, loaded.AbuseIpDbKeepDays);
         Assert.Equal(16, loaded.IPv4MinPrefix);
+    }
+
+    [Fact]
+    public void Load_settings_file_without_the_refresh_timer_reads_it_off_every_6_hours()
+    {
+        using var temp = new TempFolder();
+        string path = temp.File("settings.json");
+        File.WriteAllText(path, "{ \"SchemaVersion\": 2, \"ExportFolder\": \"C:\\\\Exports\", \"IPv4MinPrefix\": 16 }");
+        var store = new SettingsStore(path);
+
+        UserSettings loaded = store.Load();
+
+        Assert.False(loaded.RefreshAllOnTimer);
+        Assert.Equal(RefreshAllLimits.DefaultHours, loaded.RefreshAllEveryHours);
+        Assert.Equal(6, RefreshAllLimits.DefaultHours);
+        Assert.Equal(16, loaded.IPv4MinPrefix);
+    }
+
+    [Fact]
+    public void A_new_UserSettings_has_the_refresh_timer_off_every_6_hours()
+    {
+        var settings = new UserSettings();
+
+        Assert.False(settings.RefreshAllOnTimer);
+        Assert.Equal(6, settings.RefreshAllEveryHours);
     }
 
     [Fact]
@@ -151,6 +178,25 @@ public sealed class SettingsStoreTests
         Assert.Equal(expected, store.Load().AbuseIpDbKeepDays);
     }
 
+    [Theory]
+    [InlineData(-3, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(6, 6)]
+    [InlineData(24, 24)]
+    [InlineData(25, 24)]
+    [InlineData(1000, 24)]
+    public void Load_clamps_RefreshAllEveryHours_to_1_to_24(int stored, int expected)
+    {
+        using var temp = new TempFolder();
+        string path = temp.File("settings.json");
+        var store = new SettingsStore(path);
+        File.WriteAllBytes(path, SettingsStore.ToJson(new UserSettings { RefreshAllEveryHours = stored }));
+
+        Assert.Equal(expected, store.Load().RefreshAllEveryHours);
+        Assert.Equal(expected, SettingsStore.Normalise(new UserSettings { RefreshAllEveryHours = stored }).RefreshAllEveryHours);
+    }
+
     [Fact]
     public void ToJson_then_TryRead_round_trips_every_property()
     {
@@ -167,6 +213,8 @@ public sealed class SettingsStoreTests
             IPv4MinPrefix = 20,
             IPv6MinPrefix = 48,
             AbuseIpDbKeepDays = 90,
+            RefreshAllOnTimer = true,
+            RefreshAllEveryHours = 12,
             WriteFortigateFeeds = false,
             WriteModSecurityLists = true,
             ModSecurityAction = ModSecurityAction.Deny,

@@ -6,6 +6,7 @@ using PoorMansFeed.Core;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.Config;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.History;
 using PoorMansFeed.Core.Secrets;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Time.Testing;
@@ -87,6 +88,14 @@ public sealed class IpInfoServiceTests : IDisposable
             {
                 Content = new StringContent("{\"checksums\":{\"sha256\":\"" + sha + "\"}}", Encoding.UTF8, "application/json"),
             };
+        }
+
+        if (_remote.DownloadStatus != HttpStatusCode.OK)
+        {
+            var refused = new HttpResponseMessage(_remote.DownloadStatus);
+            if (_remote.DownloadRetryAfter is TimeSpan wait)
+                refused.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(wait);
+            return refused;
         }
 
         return new HttpResponseMessage(HttpStatusCode.OK)
@@ -180,6 +189,10 @@ public sealed class IpInfoServiceTests : IDisposable
         public string? AdvertisedSha256 { get; set; }
 
         public HttpStatusCode ChecksumStatus { get; set; } = HttpStatusCode.OK;
+
+        public HttpStatusCode DownloadStatus { get; set; } = HttpStatusCode.OK;
+
+        public TimeSpan? DownloadRetryAfter { get; set; }
     }
 
     private sealed class RecordingProgress(Action<UpdateProgress>? onReport = null) : IProgress<UpdateProgress>
@@ -440,6 +453,248 @@ public sealed class IpInfoServiceTests : IDisposable
         AssertNoLeftovers();
     }
 
+    // ----- The IPinfo download counter -----
+
+    private DateTimeOffset Now => _time.GetUtcNow();
+
+    private IpInfoDownloads Downloads(IpInfoService service) => service.Config!.CurrentIpInfoDownloads;
+
+    private static void Count(IpInfoService service, int requests, DateTimeOffset now)
+    {
+        for (int i = 0; i < requests; i++)
+            Assert.True(service.Config!.TryRecordIpInfoRequest(now - TimeSpan.FromMinutes(10 * (i + 1))));
+    }
+
+    private void NewRemoteDataset() => _remote.Body = GzBody([.. SampleLines, Line("9.9.9.0/24", "AS19281", "Quad9")]);
+
+    [Fact]
+    public void Refresh_all_keeps_three_IPinfo_downloads_for_the_user()
+    {
+        Assert.Equal(new IpInfoUpdatePolicy(3), IpInfoUpdatePolicy.RefreshAll);
+        Assert.Equal(10, IpInfoDownloads.DailyLimit);
+    }
+
+    [Fact]
+    public async Task Every_download_request_is_counted_retries_included_and_never_the_checksums_request()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.Equal([Now], Downloads(service).Requests);
+
+        NewRemoteDataset();
+        _remote.DownloadStatus = HttpStatusCode.ServiceUnavailable;
+        Assert.Equal(UpdateFailure.ServiceError, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+        Assert.Equal(4, DownloadRequests);
+        Assert.Equal(4, Downloads(service).CountedAt(Now));
+
+        _remote.DownloadStatus = HttpStatusCode.OK;
+        _remote.Body = GzBody(SampleLines);
+        UpdateResult current = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+        Assert.True(current.AlreadyCurrent);
+        Assert.Equal(4, Downloads(service).CountedAt(Now));
+        Assert.Equal(UpdateCheckOutcome.UpToDate, (await service.CheckForUpdateAsync(Ct)).Outcome);
+        Assert.Equal(4, Downloads(service).CountedAt(Now));
+        Assert.Equal(4, DownloadRequests);
+    }
+
+    [Fact]
+    public async Task An_update_with_no_policy_is_never_refused_by_the_counter_or_a_stored_refusal()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Count(service, 10, Now);
+        Assert.True(service.Config!.TryRecordIpInfoRefusal(Now, TimeSpan.FromHours(5)));
+        NewRemoteDataset();
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct);
+
+        Assert.Equal(UpdateFailure.None, result.Failure);
+        Assert.False(result.AlreadyCurrent);
+        Assert.Equal(2, DownloadRequests);
+        Assert.Equal(12, Downloads(service).CountedAt(Now));
+    }
+
+    [Fact]
+    public async Task An_update_with_no_policy_goes_ahead_when_the_request_couldnt_be_counted()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        service.Config!.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+        NewRemoteDataset();
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct);
+
+        Assert.Equal(UpdateFailure.None, result.Failure);
+        Assert.Equal(2, DownloadRequests);
+        Assert.Equal(1, Downloads(service).CountedAt(Now));
+    }
+
+    [Theory]
+    [InlineData(6, UpdateFailure.None)]
+    [InlineData(7, UpdateFailure.KeptForUser)]
+    public async Task Refresh_all_downloads_only_while_three_downloads_stay_for_the_user(int counted, UpdateFailure expected)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Count(service, counted - 1, Now);
+        DatasetInfo before = service.Dataset!;
+        NewRemoteDataset();
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+
+        Assert.Equal(expected, result.Failure);
+        bool sent = expected == UpdateFailure.None;
+        Assert.Equal(sent ? 2 : 1, DownloadRequests);
+        Assert.Equal(sent ? counted + 1 : counted, Downloads(service).CountedAt(Now));
+        Assert.Equal(sent, before.Checksum != service.Dataset!.Checksum);
+        Assert.Null(result.RetryAfter);
+        AssertNoLeftovers();
+    }
+
+    [Fact]
+    public async Task Refresh_all_retries_stop_at_the_downloads_kept_for_the_user_and_end_on_the_attempts_failure()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Count(service, 4, Now);
+        NewRemoteDataset();
+        _remote.DownloadStatus = HttpStatusCode.ServiceUnavailable;
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+
+        Assert.Equal(UpdateFailure.ServiceError, result.Failure);
+        Assert.Null(result.RetryAfter);
+        Assert.Equal(3, DownloadRequests);
+        Assert.Equal(7, Downloads(service).CountedAt(Now));
+        AssertNoLeftovers();
+    }
+
+    [Fact]
+    public async Task A_download_IPinfo_served_ends_a_stored_refusal_so_the_next_refresh_all_downloads()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(service.Config!.TryRecordIpInfoRefusal(Now, TimeSpan.FromHours(5)));
+        NewRemoteDataset();
+
+        Assert.Equal(UpdateFailure.None, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+        Assert.Null(Downloads(service).RefusedUntil);
+        Assert.Equal(2, Downloads(service).CountedAt(Now));
+
+        _remote.Body = GzBody(SampleLines);
+        UpdateResult refresh = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+        Assert.Equal(UpdateFailure.None, refresh.Failure);
+        Assert.False(refresh.AlreadyCurrent);
+        Assert.Equal(3, DownloadRequests);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, UpdateFailure.ServiceError)]
+    [InlineData(HttpStatusCode.Unauthorized, UpdateFailure.TokenRejected)]
+    public async Task A_failed_download_leaves_a_stored_refusal(HttpStatusCode status, UpdateFailure failure)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(service.Config!.TryRecordIpInfoRefusal(Now, TimeSpan.FromHours(5)));
+        NewRemoteDataset();
+        _remote.DownloadStatus = status;
+
+        Assert.Equal(failure, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+
+        Assert.Equal(Now + TimeSpan.FromHours(5), Downloads(service).RefusedUntil);
+    }
+
+    [Fact]
+    public async Task Refresh_all_sends_no_download_while_a_stored_refusal_holds_but_reads_a_current_dataset_as_current()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(service.Config!.TryRecordIpInfoRefusal(Now, TimeSpan.FromHours(3)));
+        IpInfoDownloads stored = Downloads(service);
+
+        UpdateResult current = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+        Assert.Equal(UpdateFailure.None, current.Failure);
+        Assert.True(current.AlreadyCurrent);
+
+        NewRemoteDataset();
+        _time.Advance(TimeSpan.FromMinutes(30));
+        UpdateResult refused = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+
+        Assert.Equal(UpdateFailure.RateLimited, refused.Failure);
+        Assert.Equal(TimeSpan.FromMinutes(150), refused.RetryAfter);
+        Assert.Equal(1, DownloadRequests);
+        Assert.Equal(stored, Downloads(service));
+
+        _time.Advance(TimeSpan.FromMinutes(150));
+        Assert.Equal(UpdateFailure.None, (await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll)).Failure);
+        Assert.Equal(2, DownloadRequests);
+    }
+
+    [Fact]
+    public async Task Refresh_all_sends_no_download_when_the_request_couldnt_be_counted()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        service.Config!.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+        NewRemoteDataset();
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+
+        Assert.Equal(UpdateFailure.StorageError, result.Failure);
+        Assert.Equal(1, DownloadRequests);
+        AssertNoLeftovers();
+    }
+
+    [Fact]
+    public async Task Refresh_all_with_no_config_store_open_sends_no_download()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.True(await service.SaveTokenAsync("test-token"));
+        _remote.Body = GzBody(SampleLines);
+        service.Config!.Dispose();
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct, IpInfoUpdatePolicy.RefreshAll);
+
+        Assert.Equal(UpdateFailure.StorageError, result.Failure);
+        Assert.Equal(0, DownloadRequests);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_429_on_the_download_saves_the_refusal_with_or_without_a_policy(bool policy)
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        NewRemoteDataset();
+        _remote.DownloadStatus = HttpStatusCode.TooManyRequests;
+        _remote.DownloadRetryAfter = TimeSpan.FromHours(2);
+        _time.Advance(TimeSpan.FromHours(1));
+
+        UpdateResult result = await service.UpdateDatasetAsync(null, Ct, policy ? IpInfoUpdatePolicy.RefreshAll : null);
+
+        Assert.Equal(UpdateFailure.RateLimited, result.Failure);
+        Assert.Equal(TimeSpan.FromHours(2), result.RetryAfter);
+        Assert.Equal(Now + TimeSpan.FromHours(2), Downloads(service).RefusedUntil);
+        Assert.Equal(2, Downloads(service).CountedAt(Now));
+    }
+
+    [Fact]
+    public async Task A_429_with_no_retry_after_holds_until_the_oldest_counted_download_is_24_hours_old()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        DateTimeOffset first = Now;
+        NewRemoteDataset();
+        _remote.DownloadStatus = HttpStatusCode.TooManyRequests;
+        _time.Advance(TimeSpan.FromHours(5));
+
+        Assert.Equal(UpdateFailure.RateLimited, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+
+        Assert.Equal(first + TimeSpan.FromHours(24), Downloads(service).RefusedUntil);
+    }
+
+    [Fact]
+    public async Task A_429_on_the_checksums_request_saves_no_refusal()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        _remote.ChecksumStatus = HttpStatusCode.TooManyRequests;
+
+        Assert.Equal(UpdateFailure.RateLimited, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+
+        Assert.Null(Downloads(service).RefusedUntil);
+    }
+
     // ----- Search -----
 
     [Fact]
@@ -491,6 +746,23 @@ public sealed class IpInfoServiceTests : IDisposable
         SearchResult unknown = await service.SearchAsync("AS64500", 50, Ct);
         Assert.Equal(SearchOutcome.NoResults, unknown.Outcome);
         Assert.Equal(0, unknown.TotalCount);
+    }
+
+    [Fact]
+    public async Task FindAsNames_Reads_The_Dataset_And_Gives_None_Without_One()
+    {
+        using IpInfoService empty = NewService();
+        await empty.InitializeAsync(Ct);
+        Assert.Empty(await empty.FindAsNamesAsync([15169], Ct));
+
+        IpInfoService service = await InstalledServiceAsync();
+        IReadOnlyDictionary<uint, string> names = await service.FindAsNamesAsync([15169, 64500], Ct);
+
+        Assert.Equal("Google LLC", Assert.Single(names, pair => pair.Key == 15169).Value);
+        Assert.False(names.ContainsKey(64500));
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.FindAsNamesAsync([15169], cancelled.Token));
     }
 
     [Fact]
@@ -571,7 +843,8 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.Equal(3, result.NetworksWritten);
         Assert.Equal(1, result.ExceptionCuts);
         Assert.Equal(1, result.ExceptionRemovals);
-        Assert.Empty(result.OldFilesLeft!);
+        Assert.Null(result.OldFilesLeft);
+        Assert.Null(result.EmptiedFiles);
         string report = File.ReadAllText(result.Files.Single(f => f.EndsWith("AS15169.txt", StringComparison.Ordinal)));
         Assert.Contains("8.8.8.0/24", report);
         Assert.Contains("2001:4860::/32", report);
@@ -675,6 +948,33 @@ public sealed class IpInfoServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Failed_Report_Names_The_Old_Feed_Of_A_Family_Of_Only_Declined_Large_Ranges()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        // At /33 the only IPv6 network, 2001:4860::/32, is large, and it is declined below
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
+            FortigateSplitByFamily = true,
+            IPv6MinPrefix = 33,
+        }));
+        string ipv6 = Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv6.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(ipv6)!);
+        File.WriteAllText(ipv6, "# old\n2001:4860::/32\n");
+        Directory.CreateDirectory(Path.Combine(_temp.ExportFolder, "AS15169.txt.tmp"));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, ["8.0.0.0/8"], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, result.Failure);
+        Assert.Equal(Path.Combine(_temp.ExportFolder, "AS15169.txt"), result.FailedFile);
+        Assert.Equal(["2001:4860::/32"], result.LeftOutLargeRanges);
+        Assert.Equal([ipv6], result.OldFilesLeft);
+        Assert.Equal("# old\n2001:4860::/32\n", File.ReadAllText(ipv6));
+    }
+
+    [Fact]
     public async Task Export_Names_The_First_Feed_When_The_Feed_Folder_Cannot_Be_Made()
     {
         IpInfoService service = await InstalledServiceAsync();
@@ -700,8 +1000,8 @@ public sealed class IpInfoServiceTests : IDisposable
     [Fact]
     public async Task Export_Writes_No_Feed_After_A_Launch_That_Stopped_On_The_Old_Exceptions()
     {
-        // No settings save is possible before a launch succeeds, so Fortigate can't be off while the list is unreadable;
-        // ExportWriterTests pins the writer's report-alone rule
+        // No settings can be saved before a launch succeeds, so no feed type is ticked while the list is unreadable;
+        // with a dataset the report is still written alone (A_Stopped_Launch_With_A_Dataset_Writes_The_Report_Alone)
         byte[] unreadable = Encoding.UTF8.GetBytes("{ not json");
         File.WriteAllBytes(Paths.ExceptionsPath, unreadable);
         IpInfoService service = NewService();
@@ -718,6 +1018,171 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.False(Directory.Exists(service.ExportFolder));
         service.Dispose();
         Assert.Equal(unreadable, File.ReadAllBytes(Paths.ExceptionsPath));
+    }
+
+    /// <summary>A service whose launch stopped on an unreadable exceptions.json, with a dataset in place.</summary>
+    private async Task<IpInfoService> StoppedOverADatasetAsync()
+    {
+        IpInfoService installed = await InstalledServiceAsync();
+        installed.Dispose();
+        File.Delete(Paths.ConfigPath);
+        File.Delete(Paths.ConfigMadePath);
+        File.WriteAllBytes(Paths.ExceptionsPath, Encoding.UTF8.GetBytes("{ not json"));
+        IpInfoService service = NewService();
+        Assert.Equal(StartupFailure.ExceptionsImportUnreadable, (await service.InitializeAsync(Ct)).Failure);
+        Assert.False(service.Exceptions.IsReadable);
+        return service;
+    }
+
+    [Fact]
+    public async Task A_Stopped_Launch_With_A_Dataset_Writes_The_Report_Alone()
+    {
+        IpInfoService service = await StoppedOverADatasetAsync();
+        Assert.True(service.Settings.FortigateEnabled);
+        Assert.False(service.Settings.TicksAnyFeedType());
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        Assert.True(result.NoFeedType);
+        Assert.Equal([Path.Combine(service.ExportFolder, "AS15169.txt")], result.Files);
+        Assert.Equal(0, result.ExceptionCuts + result.ExceptionRemovals + result.WholeRangesLeftOut);
+        Assert.Null(result.OldFilesLeft);
+        Assert.Null(result.EmptiedFiles);
+        Assert.Null(result.ModSecurityFiles);
+        Assert.Null(result.FeedChanges);
+        Assert.Equal(["8.0.0.0/8"], result.LeftOutLargeRanges);
+        Assert.Equal([Path.Combine(service.ExportFolder, "AS15169.txt")], Directory.GetFileSystemEntries(service.ExportFolder));
+    }
+
+    [Fact]
+    public async Task Export_Names_The_Large_Ranges_It_Left_Out()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult without = await service.ExportAsync(query, [], Ct);
+        ExportResult with = await service.ExportAsync(query, ["8.0.0.0/8"], Ct);
+
+        Assert.Equal(ExportFailure.None, without.Failure);
+        Assert.Equal(["8.0.0.0/8"], without.LeftOutLargeRanges);
+        Assert.Equal(without.LargeRangesLeftOut, without.LeftOutLargeRanges!.Count);
+        Assert.Equal(ExportFailure.None, with.Failure);
+        Assert.Null(with.LeftOutLargeRanges);
+        Assert.Equal(0, with.LargeRangesLeftOut);
+
+        // A minimum prefix that makes every network large leaves nothing to export and names each network in row
+        // order; with no old feed file nothing is touched
+        Directory.Delete(Path.Combine(_temp.ExportFolder, "fortigate"), recursive: true);
+        File.Delete(Path.Combine(_temp.ExportFolder, "AS15169.txt"));
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { IPv4MinPrefix = 32, IPv6MinPrefix = 128 }));
+        ExportPlan plan = await service.PrepareExportAsync(query, Ct);
+        ExportResult nothing = await service.ExportAsync(query, [], Ct);
+        Assert.Equal(ExportFailure.NothingToExport, nothing.Failure);
+        Assert.Equal(plan.LargeRanges.Select(range => range.Network).Distinct(), nothing.LeftOutLargeRanges);
+        Assert.Equal(nothing.LargeRangesLeftOut, nothing.LeftOutLargeRanges!.Count);
+        Assert.Equal(4, nothing.LargeRangesLeftOut);
+        Assert.Empty(Directory.GetFileSystemEntries(_temp.ExportFolder));
+    }
+
+    [Fact]
+    public async Task Export_With_Every_Network_Left_Out_Empties_The_Old_Feed_Files_And_Writes_No_Report()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true, FortigateSplitByFamily = true,
+        }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        ExportResult first = await service.ExportAsync(query, ["8.0.0.0/8"], Ct);
+        Assert.Equal(ExportFailure.None, first.Failure);
+        string report = Path.Combine(_temp.ExportFolder, "AS15169.txt");
+        string[] feeds = [.. new[] { "AS15169_ipv4.txt", "AS15169_ipv6.txt" }
+            .Select(name => Path.Combine(_temp.ExportFolder, "fortigate", name)).Where(File.Exists)];
+        Assert.NotEmpty(feeds);
+        File.Delete(report);
+
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { IPv4MinPrefix = 32, IPv6MinPrefix = 128 }));
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        Assert.Equal(0, result.NetworksWritten);
+        Assert.Equal(4, result.LargeRangesLeftOut);
+        Assert.Equal(feeds, result.Files);
+        Assert.Equal(feeds, result.EmptiedFiles);
+        Assert.False(File.Exists(report));
+        Assert.All(feeds, file => Assert.Contains("\n# Entries: 0\n", File.ReadAllText(file)));
+        Assert.Equal(HistoryOutcome.Recorded, result.Record?.History);
+        HistoryRead read = await service.Records.SearchHistoryAsync(new HistoryQuery(null, null, null), 1000, Ct);
+        Assert.Contains(read.Rows, row => !row.Added && row.Entry == "8.8.8.0/24" && row.Reason == FeedRemovalReason.LeftOut);
+        SavedFeedPick pick = Assert.Single(service.Records.ReadSavedFeeds().Feeds).Pick;
+        Assert.Empty(pick.LargeIncluded);
+        Assert.Equal(["2001:4860::/32", "8.0.0.0/8", "8.8.4.0/24", "8.8.8.0/24"], pick.LargeLeftOut.Order(StringComparer.Ordinal));
+        Assert.Equal(32, pick.IPv4MinPrefix);
+    }
+
+    [Fact]
+    public async Task Export_Returns_The_Feed_Changes_And_None_For_A_Report_Alone()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult first = await service.ExportAsync(query, [], Ct);
+        ExportResult second = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, first.Failure);
+        Assert.Equal(first.Files.Skip(1), first.FeedChanges!.Select(change => change.Path));
+        Assert.Equal(["8.8.4.0/24", "8.8.8.0/24"], first.FeedChanges![0].IPv4.Added);
+        Assert.Equal(["2001:4860::/32"], first.FeedChanges![1].IPv6.Added);
+        Assert.All(first.FeedChanges!, change => Assert.Empty(change.IPv4.Removed.Concat(change.IPv6.Removed)));
+        Assert.Equal(first.Files.Skip(1), second.FeedChanges!.Select(change => change.Path));
+        Assert.All(second.FeedChanges!, change => Assert.True(change.IsEmpty));
+
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { WriteFortigateFeeds = false }));
+        ExportResult noType = await service.ExportAsync(query, [], Ct);
+        Assert.True(noType.NoFeedType);
+        Assert.Null(noType.FeedChanges);
+
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { WriteFortigateFeeds = true, FortigateEnabled = false }));
+        ExportResult off = await service.ExportAsync(query, [], Ct);
+        Assert.False(off.NoFeedType);
+        Assert.Equal(ExportFailure.None, off.Failure);
+        Assert.Null(off.FeedChanges);
+    }
+
+    [Fact]
+    public async Task A_Failed_Export_Returns_The_Changes_Moved_Before_The_Failure()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with { ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true }));
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+        Assert.Equal(ExportFailure.None, (await service.ExportAsync(query, [], Ct)).Failure);
+        string ipv4 = Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv4.txt");
+        string ipv6 = Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv6.txt");
+        Directory.CreateDirectory(ipv6 + ".tmp");
+
+        ExportResult failed = await service.ExportAsync(query, ["8.0.0.0/8"], Ct);
+
+        Assert.Equal(ExportFailure.WriteFailed, failed.Failure);
+        Assert.Equal(ipv6, failed.FailedFile);
+        FeedFileChange change = Assert.Single(failed.FeedChanges!);
+        Assert.Equal(ipv4, change.Path);
+        Assert.Equal(["8.0.0.0/8"], change.IPv4.Added);
+        Assert.Empty(change.IPv4.Removed);
+        Assert.Null(failed.LeftOutLargeRanges);
+        Assert.Equal(0, failed.LargeRangesLeftOut);
+
+        // The report's own failure moves no feed file
+        Directory.Delete(ipv6 + ".tmp");
+        Directory.CreateDirectory(Path.Combine(_temp.ExportFolder, "AS15169.txt.tmp"));
+        ExportResult report = await service.ExportAsync(query, [], Ct);
+        Assert.Equal(ExportFailure.WriteFailed, report.Failure);
+        Assert.Null(report.FeedChanges);
+        Assert.Equal(["8.0.0.0/8"], report.LeftOutLargeRanges);
+        Assert.Equal(1, report.LargeRangesLeftOut);
     }
 
     [Fact]
@@ -899,6 +1364,132 @@ public sealed class IpInfoServiceTests : IDisposable
         Assert.DoesNotContain("\n0.0.0.0/0\n", feed);
         Assert.Contains("\n# Left out: 1 range covering every address: 0.0.0.0/0\n", feed);
         Assert.Contains("\n8.8.8.0/24\n", feed);
+    }
+
+    [Fact]
+    public async Task Export_Empties_The_Files_Of_A_Family_With_Nothing_Left_And_Records_Why_Each_Entry_Went()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.True(await service.SaveTokenAsync("test-token"));
+        // The large range is apart from the excepted networks, as an exception touching a removed entry is its reason
+        _remote.Body = GzBody([.. SampleLines, Line("6.0.0.0/8", "AS64511", "Example"), Line("7.7.7.0/24", "AS64511", "Example"),
+                               Line("2a00:1450::/32", "AS64511", "Example"), Line("0.0.0.0/0", "AS64511", "Example")]);
+        Assert.Equal(UpdateFailure.None, (await service.UpdateDatasetAsync(null, Ct)).Failure);
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder,
+            WriteFortigateFeeds = true,
+            WriteModSecurityLists = true,
+            FortigateSplitByFamily = true,
+        }));
+        Assert.True(SearchQuery.TryParse("AS64511", out SearchQuery? query));
+        ExportResult first = await service.ExportAsync(query, ["6.0.0.0/8"], Ct);
+        Assert.Equal(ExportFailure.None, first.Failure);
+        Assert.Null(first.EmptiedFiles);
+        Assert.Equal(ExceptionsSaveOutcome.Saved, await service.SaveExceptionsAsync(
+            [ExceptionEntryTests.Entry("7.7.7.0/24", null), ExceptionEntryTests.Entry("2a00:1450::/32", null)]));
+
+        // The exceptions take every IPv4 network left in and all of IPv6; the large range and the whole one stay out
+        ExportResult result = await service.ExportAsync(query, ["0.0.0.0/0"], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        string[] feeds = [.. new[] { "fortigate", "modsecurity" }.SelectMany(folder => new[] { "AS64511_ipv4.txt", "AS64511_ipv6.txt" }
+            .Select(name => Path.Combine(_temp.ExportFolder, folder, name)))];
+        Assert.Equal(feeds, result.EmptiedFiles);
+        Assert.Equal([Path.Combine(_temp.ExportFolder, "AS64511.txt"), .. feeds], result.Files);
+        Assert.Null(result.OldFilesLeft);
+        Assert.All(feeds, file => Assert.Contains("\n# Entries: 0\n", File.ReadAllText(file)));
+        Assert.Contains("\n# Left out: 1 range covering every address: 0.0.0.0/0\n", File.ReadAllText(feeds[0]));
+        Assert.Equal(HistoryOutcome.Recorded, result.Record?.History);
+        HistoryRead read = await service.Records.SearchHistoryAsync(new HistoryQuery(null, null, null), 1000, Ct);
+        Dictionary<string, FeedRemovalReason> removed = read.Rows.Where(row => !row.Added)
+            .ToDictionary(row => row.Entry, row => row.Reason, StringComparer.Ordinal);
+        Assert.Equal(3, removed.Count);
+        Assert.Equal(FeedRemovalReason.Exception, removed["7.7.7.0/24"]);
+        Assert.Equal(FeedRemovalReason.Exception, removed["2a00:1450::/32"]);
+        Assert.Equal(FeedRemovalReason.LeftOut, removed["6.0.0.0/8"]);
+    }
+
+    private static readonly DateTime OldFileTime = new(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+    private string[] OldFeedFiles(params string[] names)
+    {
+        string[] paths = [.. new[] { "fortigate", "modsecurity" }.SelectMany(folder => names
+            .Select(name => Path.Combine(_temp.ExportFolder, folder, name)))];
+        foreach (string path in paths)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "# old feed\n9.9.9.0/24\n");
+            File.SetLastWriteTimeUtc(path, OldFileTime);
+        }
+        return paths;
+    }
+
+    private static void AssertUntouched(string path)
+    {
+        Assert.Equal("# old feed\n9.9.9.0/24\n", File.ReadAllText(path));
+        Assert.Equal(OldFileTime, File.GetLastWriteTimeUtc(path));
+    }
+
+    private async Task<int> HistoryRowCountAsync(IpInfoService service) =>
+        (await service.Records.SearchHistoryAsync(new HistoryQuery(null, null, null), 1000, Ct)).Rows.Count;
+
+    [Fact]
+    public async Task Export_With_No_Dataset_Refuses_And_Leaves_The_Old_Feed_Files_As_They_Were()
+    {
+        IpInfoService service = NewService();
+        await service.InitializeAsync(Ct);
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true, WriteModSecurityLists = true, FortigateSplitByFamily = true,
+        }));
+        string[] feeds = OldFeedFiles("AS15169_ipv4.txt", "AS15169_ipv6.txt");
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.NothingToExport, result.Failure);
+        Assert.All(feeds, AssertUntouched);
+        Assert.False(File.Exists(Path.Combine(_temp.ExportFolder, "AS15169.txt")));
+        Assert.Equal(0, await HistoryRowCountAsync(service));
+    }
+
+    [Fact]
+    public async Task Export_Of_An_AS_The_Dataset_Does_Not_Hold_Refuses_And_Leaves_The_Old_Feed_Files_As_They_Were()
+    {
+        IpInfoService service = await InstalledServiceAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            ExportFolder = _temp.ExportFolder, WriteFortigateFeeds = true, WriteModSecurityLists = true, FortigateSplitByFamily = true,
+        }));
+        string[] feeds = OldFeedFiles("AS64500_ipv4.txt", "AS64500_ipv6.txt");
+        Assert.True(SearchQuery.TryParse("AS64500", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.NothingToExport, result.Failure);
+        Assert.All(feeds, AssertUntouched);
+        Assert.Equal(0, await HistoryRowCountAsync(service));
+    }
+
+    [Fact]
+    public async Task Export_On_A_Dataset_Without_IPv6_Leaves_The_Old_IPv6_Feed_Files_And_Writes_IPv4()
+    {
+        IpInfoService service = await InstalledWithIPv6OffAsync();
+        Assert.True(await service.SaveSettingsAsync(service.Settings with
+        {
+            IPv6Enabled = true, WriteFortigateFeeds = true, WriteModSecurityLists = true, FortigateSplitByFamily = true,
+        }));
+        string[] ipv6Feeds = OldFeedFiles("AS15169_ipv6.txt");
+        Assert.True(SearchQuery.TryParse("AS15169", out SearchQuery? query));
+
+        ExportResult result = await service.ExportAsync(query, [], Ct);
+
+        Assert.Equal(ExportFailure.None, result.Failure);
+        Assert.Null(result.EmptiedFiles);
+        Assert.All(ipv6Feeds, AssertUntouched);
+        Assert.Contains("\n8.8.8.0/24\n", File.ReadAllText(Path.Combine(_temp.ExportFolder, "fortigate", "AS15169_ipv4.txt")));
     }
 
     [Fact]

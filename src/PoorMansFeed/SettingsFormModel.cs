@@ -25,6 +25,8 @@ public sealed class SettingsFormModel : ObservableObject
     private decimal? _ipv4MinPrefix;
     private decimal? _ipv6MinPrefix;
     private decimal? _abuseIpDbKeepDays;
+    private bool _refreshAllOnTimer;
+    private decimal? _refreshAllEveryHours;
     private bool _writeFortigateFeeds;
     private bool _writeModSecurityLists;
     private ModSecurityAction _modSecurityAction;
@@ -56,6 +58,8 @@ public sealed class SettingsFormModel : ObservableObject
         _ipv4MinPrefix = current.IPv4MinPrefix;
         _ipv6MinPrefix = current.IPv6MinPrefix;
         _abuseIpDbKeepDays = current.AbuseIpDbKeepDays;
+        _refreshAllOnTimer = current.RefreshAllOnTimer;
+        _refreshAllEveryHours = current.RefreshAllEveryHours;
         _writeFortigateFeeds = current.WriteFortigateFeeds;
         _writeModSecurityLists = current.WriteModSecurityLists;
         _modSecurityAction = current.ModSecurityAction;
@@ -192,6 +196,32 @@ public sealed class SettingsFormModel : ObservableObject
         }
     }
 
+    /// <summary>Refresh all runs by itself while the application is open.</summary>
+    public bool RefreshAllOnTimer
+    {
+        get => _refreshAllOnTimer;
+        set
+        {
+            if (SetProperty(ref _refreshAllOnTimer, value))
+            {
+                RevalidateInputs();
+            }
+        }
+    }
+
+    /// <summary>The hours between the timer's runs. Null while the field is blank.</summary>
+    public decimal? RefreshAllEveryHours
+    {
+        get => _refreshAllEveryHours;
+        set
+        {
+            if (SetProperty(ref _refreshAllEveryHours, value))
+            {
+                RevalidateInputs();
+            }
+        }
+    }
+
     public bool WriteFortigateFeeds
     {
         get => _writeFortigateFeeds;
@@ -283,6 +313,8 @@ public sealed class SettingsFormModel : ObservableObject
 
     public bool CanEditModSecurity => _writeModSecurityLists;
 
+    public bool CanEditRefreshAllHours => _refreshAllOnTimer;
+
     /// <summary>The note under the location box, its own object, so a clock change is never a form edit.</summary>
     public LocationNote LocationNote { get; } = new();
 
@@ -330,6 +362,11 @@ public sealed class SettingsFormModel : ObservableObject
             return AppText.EnterKeepDays;
         }
 
+        if (_refreshAllOnTimer && _refreshAllEveryHours is null)
+        {
+            return AppText.EnterRefreshAllHours;
+        }
+
         if (_writeModSecurityLists && _firstRuleId is null)
         {
             return AppText.EnterFirstRuleId;
@@ -347,6 +384,7 @@ public sealed class SettingsFormModel : ObservableObject
         // a box not in use keeps its saved value instead (ToSettings).
         if ((_largeRangeCheckEnabled && (IsFraction(_ipv4MinPrefix) || (_ipv6Enabled && IsFraction(_ipv6MinPrefix))))
             || IsFraction(_abuseIpDbKeepDays)
+            || (_refreshAllOnTimer && IsFraction(_refreshAllEveryHours))
             || (_writeModSecurityLists && IsFraction(_firstRuleId)))
         {
             return AppText.WholeNumberRequired;
@@ -374,6 +412,8 @@ public sealed class SettingsFormModel : ObservableObject
         IPv4MinPrefix = WholeOrSaved(_ipv4MinPrefix, _current.IPv4MinPrefix),
         IPv6MinPrefix = WholeOrSaved(_ipv6MinPrefix, _current.IPv6MinPrefix),
         AbuseIpDbKeepDays = WholeOrSaved(_abuseIpDbKeepDays, _current.AbuseIpDbKeepDays),
+        RefreshAllOnTimer = _refreshAllOnTimer,
+        RefreshAllEveryHours = WholeOrSaved(_refreshAllEveryHours, _current.RefreshAllEveryHours),
         WriteFortigateFeeds = _writeFortigateFeeds,
         WriteModSecurityLists = _writeModSecurityLists,
         ModSecurityAction = _modSecurityAction,
@@ -423,6 +463,7 @@ public sealed class SettingsFormModel : ObservableObject
         OnPropertyChanged(nameof(CanEditFortigateIPv6));
         OnPropertyChanged(nameof(CanEditIPv6Prefix));
         OnPropertyChanged(nameof(CanEditModSecurity));
+        OnPropertyChanged(nameof(CanEditRefreshAllHours));
         OnPropertyChanged(nameof(HasChanges));
     }
 }

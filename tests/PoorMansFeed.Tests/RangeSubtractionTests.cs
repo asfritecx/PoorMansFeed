@@ -277,6 +277,73 @@ public sealed class RangeSubtractionTests
         }
     }
 
+    [Theory]
+    [InlineData("10.0.0.0/24", "10.0.1.0/24")]
+    [InlineData("10.0.0.0/24", "10.0.1.0/32")]
+    [InlineData("10.0.1.0/24", "10.0.0.255/32")]
+    [InlineData("2001:db8::/64", "2001:db8:0:1::/64")]
+    [InlineData("2001:db8::/64", "2001:db8:0:1::/128")]
+    [InlineData("2001:db8:0:1::/64", "2001:db8::ffff:ffff:ffff:ffff/128")]
+    public void Classify_is_None_when_no_exception_touches_the_range(string range, string exception)
+    {
+        Assert.Equal(ExceptionCover.None, Classify(List(exception), range));
+        Assert.Equal(ExceptionCover.None, Classify(ExceptionList.Empty, range));
+    }
+
+    [Theory]
+    [InlineData("10.0.0.0/24", "10.0.0.0/24")]
+    [InlineData("10.0.0.0/24", "10.0.0.0/16")]
+    [InlineData("10.0.0.7/32", "10.0.0.0/29")]
+    [InlineData("10.0.0.7", "10.0.0.0/29")]
+    [InlineData("2001:db8::/48", "2001:db8::/48")]
+    [InlineData("2001:db8::/48", "2001:db8::/32")]
+    [InlineData("2001:db8::8", "2001:db8::/124")]
+    public void Classify_is_Whole_when_the_exceptions_hold_all_of_the_range(string range, string exception)
+    {
+        Assert.Equal(ExceptionCover.Whole, Classify(List(exception), range));
+    }
+
+    [Theory]
+    [InlineData("10.0.0.0/24", "10.0.0.0/32")]
+    [InlineData("10.0.0.0/24", "10.0.0.255/32")]
+    [InlineData("10.0.0.0/24", "10.0.0.64/26")]
+    [InlineData("2001:db8::/64", "2001:db8::/128")]
+    [InlineData("2001:db8::/64", "2001:db8::ffff:ffff:ffff:ffff/128")]
+    [InlineData("2001:db8::/64", "2001:db8::8000:0:0:0/66")]
+    public void Classify_is_Part_for_an_edge_or_a_hole_in_the_middle(string range, string exception)
+    {
+        Assert.Equal(ExceptionCover.Part, Classify(List(exception), range));
+    }
+
+    [Fact]
+    public void Classify_is_Whole_for_touching_exceptions_that_together_hold_the_range()
+    {
+        Assert.Equal(ExceptionCover.Whole, Classify(List("10.0.0.0/25", "10.0.0.128/25"), "10.0.0.0/24"));
+        Assert.Equal(ExceptionCover.Part, Classify(List("10.0.0.0/25", "10.0.0.129/32"), "10.0.0.0/24"));
+    }
+
+    [Fact]
+    public void Classify_never_takes_the_other_familys_exceptions()
+    {
+        ExceptionList ipv6 = List("::a00:0/104");
+        ExceptionList ipv4 = List("10.0.0.0/8");
+
+        Assert.Equal(ExceptionCover.None, Classify(ipv6, "10.0.0.0/8"));
+        Assert.Equal(ExceptionCover.None, Classify(ipv4, "::a00:0/104"));
+        Assert.Equal(ExceptionCover.None, Classify(ipv6, "10.1.2.3"));
+        Assert.Equal(ExceptionCover.None, Classify(ipv4, "::a01:203"));
+        Assert.Equal(ExceptionCover.Whole, Classify(ipv4, "10.1.2.3"));
+        Assert.Equal(ExceptionCover.Whole, Classify(ipv6, "::a01:203"));
+    }
+
+    [Theory]
+    [InlineData("10.0.0.0/8")]
+    [InlineData("2001:db8::/32")]
+    public void An_unreadable_list_refuses_to_classify(string range)
+    {
+        Assert.Throws<InvalidOperationException>(() => Classify(ExceptionList.Unreadable, range));
+    }
+
     // The greedy split gives the fewest blocks: two neighbouring blocks of one size never make an aligned block twice the size
     private static void AssertNoTwoPiecesJoin(IReadOnlyList<string> pieces)
     {
@@ -324,6 +391,12 @@ public sealed class RangeSubtractionTests
     {
         (byte[] start, byte[] end) = Cidr.Parse(range);
         return list.Cut(start, end);
+    }
+
+    private static ExceptionCover Classify(ExceptionList list, string range)
+    {
+        (byte[] start, byte[] end) = Cidr.Parse(range);
+        return list.Classify(start, end);
     }
 
     private static byte[] Address(string text) => IPAddress.Parse(text).GetAddressBytes();

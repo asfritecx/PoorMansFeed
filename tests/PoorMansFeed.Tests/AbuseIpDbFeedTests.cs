@@ -10,7 +10,9 @@ using PoorMansFeed.Core.FeedExceptions;
 
 namespace PoorMansFeed.Tests;
 
-/// <summary>The AbuseIPDB rolling feed: what the service writes, and how the writer chooses, orders and words it.</summary>
+/// <summary>
+/// The AbuseIPDB rolling feed: what the service writes, and how the writer chooses, orders and words it.
+/// </summary>
 public sealed class AbuseIpDbFeedTests : IDisposable
 {
     private const string Key = "abuseipdb-sentinel-key-0123456789";
@@ -451,7 +453,7 @@ public sealed class AbuseIpDbFeedTests : IDisposable
             new Random(seed).Shuffle(shuffled);
             for (int cap = 0; cap < expected.Length; cap++)
             {
-                AbuseFeedFamily family = AbuseIpDbFeedWriter.Select(shuffled, ExceptionList.Empty, ipv6: false, cap);
+                AbuseFeedFamily family = AbuseIpDbFeedWriter.Select(shuffled, Readable(ExceptionList.Empty), ipv6: false, cap);
 
                 Assert.False(family.IsIpv6);
                 Assert.Equal(expected[cap], family.Addresses.Select(address => address.Text));
@@ -474,8 +476,8 @@ public sealed class AbuseIpDbFeedTests : IDisposable
             ListEntry("2606:4700:4700::1111", seen, 40, null),
         ];
 
-        AbuseFeedFamily ipv4 = AbuseIpDbFeedWriter.Select(entries, Exceptions("9.9.9.9"), ipv6: false, cap: 2);
-        AbuseFeedFamily ipv6 = AbuseIpDbFeedWriter.Select(entries, Exceptions("9.9.9.9"), ipv6: true, cap: 1);
+        AbuseFeedFamily ipv4 = AbuseIpDbFeedWriter.Select(entries, Readable(Exceptions("9.9.9.9")), ipv6: false, cap: 2);
+        AbuseFeedFamily ipv6 = AbuseIpDbFeedWriter.Select(entries, Readable(Exceptions("9.9.9.9")), ipv6: true, cap: 1);
 
         Assert.Equal(["1.1.1.1", "8.8.8.8"], ipv4.Addresses.Select(address => address.Text));
         Assert.Equal(1, ipv4.ExceptionRemovals);
@@ -484,7 +486,48 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         Assert.Equal(["2001:4860::8888"], ipv6.Addresses.Select(address => address.Text));
         Assert.Equal(1, ipv6.LeftOut);
         Assert.Equal(0, ipv6.ExceptionRemovals);
-        Assert.Throws<InvalidOperationException>(() => AbuseIpDbFeedWriter.Select(entries, ExceptionList.Unreadable, ipv6: false));
+        // An unreadable list can't reach Select: no wrapper is made for it
+        Assert.Null(ReadableExceptions.WrapForFeed(ExceptionList.Unreadable));
+    }
+
+    [Fact]
+    public void PastCap_holds_exactly_the_least_recent_addresses_the_cap_left_out_and_none_an_exception_removed()
+    {
+        AbuseListEntry[] entries =
+        [
+            ListEntry("1.1.1.1", Now.AddHours(-5), 50, null),
+            ListEntry("9.9.9.9", Now.AddHours(-6), 50, null),
+            ListEntry("8.8.8.8", Now.AddHours(-1), 50, null),
+            ListEntry("8.8.4.4", Now.AddHours(-4), 50, null),
+            ListEntry("1.0.0.1", Now.AddHours(-2), 50, null),
+            ListEntry("2001:4860::8888", Now.AddHours(-3), 50, null),
+            ListEntry("2001:4860::8844", Now.AddHours(-1), 50, null),
+        ];
+
+        AbuseFeedFamily ipv4 = AbuseIpDbFeedWriter.Select(entries, Readable(Exceptions("9.9.9.9")), ipv6: false, cap: 2);
+        AbuseFeedFamily ipv6 = AbuseIpDbFeedWriter.Select(entries, Readable(Exceptions("9.9.9.9")), ipv6: true, cap: 1);
+
+        Assert.Equal(["1.0.0.1", "8.8.8.8"], ipv4.Addresses.Select(address => address.Text));
+        Assert.Equal(2, ipv4.LeftOut);
+        Assert.Equal(["1.1.1.1", "8.8.4.4"], ipv4.PastCap.Select(address => address.Text).Order(StringComparer.Ordinal));
+        Assert.Equal(["2001:4860::8888"], ipv6.PastCap.Select(address => address.Text));
+        Assert.Equal(ipv6.LeftOut, ipv6.PastCap.Count);
+    }
+
+    [Fact]
+    public void PastCap_is_empty_at_or_under_the_cap_and_when_exceptions_bring_it_under()
+    {
+        AbuseListEntry[] entries =
+        [
+            ListEntry("1.1.1.1", Now.AddHours(-5), 50, null),
+            ListEntry("9.9.9.9", Now.AddHours(-6), 50, null),
+            ListEntry("8.8.8.8", Now.AddHours(-1), 50, null),
+        ];
+
+        Assert.Empty(AbuseIpDbFeedWriter.Select(entries, Readable(ExceptionList.Empty), ipv6: false).PastCap);
+        Assert.Empty(AbuseIpDbFeedWriter.Select(entries, Readable(ExceptionList.Empty), ipv6: false, cap: 3).PastCap);
+        Assert.Empty(AbuseIpDbFeedWriter.Select(entries, Readable(Exceptions("9.9.9.9")), ipv6: false, cap: 2).PastCap);
+        Assert.Empty(AbuseIpDbFeedWriter.Select(entries, Readable(ExceptionList.Empty), ipv6: true, cap: 0).PastCap);
     }
 
     [Fact]
@@ -514,7 +557,7 @@ public sealed class AbuseIpDbFeedTests : IDisposable
             {
                 for (int cap = 0; cap <= 7; cap++)
                 {
-                    AbuseFeedFamily feed = AbuseIpDbFeedWriter.Select(shuffled, ExceptionList.Empty, ipv6, cap);
+                    AbuseFeedFamily feed = AbuseIpDbFeedWriter.Select(shuffled, Readable(ExceptionList.Empty), ipv6, cap);
                     AbuseReportFamily report = AbuseIpDbFeedWriter.SelectForReport(shuffled, ipv6, cap);
 
                     Assert.Equal(ipv6, report.IsIpv6);
@@ -1010,7 +1053,7 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         using var http = new HttpClient(handler);
         AbuseIpDbService service = Service(http);
 
-        Task<AbuseDownloadResult> download = service.DownloadBlacklistAsync(CancellationToken.None);
+        Task<AbuseDownloadResult> download = service.DownloadBlacklistAsync(null, CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Task<AbuseFeedWriteResult> write = service.WriteFeedAsync(CancellationToken.None);
         await Task.Delay(200);
@@ -1275,7 +1318,7 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         using var http = new HttpClient(handler);
         AbuseIpDbService service = Service(http);
 
-        Task<AbuseDownloadResult> download = service.DownloadBlacklistAsync(CancellationToken.None);
+        Task<AbuseDownloadResult> download = service.DownloadBlacklistAsync(null, CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Task<AbuseFeedWriteResult> empty = service.EmptyFeedAsync(CancellationToken.None);
         await Task.Delay(200);
@@ -1313,9 +1356,9 @@ public sealed class AbuseIpDbFeedTests : IDisposable
     }
 
     [Fact]
-    public async Task An_emptied_file_says_it_was_emptied_by_hand_in_place_of_Kept_and_Write_feed_gives_Kept_back()
+    public async Task A_retired_file_says_it_was_retired_by_hand_in_place_of_Kept_and_Write_feed_gives_Kept_back()
     {
-        const string emptiedLine = "# Emptied by hand: no address is listed until the feed is written again";
+        const string emptiedLine = "# Retired by hand: no address is listed until the feed is written again";
         Seed(Generated, Downloaded, Entry("8.8.8.8", 50));
         AbuseIpDbService service = Service();
         await service.WriteFeedAsync(CancellationToken.None);
@@ -1360,14 +1403,14 @@ public sealed class AbuseIpDbFeedTests : IDisposable
 
     /// <summary>
     /// The header the tests' list gives at <see cref="Now"/>; without a download, no <c>Last download:</c> line.
-    /// <see cref="EmptiedHeader"/> is Empty feed's.
+    /// <see cref="EmptiedHeader"/> is Retire feed's.
     /// </summary>
     private static string Header(string family, int entries, bool downloaded = true) =>
         HeaderLines(family, entries, downloaded, "# Kept: addresses listed within 30 days of the last download");
 
-    /// <summary>The header of a file Empty feed wrote: no download line, and the Emptied line in place of Kept.</summary>
+    /// <summary>The header of a file Retire feed wrote: no download line, and the Retired line in place of Kept.</summary>
     private static string EmptiedHeader(string family) =>
-        HeaderLines(family, 0, downloaded: false, "# Emptied by hand: no address is listed until the feed is written again");
+        HeaderLines(family, 0, downloaded: false, "# Retired by hand: no address is listed until the feed is written again");
 
     private static string HeaderLines(string family, int entries, bool downloaded, string keptLine)
     {
@@ -1409,6 +1452,8 @@ public sealed class AbuseIpDbFeedTests : IDisposable
         // A refusal or an unexpected failure names no file: only a file write that failed does
         Assert.Null(result.FailedFile);
     }
+
+    private static ReadableExceptions Readable(ExceptionList list) => ReadableExceptions.WrapForFeed(list)!;
 
     private static ExceptionList Exceptions(params string[] networks) =>
         ExceptionList.Create(networks.Select(network =>
@@ -1497,5 +1542,47 @@ public sealed class AbuseIpDbFeedTests : IDisposable
             Interlocked.Increment(ref _calls);
             return respond(request);
         }
+    }
+
+    [Fact]
+    public async Task The_rolling_feed_bytes_are_pinned_with_the_render_version()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteModSecurityLists = true };
+        Seed(Generated, Downloaded, Entry("9.9.9.9", 90, "CH"), Entry("2606:4700:4700::1111", 20), Entry("1.1.1.1", 40),
+             Entry("2001:4860::8888", 70, "US"), Entry("8.8.8.8", 60));
+
+        AbuseFeedWriteResult result = await Service().WriteFeedAsync(CancellationToken.None);
+
+        Assert.Equal(AbuseFeedWriteFailure.None, result.Failure);
+        FeedGoldenHashes.AssertPinned("AbuseIPDB rolling", ExportFolder, new Dictionary<string, string>
+        {
+            ["fortigate/AbuseIPDB_rolling_ipv4.txt"] = "4c93d1e7a6a88e9dfb11f1ef2036728537237bbc959b9b6f48a960755ae97507",
+            ["fortigate/AbuseIPDB_rolling_ipv6.txt"] = "ec7a68ff4e6dd9153957922ea7c69a722305f96e2adb0106ad4ac54de2265659",
+            ["modsecurity/AbuseIPDB_rolling_ipv4.txt"] = "13db90d12cc6e000ffcaeddd273b4b1ad3a2e82b4f5b7dca8b9a93232190726b",
+            ["modsecurity/AbuseIPDB_rolling_ipv6.txt"] = "ff6a94788eb3e5bd7c974a7b1ceec515d6582eb8e4558d10dbc2348d815c5a4e",
+        });
+    }
+
+    [Fact]
+    public async Task The_rolling_header_only_and_exceptions_bytes_are_pinned_with_the_render_version()
+    {
+        _ipinfo.Settings = _ipinfo.Settings with { WriteModSecurityLists = true };
+        Seed(Generated, Downloaded, Entry("9.9.9.9", 90, "CH"), Entry("8.8.8.8", 60), Entry("2001:4860::8888", 70, "US"));
+        AbuseIpDbService service = Service();
+        await service.WriteFeedAsync(CancellationToken.None);
+
+        _ipinfo.Exceptions = Exceptions("8.8.8.8", "2000::/3");
+        AbuseFeedWriteResult result = await service.WriteFeedAsync(CancellationToken.None);
+
+        Assert.Equal(AbuseFeedWriteFailure.None, result.Failure);
+        Assert.Equal([Ipv6File], result.EmptiedFiles?.Where(file => file.Contains("fortigate", StringComparison.Ordinal)));
+        Assert.Contains("# Exceptions: 1 address removed", File.ReadAllLines(Ipv4File));
+        FeedGoldenHashes.AssertPinned("AbuseIPDB rolling, header-only", ExportFolder, new Dictionary<string, string>
+        {
+            ["fortigate/AbuseIPDB_rolling_ipv4.txt"] = "a27ad743650e1d9e1c104cf181b4e2cb785a93671304cfcc0425e4aa6e1ecb96",
+            ["fortigate/AbuseIPDB_rolling_ipv6.txt"] = "9895a8bbe662ab9cef9d600260060815314f35da62c54d3174d90e519adeac26",
+            ["modsecurity/AbuseIPDB_rolling_ipv4.txt"] = "7fb2be93faf5c3c8d3c1a134f6dbab7fefb2cb432910400e74a6d2e27a5c32dc",
+            ["modsecurity/AbuseIPDB_rolling_ipv6.txt"] = "ae3331f553d1b862874c6b79838095fdf31e372d64da99741d634dbc4d73e399",
+        });
     }
 }

@@ -27,8 +27,17 @@ public enum UpdatePhase { Checking, Downloading, Importing, Indexing, Finishing 
 public readonly record struct UpdateProgress(UpdatePhase Phase, long Done, long Total);   // Total 0 = indeterminate
 
 public enum UpdateFailure { None, NoToken, TokenRejected, RateLimited, Offline, ChecksumMismatch,
-                            NotEnoughDiskSpace, CorruptData, StorageError, ServiceError }
+                            NotEnoughDiskSpace, CorruptData, StorageError, ServiceError, KeptForUser }
 public sealed record UpdateResult(UpdateFailure Failure, bool AlreadyCurrent, DatasetInfo? Dataset, TimeSpan? RetryAfter = null);
+
+/// <summary>
+/// A dataset update kept back for the user: each download request is sent only while at least
+/// <see cref="LeftForUser"/> of IPinfo's daily downloads remain after it, and never while a refusal from IPinfo holds.
+/// </summary>
+public sealed record IpInfoUpdatePolicy(int LeftForUser)
+{
+    public static IpInfoUpdatePolicy RefreshAll { get; } = new(3);
+}
 
 public enum SearchKind { Asn, IpAddress }
 public sealed partial record SearchQuery(SearchKind Kind, string Text, uint Asn, byte[]? IpBytes);  // Text is normalised: "AS15169" or "8.8.8.8"
@@ -37,7 +46,9 @@ public sealed record NetworkRecord(string Network, string? CountryCode, string? 
                                    string? AsName, string? AsDomain, bool IsLargeRange = false);
 public sealed record SearchResult(SearchOutcome Outcome, SearchQuery? Query, IReadOnlyList<NetworkRecord> Rows, int TotalCount);
 
-public sealed record LargeRange(string Network, bool IsIpv6, int PrefixLength, BigInteger AddressCount);
+/// <summary>SavedIncluded is true when the saved feed of this write includes the range.</summary>
+public sealed record LargeRange(string Network, bool IsIpv6, int PrefixLength, BigInteger AddressCount,
+                                bool SavedIncluded = false);
 public sealed record ExportPlan(int TotalCount, string AsName, IReadOnlyList<LargeRange> LargeRanges);
 public enum ExportFailure { None, NothingToExport, FolderUnavailable, WriteFailed, ExceptionsUnreadable }
 
@@ -45,13 +56,25 @@ public enum ExportFailure { None, NothingToExport, FolderUnavailable, WriteFaile
 public enum ExceptionsSaveOutcome { Saved, Failed }
 
 /// <summary>
-/// OldFilesLeft: empty or null for none; ModSecurityFiles: null for none. FailedFile is set only on WriteFailed when
-/// one file's write failed (a folder not made names its file); Files then lists those written before it, report first.
+/// OldFilesLeft (failures), ModSecurityFiles, LeftOutLargeRanges, FeedChanges, EmptiedFiles (success): null for none.
+/// FailedFile is set only on WriteFailed when a file's write failed; Files: those before it, report first.
 /// </summary>
 public sealed record ExportResult(ExportFailure Failure, IReadOnlyList<string> Files, int NetworksWritten, int LargeRangesLeftOut,
                                   int ExceptionCuts = 0, int ExceptionRemovals = 0, IReadOnlyList<string>? OldFilesLeft = null,
                                   string? FailedFile = null, IReadOnlyList<string>? ModSecurityFiles = null, bool NoFeedType = false,
-                                  int WholeRangesLeftOut = 0);
+                                  int WholeRangesLeftOut = 0, IReadOnlyList<string>? LeftOutLargeRanges = null,
+                                  IReadOnlyList<FeedFileChange>? FeedChanges = null, FeedRecordResult? Record = null,
+                                  IReadOnlyList<string>? EmptiedFiles = null);
+
+public enum AsnRefreshOutcome { Unchanged, Written, Missing, Retired, SaveRefused, SourceGone, NoDataset, NoFeedType, AsnFeedsOff,
+                               SavedFeedsUnavailable, Failed }
+
+/// <summary>
+/// One saved ASN feed's refresh. Stamp is what the caller commits with the other feeds'; NewLarge lists the large
+/// networks the saved feed never answered, which the refresh left out.
+/// </summary>
+public sealed record AsnFeedRefresh(AsnRefreshOutcome Outcome, ExportResult? Export, SavedFeedStamp? Stamp,
+                                    IReadOnlyList<string> NewLarge);
 
 public static class IpInfoLimits { public const int DownloadsPerDay = 10; }
 

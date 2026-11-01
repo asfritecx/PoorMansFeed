@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using PoorMansFeed.Core;
+using PoorMansFeed.Core.History;
 
 namespace PoorMansFeed.Core.CloudFeeds;
 
@@ -61,7 +63,7 @@ public sealed record FeedDescription
     /// <summary>The feed file is {FileStem}_ipv4.txt or {FileStem}_ipv6.txt.</summary>
     public string FileStem { get; }
 
-    private static bool IsSafeStem(string? stem)
+    internal static bool IsSafeStem(string? stem)
     {
         if (string.IsNullOrEmpty(stem) || stem.AsSpan().Trim('.').IsEmpty)
             return false;
@@ -76,6 +78,12 @@ public sealed record FeedDescription
         return true;
     }
 }
+
+/// <summary>
+/// The values that name a cloud feed's pick: only its kind's own fields are set, and a null AwsRegion is every region.
+/// </summary>
+public sealed record CloudFeedPick(FeedKind Kind, string? GoogleScope, bool GoogleAddsGlobal, string? AzureTag,
+                                   string? AwsService, string? AwsRegion);
 
 public enum RangeConfirmation { Confirmed, Mixed, NotInDatabase }
 
@@ -108,7 +116,8 @@ public sealed class CheckedRange
 public sealed class CloudFeedCheck
 {
     internal CloudFeedCheck(FeedDescription description, DatasetInfo dataset,
-                            bool includesIPv6, int ipv4MinPrefix, int ipv6MinPrefix, IReadOnlyList<CheckedRange> ranges)
+                            bool includesIPv6, int ipv4MinPrefix, int ipv6MinPrefix, IReadOnlyList<CheckedRange> ranges,
+                            CloudFeedPick pick)
     {
         Description = description;
         Dataset = dataset;
@@ -116,9 +125,12 @@ public sealed class CloudFeedCheck
         IPv4MinPrefix = ipv4MinPrefix;
         IPv6MinPrefix = ipv6MinPrefix;
         Ranges = ranges;
+        Pick = pick;
     }
 
     public FeedDescription Description { get; }
+
+    public CloudFeedPick Pick { get; }
 
     public DatasetInfo Dataset { get; }
 
@@ -149,22 +161,25 @@ public sealed class CloudFeedCheck
         && settings.IPv6MinPrefix == IPv6MinPrefix;
 }
 
-public enum CheckFailure { None, NoDataset, NothingSelected, Failed }
+public enum CheckFailure { None, NoDataset, NothingSelected, Failed, PickGone }
 
 /// <summary>Check is non-null exactly when Failure is None.</summary>
 public sealed record CheckResult(CheckFailure Failure, CloudFeedCheck? Check);
 
 /// <summary>
 /// The ranges the operator ticked, ready for the large-range dialog. Constructed only inside Core.
-/// LargeRanges lists every ticked range broader than the threshold, in list order. The dialog starts them unticked.
+/// LargeRanges: the ticked ranges past the threshold, in list order; the dialog starts each as the saved feed has it.
 /// </summary>
 public sealed class CloudFeedPlan
 {
-    internal CloudFeedPlan(CloudFeedCheck check, IReadOnlyList<CheckedRange> included, IReadOnlyList<LargeRange> largeRanges)
+    internal CloudFeedPlan(CloudFeedCheck check, IReadOnlyList<CheckedRange> included, IReadOnlyList<LargeRange> largeRanges,
+                           IReadOnlyList<string> handTicked, IReadOnlyList<string> handUnticked)
     {
         Check = check;
         Included = included;
         LargeRanges = largeRanges;
+        HandTicked = handTicked;
+        HandUnticked = handUnticked;
     }
 
     public CloudFeedCheck Check { get; }
@@ -172,19 +187,71 @@ public sealed class CloudFeedPlan
     public IReadOnlyList<CheckedRange> Included { get; }
 
     public IReadOnlyList<LargeRange> LargeRanges { get; }
+
+    /// <summary>The ticked ranges that don't start ticked, in check order.</summary>
+    public IReadOnlyList<string> HandTicked { get; }
+
+    /// <summary>The confirmed ranges left unticked, in check order.</summary>
+    public IReadOnlyList<string> HandUnticked { get; }
 }
 
 public enum CloudFeedWriteFailure { None, NothingToWrite, FolderUnavailable, WriteFailed, SettingsChanged, ExceptionsUnreadable, NoFeedType }
 
 /// <summary>
-/// RangesWritten counts one copy's lines, so a cut range counts once per piece. Files holds every type's files in write
-/// order; OldFilesLeft (empty or null for none) names old files left in place; FailedFile is null unless one failed.
+/// RangesWritten counts one copy's lines. Files, FeedChanges and EmptiedFiles (rewritten header-only, on success only)
+/// follow the write order, the last two and Record null when none; OldFilesLeft and FailedFile name a failure's files.
 /// </summary>
 public sealed record CloudFeedWriteResult(CloudFeedWriteFailure Failure, IReadOnlyList<string> Files, int RangesWritten,
                                           int UnconfirmedWritten, int LargeRangesLeftOut,
                                           int ExceptionCuts = 0, int ExceptionRemovals = 0,
                                           IReadOnlyList<string>? OldFilesLeft = null, string? FailedFile = null,
-                                          IReadOnlyList<string>? ModSecurityFiles = null, int WholeRangesLeftOut = 0);
+                                          IReadOnlyList<string>? ModSecurityFiles = null, int WholeRangesLeftOut = 0,
+                                          IReadOnlyList<string>? LeftOutLargeRanges = null,
+                                          IReadOnlyList<FeedFileChange>? FeedChanges = null,
+                                          FeedRecordResult? Record = null, IReadOnlyList<string>? EmptiedFiles = null);
+
+public enum CloudRefreshOutcome { Unchanged, Written, Missing, Retired, SaveRefused, Superseded, SavedFeedsUnavailable, Failed }
+
+/// <summary>
+/// One saved cloud feed's refresh. Stamp is what the caller commits with the other feeds'; NewUnconfirmed and NewLarge
+/// list the ranges the saved pick has never answered, which the refresh left out.
+/// </summary>
+public sealed record CloudFeedRefresh(CloudRefreshOutcome Outcome, CloudFeedWriteResult? Write, SavedFeedStamp? Stamp,
+                                      IReadOnlyList<string> NewUnconfirmed, IReadOnlyList<string> NewLarge);
+
+/// <summary>
+/// NotSaved: no saved file at all. Unusable: a file is there, but the pair is incomplete, damaged or unreadable.
+/// </summary>
+public enum SavedRangesState { Read, NotSaved, Unusable }
+
+/// <summary>Catalogue and SavedUtc (the record's download time) are set exactly when State is Read.</summary>
+public sealed record SavedRanges<T>(SavedRangesState State, T? Catalogue, DateTimeOffset? SavedUtc) where T : class;
+
+/// <summary>Raised once a call has replaced the saved source file with other content.</summary>
+public sealed record CloudSourceUpdated<TCatalogue>(TCatalogue Catalogue, DateTimeOffset UpdatedUtc) where TCatalogue : class;
+
+internal static class CloudSourceEvents
+{
+    // Each listener on its own, so one that throws neither costs the caller its typed result nor silences the rest
+    public static void Tell<TCatalogue>(object sender, EventHandler<CloudSourceUpdated<TCatalogue>>? handler,
+                                        CloudSourceUpdated<TCatalogue> update) where TCatalogue : class
+    {
+        if (handler is null)
+            return;
+        foreach (EventHandler<CloudSourceUpdated<TCatalogue>> listener
+                 in handler.GetInvocationList().Cast<EventHandler<CloudSourceUpdated<TCatalogue>>>())
+        {
+            try
+            {
+                listener(sender, update);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"A cloud source listener failed ({ex.GetType().FullName}).");
+            }
+        }
+    }
+}
 
 /// <summary>One line of a cloud feed: a ticked range, or a piece of one an exception cut, with the range's status.</summary>
 internal readonly record struct FeedLine(string Text, bool IsIpv6, bool Confirmed);

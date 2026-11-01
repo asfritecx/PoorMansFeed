@@ -53,7 +53,7 @@ public static class AbuseIpDbLimits
 public enum AbuseIpDbFailure
 {
     None, NoKey, KeyUnavailable, NotPublic, KeyRejected, RateLimited, Offline, ServiceError, BadResponse,
-    LimitReached, ListUnreadable, ListNewer, StorageError, ClockWrong, DiskNearlyFull, ClockBehind,
+    LimitReached, ListUnreadable, ListNewer, StorageError, ClockWrong, DiskNearlyFull, ClockBehind, KeptForUser,
 }
 
 /// <summary>What saving an AbuseIPDB key came to.</summary>

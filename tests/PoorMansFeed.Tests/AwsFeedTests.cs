@@ -2,6 +2,7 @@ using System.Text;
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.Aws;
 using PoorMansFeed.Core.CloudFeeds;
+using PoorMansFeed.Core.History;
 using Microsoft.Extensions.Time.Testing;
 
 namespace PoorMansFeed.Tests;
@@ -99,15 +100,31 @@ public sealed class AwsFeedTests : IDisposable
     [InlineData("EC2", "US-EAST-1")]
     [InlineData("ec2", null)]
     [InlineData("a b/c", "x\ny")]
-    public async Task An_Unknown_Pick_Selects_Nothing_And_No_Dataset_Is_Still_Reported_First(string service, string? region)
+    public async Task A_Pick_That_Is_Gone_Fails_As_PickGone_Before_The_Dataset_Is_Asked(string service, string? region)
     {
-        CheckResult unknown = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection(service, region), Ct);
-        Assert.Equal(CheckFailure.NothingSelected, unknown.Failure);
+        CheckResult gone = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection(service, region), Ct);
+        Assert.Equal(CheckFailure.PickGone, gone.Failure);
+        Assert.Null(gone.Check);
+        Assert.Equal(0, _ipinfo.OverlapCalls);
 
         _ipinfo.Dataset = null;
+        CheckResult goneWithoutDataset = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection(service, region), Ct);
+        Assert.Equal(CheckFailure.PickGone, goneWithoutDataset.Failure);
         CheckResult noDataset = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection("EC2", "us-east-1"), Ct);
         Assert.Equal(CheckFailure.NoDataset, noDataset.Failure);
         Assert.Null(noDataset.Check);
+    }
+
+    [Fact]
+    public async Task The_Check_Carries_The_Service_And_The_Region_Or_Every_Region()
+    {
+        _ipinfo.OverlapFunc = Found(_ => [Group("amazon.com")]);
+
+        CheckResult one = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection("EC2", "us-east-1"), Ct);
+        CheckResult all = await Service().CheckAsync(AwsTestData.Catalogue(), new AwsSelection("EC2", null), Ct);
+
+        Assert.Equal(new CloudFeedPick(FeedKind.Aws, null, false, null, "EC2", "us-east-1"), one.Check!.Pick);
+        Assert.Equal(new CloudFeedPick(FeedKind.Aws, null, false, null, "EC2", null), all.Check!.Pick);
     }
 
     [Fact]

@@ -2,6 +2,8 @@ using System.Globalization;
 
 namespace PoorMansFeed.Core.FeedExceptions;
 
+internal enum ExceptionCover { None, Part, Whole }
+
 /// <summary>
 /// A feed written as if there were no exceptions could block the operator's own networks, so writers refuse an
 /// unreadable list and branch on IsReadable; Entries, Cut and Covers throw on one, so a forgotten check fails.
@@ -79,6 +81,19 @@ public sealed class ExceptionList
             RangeSubtraction.AppendCidrs(piece, ipv6, cidrs);
 
         return cidrs;
+    }
+
+    /// <summary>Whether the exceptions hold none, part or all of the range, of its own family only.</summary>
+    internal ExceptionCover Classify(byte[] start, byte[] end)
+    {
+        ThrowIfUnreadable();
+        List<AddressInterval> exceptions = start.Length == 16 ? _ipv6 : _ipv4;
+        if (exceptions.Count == 0)
+            return ExceptionCover.None;
+
+        var range = new AddressInterval(RangeSubtraction.ToNumber(start), RangeSubtraction.ToNumber(end));
+        List<AddressInterval>? left = RangeSubtraction.Subtract(range, exceptions);
+        return left is null ? ExceptionCover.None : left.Count == 0 ? ExceptionCover.Whole : ExceptionCover.Part;
     }
 
     /// <summary>True when an exception holds the address (4 or 16 bytes).</summary>

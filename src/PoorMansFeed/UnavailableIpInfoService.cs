@@ -19,6 +19,7 @@ internal sealed class UnavailableIpInfoService : IIpInfoService
     public DatasetInfo? Dataset => null;
 
     public ExceptionList Exceptions => ExceptionList.Unreadable;
+    public IFeedRecords Records { get; } = FeedRecords.None;
 
     public Task<StartupResult> InitializeAsync(CancellationToken ct) =>
         Task.FromResult(new StartupResult(StartupFailure.StorageUnavailable, null, false));
@@ -32,7 +33,8 @@ internal sealed class UnavailableIpInfoService : IIpInfoService
     public Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken ct) =>
         Task.FromResult(new UpdateCheckResult(UpdateCheckOutcome.ServiceError));
 
-    public Task<UpdateResult> UpdateDatasetAsync(IProgress<UpdateProgress>? progress, CancellationToken ct) =>
+    public Task<UpdateResult> UpdateDatasetAsync(IProgress<UpdateProgress>? progress, CancellationToken ct,
+                                                  IpInfoUpdatePolicy? policy = null) =>
         Task.FromResult(new UpdateResult(UpdateFailure.ServiceError, false, null));
 
     public Task<SearchResult> SearchAsync(string input, int displayLimit, CancellationToken ct) =>
@@ -40,6 +42,9 @@ internal sealed class UnavailableIpInfoService : IIpInfoService
 
     public Task<OverlapResult> LookUpOverlapsAsync(IReadOnlyList<CidrBlock> blocks, CancellationToken ct) =>
         Task.FromResult(new OverlapResult(OverlapOutcome.NoDataset, [], null));
+
+    public Task<IReadOnlyDictionary<uint, string>> FindAsNamesAsync(IReadOnlyCollection<uint> asns, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyDictionary<uint, string>>(new Dictionary<uint, string>());
 
     public Task<ExportPlan> PrepareExportAsync(SearchQuery query, CancellationToken ct) =>
         Task.FromResult(new ExportPlan(0, "", []));

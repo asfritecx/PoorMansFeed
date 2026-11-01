@@ -19,7 +19,7 @@ public static partial class AppText
 
     public const string FeedTypesCaption =
         "Write feed and Export write each feed once for every type ticked, and a type you untick keeps its files as "
-        + "they were. Empty feed is the exception: it empties the AbuseIPDB files in both folders, whatever is ticked.";
+        + "they were. Retire feed is the exception: it empties a feed's files in both folders, whatever is ticked.";
 
     public const string WriteFortigateFeedsLabel = "Fortigate threat feeds, in the fortigate folder";
     public const string WriteModSecurityListsLabel = "ModSecurity IP lists, in the modsecurity folder";

@@ -526,7 +526,7 @@ public sealed class ModSecurityFeedRollingTests : IDisposable
         HeaderLines(family, entries, downloaded: true, "# Kept: addresses listed within 30 days of the last download");
 
     private static string EmptiedHeader(string family) =>
-        HeaderLines(family, 0, downloaded: false, "# Emptied by hand: no address is listed until the feed is written again");
+        HeaderLines(family, 0, downloaded: false, "# Retired by hand: no address is listed until the feed is written again");
 
     private static string HeaderLines(string family, int entries, bool downloaded, string keptLine)
     {

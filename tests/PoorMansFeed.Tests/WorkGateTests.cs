@@ -27,6 +27,112 @@ public sealed class WorkGateTests
     }
 
     [Fact]
+    public void RefreshingBlocksCanStartOnItsOwnAndHoldsNothing()
+    {
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        int changes = 0;
+        gate.Changed += (_, _) => changes++;
+
+        gate.SetRefreshing(true);
+        Assert.False(gate.CanStart);
+        Assert.True(gate.IsStarted);
+        Assert.False(gate.IsHeld);
+        Assert.Equal(1, changes);
+
+        gate.SetRefreshing(true);
+        gate.SetBusy(true);
+        gate.SetBusy(false);
+        Assert.False(gate.CanStart);
+        Assert.Equal(1, changes);
+
+        gate.SetRefreshing(false);
+        Assert.True(gate.CanStart);
+        Assert.Equal(2, changes);
+
+        // Busy already stops CanStart, but the refresh's own flip is still raised both ways
+        gate.SetBusy(true);
+        Assert.Equal(3, changes);
+        gate.SetRefreshing(true);
+        Assert.True(gate.IsRefreshing);
+        gate.SetRefreshing(false);
+        Assert.False(gate.IsRefreshing);
+        Assert.False(gate.CanStart);
+        Assert.Equal(5, changes);
+    }
+
+    [Fact]
+    public void IsRefreshingFollowsSetRefreshingAndItsFlipIsRaisedWhileAHoldIsOut()
+    {
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        IDisposable hold = gate.Hold();
+        int changes = 0;
+        gate.Changed += (_, _) => changes++;
+        Assert.False(gate.IsRefreshing);
+
+        gate.SetRefreshing(true);
+        Assert.True(gate.IsRefreshing);
+        Assert.Equal(1, changes);
+        gate.SetRefreshing(true);
+        Assert.Equal(1, changes);
+
+        gate.SetRefreshing(false);
+        Assert.False(gate.IsRefreshing);
+        Assert.False(gate.CanStart);
+        Assert.Equal(2, changes);
+
+        hold.Dispose();
+        Assert.True(gate.CanStart);
+        Assert.Equal(3, changes);
+    }
+
+    [Fact]
+    public void PageWorkNestsAndDisposingTwiceReleasesOnce()
+    {
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        Assert.False(gate.IsPageWorking);
+
+        IDisposable outer = gate.EnterPageWork();
+        IDisposable inner = gate.EnterPageWork();
+        inner.Dispose();
+        inner.Dispose();
+        Assert.True(gate.IsPageWorking);
+        outer.Dispose();
+        Assert.False(gate.IsPageWorking);
+        outer.Dispose();
+        Assert.False(gate.IsPageWorking);
+
+        // A released mark disposed again must not have freed a later one either
+        IDisposable later = gate.EnterPageWork();
+        inner.Dispose();
+        outer.Dispose();
+        Assert.True(gate.IsPageWorking);
+        later.Dispose();
+        Assert.False(gate.IsPageWorking);
+    }
+
+    [Fact]
+    public void PageWorkRaisesNothingAndLeavesCanStart()
+    {
+        var gate = new WorkGate();
+        gate.SetStarted(true);
+        int changes = 0;
+        gate.Changed += (_, _) => changes++;
+
+        IDisposable work = gate.EnterPageWork();
+        Assert.True(gate.IsPageWorking);
+        Assert.True(gate.CanStart);
+        Assert.False(gate.IsHeld);
+        Assert.False(gate.IsRefreshing);
+        work.Dispose();
+
+        Assert.True(gate.CanStart);
+        Assert.Equal(0, changes);
+    }
+
+    [Fact]
     public void HoldsNestAndDisposingTwiceReleasesOnce()
     {
         var gate = new WorkGate();

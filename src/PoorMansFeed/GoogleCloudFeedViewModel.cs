@@ -26,7 +26,8 @@ public sealed class GoogleCloudFeedViewModel : CloudFeedPageViewModel
     {
         _google = feeds;
         _ipinfo = ipinfo;
-        ReloadRangesCommand = new AsyncRelayCommand(ReloadAsync, () => !IsDisposed && !IsWorking);
+        ReloadRangesCommand = new AsyncRelayCommand(ReloadAsync, () => !IsDisposed && !IsWorking && !IsRefreshing);
+        _google.SourceUpdated += HearSourceUpdated;
     }
 
     public IAsyncRelayCommand ReloadRangesCommand { get; }
@@ -72,7 +73,13 @@ public sealed class GoogleCloudFeedViewModel : CloudFeedPageViewModel
         if (Interlocked.Exchange(ref _activated, 1) == 1)
             return Task.CompletedTask;
 
-        return LoadCatalogueAsync();
+        return ActivateWhenFreeAsync(LoadCatalogueAsync);
+    }
+
+    public override void Dispose()
+    {
+        _google.SourceUpdated -= HearSourceUpdated;
+        base.Dispose();
     }
 
     protected override void RefreshCommands()
@@ -95,7 +102,7 @@ public sealed class GoogleCloudFeedViewModel : CloudFeedPageViewModel
 
     private async Task ReloadAsync()
     {
-        if (IsDisposed || IsWorking)
+        if (IsDisposed || IsWorking || IsRefreshing)
             return;
 
         Interlocked.Exchange(ref _activated, 1);
@@ -138,7 +145,13 @@ public sealed class GoogleCloudFeedViewModel : CloudFeedPageViewModel
         }
     }
 
-    private void ApplyCatalogue(CloudRangeCatalogue catalogue)
+    // Refresh all may raise this off the UI thread, so it only posts
+    private void HearSourceUpdated(object? sender, CloudSourceUpdated<CloudRangeCatalogue> update) =>
+        PostSourceUpdate(
+            () => Volatile.Read(ref _activated) == 0 || ReferenceEquals(update.Catalogue, _catalogue),
+            () => ApplyCatalogue(update.Catalogue));
+
+    private bool ApplyCatalogue(CloudRangeCatalogue catalogue)
     {
         _catalogue = catalogue;
         bool includeIPv6 = _ipinfo.Settings.IPv6Enabled;
@@ -156,6 +169,7 @@ public sealed class GoogleCloudFeedViewModel : CloudFeedPageViewModel
         OnPropertyChanged(nameof(CanIncludeGlobal));
         ClearRows();
         EmptyText = AppText.GoogleCloudEmptyInitial;
+        return match is not null;
     }
 
     private void FailLoad(CatalogueFailure failure)

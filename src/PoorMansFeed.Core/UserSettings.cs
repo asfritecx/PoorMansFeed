@@ -17,6 +17,8 @@ public sealed record UserSettings
     public int IPv4MinPrefix { get; init; } = LargeRangePolicy.DefaultIPv4MinPrefix;   // 16
     public int IPv6MinPrefix { get; init; } = LargeRangePolicy.DefaultIPv6MinPrefix;   // 32
     public int AbuseIpDbKeepDays { get; init; } = AbuseIpDbLimits.DefaultKeepDays;     // a cutoff on what is read and written: the addresses listed within this many days of the last download (counted back from the earlier of now and the last download); nothing stored depends on it
+    public bool RefreshAllOnTimer { get; init; } = false;
+    public int RefreshAllEveryHours { get; init; } = RefreshAllLimits.DefaultHours;   // kept and saved while the timer is off
     public bool WriteFortigateFeeds { get; init; } = false;      // a section or file without it reads true, so an earlier install keeps its FortiGate feeds
     public bool WriteModSecurityLists { get; init; } = false;
     public ModSecurityAction ModSecurityAction { get; init; } = ModSecurityAction.LogOnly;

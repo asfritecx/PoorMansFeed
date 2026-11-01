@@ -36,9 +36,18 @@ public static partial class AppText
     public const string UpdateButton = "Update dataset";
     public const string UpdateTooltip = "Download the latest dataset";
 
-    // Section headers
-    public const string DatasetHeader = "Dataset";
-    public const string DatasetCaption = "The local copy of the IPinfo Lite dataset";
+    // The pill's drop-down and the update window. A line shown outside them names the pill by where it is.
+    public const string DatasetPillName = "Dataset status";
+    public const string DatasetPillTooltip = "Show the dataset status";
+    public const string UpdateDatasetEllipsis = UpdateButton + Ellipsis;
+    public const string UpdateDatasetEllipsisTooltip = "Open the update window and download the latest dataset";
+    public const string DatasetCheckTooltip = "Check whether a newer dataset is available";
+    public const string ShowProgress = "Show progress";
+    public const string ShowProgressTooltip = "Show the update window";
+    public const string DatasetUpdateTitle = "Dataset update";
+    public const string DatasetUpdateCaption = "The local copy of the IPinfo Lite dataset. Closing this window keeps the update running.";
+    public const string CancelUpdate = "Cancel update";
+    private const string UnderDatasetStatus = " under the dataset status at the top of the window";
     public const string ProgressName = "Dataset update progress";
     public const string ResultsHeader = "Results";
 
@@ -57,14 +66,17 @@ public static partial class AppText
     public const string UpToDate = "Dataset up to date";
     public const string UpdateAvailable = "Update available";
     public const string CheckFailed = "Update check failed";
-    public const string Updating = "Updating" + Ellipsis;
+    public const string Updating = UpdatingWord + UpdatingWaitSuffix;
+    // The pill's live part: the percent beside it changes too often to announce
+    public const string UpdatingWord = "Updating";
+    public const string UpdatingWaitSuffix = Ellipsis;
     public const string CheckingDetail = "You can search while this runs.";
-    public const string UpdateAvailableDetail = "A newer dataset is available. Choose Update dataset to download it.";
+    public const string UpdateAvailableDetail = "A newer dataset is available. Choose " + UpdateDatasetEllipsis + " to download it.";
     public const string UpdateAvailableIPv6Detail = "Update the dataset to add IPv6 networks.";
     public const string IPv4Only = "IPv4 only";
     public const string AlreadyCurrentDetail = "No newer dataset is available.";
     public const string NoTokenCheck = "No API token could be read. For updates, choose Reset token in Settings.";
-    public const string NoTokenFirstRun = "An API token is needed to download the dataset. Choose Update dataset to enter one.";
+    public const string NoTokenFirstRun = "An API token is needed to download the dataset. Choose " + UpdateDatasetEllipsis + " to enter one.";
     public const string NoDatasetFacts = "No dataset has been downloaded yet";
 
     // Update phases
@@ -76,19 +88,23 @@ public static partial class AppText
 
     // Update outcomes
     public const string UpdatedTitle = "Dataset updated";
+    public const string DatasetRefreshTitle = "Refresh all is running";
+    public const string DatasetWaitsForRefresh = "Update dataset and search come back when it ends";
     public const string UpdateCancelledTitle = "Update cancelled";
     public const string UpdateFailedTitle = "Update failed";
+    public const string UpdateFailedPill = UpdateFailedTitle;
     public const string StillInUse = "The existing dataset is still in use.";
     public const string NoDatasetDownloaded = "No dataset has been downloaded yet.";
 
     // Failure details, for a check or an update
     public const string TokenRejected = "The API token wasn't accepted. Choose Reset token in Settings.";
-    public const string CheckOffline = "The update check couldn't be completed. Check the network connection, then choose Update dataset.";
+    public const string CheckOffline = "The update check couldn't be completed. Check the network connection, then choose " + CheckForUpdates + " again.";
     public const string UpdateOffline = "The dataset couldn't be downloaded. Check the network connection, then try again.";
     public const string ChecksumMismatch = "The download couldn't be verified, so it was discarded. Please try again.";
     public const string DiskFull = "The dataset couldn't be downloaded because the disk is nearly full. Free some space, then try again.";
     public const string CorruptData = "The downloaded dataset couldn't be read, so it was discarded. Please try again.";
     public const string StorageError = "The dataset couldn't be saved. Please try again or contact the Infra Team.";
+    public const string UpdateKeptForUser = "The dataset wasn't downloaded, to keep the last IPinfo downloads of the day for Update dataset.";
     public const string ServiceError = "The update couldn't be completed. Please try again or contact the Infra Team.";
     public const string Generic = "The operation couldn't be completed. Please try again or contact the Infra Team.";
 
@@ -204,7 +220,8 @@ public static partial class AppText
     public const string ColumnAs = "AS";
     public const string ColumnDomain = "Domain";
     public const string ExportIpNote = "Export is available for ASN searches.";
-    public const string NothingExported = "Nothing was exported" + Dash + "every network is a large range that was left out";
+    public const string NothingExported = "Nothing was exported" + Dash + AllNetworksLeftOut;
+    public const string AllNetworksLeftOut = "every network is a large range that was left out";
     public const string ExportFolderUnavailable = "The export folder couldn't be used. Choose another folder in Settings.";
     public const string ExportWriteFailed = "The export couldn't be written. Please try again or contact the Infra Team.";
 
@@ -213,7 +230,7 @@ public static partial class AppText
     /// order tells them apart, not a folder's name: the export folder itself may be called modsecurity.
     /// </summary>
     public static string ExportFileFailed(string failedFile, IReadOnlyList<string> writtenBefore,
-                                          IReadOnlyList<string>? oldFilesLeft, bool unsaved)
+                                          IReadOnlyList<string>? oldFilesLeft, bool unsaved, FeedRecordResult? record = null)
     {
         ArgumentNullException.ThrowIfNull(failedFile);
         ArgumentNullException.ThrowIfNull(writtenBefore);
@@ -224,7 +241,7 @@ public static partial class AppText
                 ? " The old " + NameList(oldFilesLeft.Select(Name))
                   + (oldFilesLeft.Count == 1 ? " was left as it was." : " were left as they were.")
                 : "")
-            + (unsaved && writtenBefore.Count > 0 ? UnsavedSettingsSentence : "") + TryAgain;
+            + FeedRecordSentence(record) + (unsaved && writtenBefore.Count > 0 ? UnsavedSettingsSentence : "") + TryAgain;
 
         string Name(string path) => string.Equals(path, report, StringComparison.Ordinal)
             ? Path.GetFileName(path)
@@ -235,6 +252,12 @@ public static partial class AppText
     public const string WebPageOpenFailed = "The page couldn't be opened.";
     public const string OpenInIpinfo = "Open in ipinfo.io";
     public const string OpenInAbuseIpDb = "Open in AbuseIPDB";
+    public const string CopyNetwork = "Copy network";
+    public const string CopyAsNumber = "Copy AS number";
+    public const string CopyAddress = "Copy address";
+    public const string NetworkCopyFailed = "The network couldn't be copied.";
+    public const string AsNumberCopyFailed = "The AS number couldn't be copied.";
+    public const string AddressCopyFailed = "The address couldn't be copied.";
     public const string ExceptionsUnreadable = "The exceptions list couldn't be read, so no feed was written. Open Settings to fix it.";
 
     // Check AbuseIPDB on IPInfo Lookup
@@ -319,7 +342,10 @@ public static partial class AppText
     public const string NoTokenStatus = "No IPinfo API token is saved";
     public const string AbuseKeySavedStatus = "An AbuseIPDB key is saved on this computer";
     public const string NoAbuseKeyStatus = "No AbuseIPDB key is saved";
-    public const string AbuseKeysUnavailable = "AbuseIPDB can't be used, because the app data folder couldn't be created";
+    public const string AbuseKeysUnavailable = AbuseUnavailableHead + ", because the app data folder couldn't be created";
+    // The AbuseIPDB page's facts give the same in two lines, which fit beside its buttons at the minimum width
+    public const string AbuseUnavailableHead = "AbuseIPDB can't be used";
+    public const string AbuseUnavailableDetail = "The app data folder couldn't be created";
     public const string KeysBusy = "Nothing was changed" + Dash + "wait until the current task ends";
     public const string TokenSaved = "API token saved";
     public const string TokenClearFailed = "The API token couldn't be removed. Please try again or contact the Infra Team.";
@@ -353,9 +379,15 @@ public static partial class AppText
     public static string AbuseIpDbKeepDaysCaption =>
         "An address stays in the AbuseIPDB feed while it was listed within this many days of the last download. Each address is kept in the list for "
         + Count(AbuseIpDbLimits.MaxKeepDays, "day", "days") + " after it was last listed, so raising the number later brings back addresses it had left out.";
+    public const string RefreshAllHeader = "Refresh all";
+    public const string RefreshAllOnTimer = "Refresh all while the app is open";
+    public const string RefreshAllEveryHoursLabel = "Hours between refreshes";
+    public const string RefreshAllTimerCaption =
+        "A refresh comes one interval after the application opens, this setting is saved or the last refresh ends. On a Mac, the keychain can ask once for access after a new version; choose Always Allow to stop it.";
     public const string ChooseAddressFamily = "Choose at least one address family.";
     public const string EnterBothPrefixes = "Enter both prefix lengths.";
     public const string EnterKeepDays = "Enter the number of days to keep an address.";
+    public const string EnterRefreshAllHours = "Enter the number of hours between refreshes.";
     public const string SettingsSaveFailed = "The settings couldn't be saved. Please try again or contact the Infra Team.";
 
     // Close while the dataset is updating
@@ -368,7 +400,7 @@ public static partial class AppText
     public const string CloseUnsavedBody = "The Settings page has changes that aren't saved. Closing " + AppInfo.Name + " discards them.";
     public const string CloseUnsavedButton = "Discard and close";
 
-    // Close while the AbuseIPDB Blacklist page has a download, Clear list, Write feed or Empty feed with the service
+    // Close while the AbuseIPDB Blacklist page has a download, Clear list, Write feed or Retire feed with the service
     public const string CloseAbuseWorkTitle = "Stop the AbuseIPDB work?";
     public const string CloseAbuseDownloadBody = "AbuseIPDB Blacklist is still downloading. Closing " + AppInfo.Name + " stops a download AbuseIPDB hasn't answered yet, which can still count as one of today's downloads; an answer already received is added to the rolling list first. Then the application closes.";
     public const string CloseAbuseWorkBody = "AbuseIPDB Blacklist is still working on the list or the feed. Closing " + AppInfo.Name + " waits for it to finish and then closes the application.";
@@ -380,7 +412,7 @@ public static partial class AppText
     public const string HelpDatasetHeading = "2. Dataset";
     public const string HelpSearchHeading = "3. Search";
     public const string HelpExportHeading = "4. Export";
-    public const string HelpExportText = "Export writes every network for the ASN to the export folder. When Settings writes the ticked feed types with each ASN export, it also writes a feed of each type ticked, FortiGate or ModSecurity. Large ranges are left out unless you tick them. Google Cloud Lookup, Azure Lookup and AWS Lookup, in the list on the left, write a feed of the Google Cloud ranges for one region, of the Azure ranges for one service tag, or of the AWS ranges for one service and region. Networks listed under Exceptions in Settings are cut out of every feed.";
+    public const string HelpExportText = "Export writes every network for the ASN to the export folder. When Settings writes the ticked feed types with each ASN export, it also writes a feed of each type ticked, FortiGate or ModSecurity. Large ranges are left out unless you tick them. Google Cloud Lookup, Azure Lookup and AWS Lookup, in the list on the left, write a feed of the Google Cloud ranges for one region, of the Azure ranges for one service tag, or of the AWS ranges for one service and region. Tick all and Untick all tick or untick every range shown. Networks listed under Exceptions in Settings are cut out of every feed.";
 
     public const string HelpAbuseHeading = "5. AbuseIPDB";
 
@@ -391,8 +423,8 @@ public static partial class AppText
     public const string DownloadBlacklistTooltip = "Download AbuseIPDB's blacklist into the rolling list on this computer";
     public const string ClearList = "Clear list";
     public const string ClearListTooltip = "Remove every downloaded address from this computer";
-    public const string EmptyFeed = "Empty feed";
-    public const string EmptyFeedTooltip = "Rewrite the rolling feed files with no addresses. The AbuseIPDB list is kept.";
+    public const string RetireFeed = "Retire feed";
+    public const string RetireFeedTooltip = "Rewrite the rolling feed files with no addresses until the next Write feed. The AbuseIPDB list is kept.";
     public const string ColumnAddresses = "Addresses";
     public const string ColumnCountries = "Countries";
     public const string ColumnName = "Name";
@@ -402,18 +434,18 @@ public static partial class AppText
     public const string DownloadingBlacklist = "Downloading the blacklist" + Ellipsis;
     public const string ClearingAbuseList = "Clearing the AbuseIPDB list" + Ellipsis;
     public const string WritingAbuseFeed = "Writing the feed" + Ellipsis;
-    public const string EmptyingAbuseFeed = "Emptying the feed" + Ellipsis;
+    public const string RetiringAbuseFeed = "Retiring the feed" + Ellipsis;
     public const string AbuseNetworksEmpty = "The networks of the listed addresses will appear here.";
     public const string AbuseNetworksNoAddresses = "No address within the keep days to group.";
     public const string AbuseNetworksNoAsn = "None of the addresses has an ASN in IPinfo.";
 
-    // Clear list and Empty feed confirmations
+    // Clear list and Retire feed confirmations
     public const string ClearAbuseListTitle = "Clear the AbuseIPDB list?";
     public const string ClearAbuseListButton = "Clear list";
-    public const string ClearAbuseListBody = "Every downloaded address is removed from this computer. The download count, the AbuseIPDB key and the feed files are kept; choose Empty feed to empty the files. This cannot be undone.";
-    public const string EmptyAbuseFeedTitle = "Empty the AbuseIPDB feed?";
-    public const string EmptyAbuseFeedButton = "Empty feed";
-    public const string EmptyAbuseFeedBody = "Each AbuseIPDB feed file in the export folder's fortigate and modsecurity folders, whatever is ticked, is rewritten with no addresses, so a FortiGate or ModSecurity server matches none of them once it reads the file again. The AbuseIPDB list is kept, and the next Write feed fills the files again.";
+    public const string ClearAbuseListBody = "Every downloaded address is removed from this computer. The download count, the AbuseIPDB key and the feed files are kept; choose Retire feed to empty the files. This cannot be undone.";
+    public const string RetireAbuseFeedTitle = "Retire the AbuseIPDB feed?";
+    public const string RetireAbuseFeedButton = "Retire feed";
+    public const string RetireAbuseFeedBody = "Each AbuseIPDB feed file in the export folder's fortigate and modsecurity folders, whatever is ticked, is rewritten with no addresses, so a FortiGate or ModSecurity server matches none of them once it reads the file again. The files stay so until Write feed fills them again. The AbuseIPDB list and the change history are kept.";
 
     // The download after the key prompt was cancelled or couldn't be shown
     public const string AbuseDownloadKeyCancelled = "Nothing was downloaded" + Dash + "AbuseIPDB needs an API key";
@@ -434,9 +466,9 @@ public static partial class AppText
     public const string AbuseNewAddressesNotShown = "The new addresses couldn't be shown. Please try again or contact the Infra Team.";
     public const string AbuseNewAddressesBusy = "The new addresses weren't shown" + Dash + "press New addresses again when the current task ends";
 
-    // Clear list and Empty feed when another task holds the work gate at the moment their question would show
+    // Clear list and Retire feed when another task holds the work gate at the moment their question would show
     public const string AbuseClearListBusy = "The list wasn't cleared" + Dash + "press Clear list again when the current task ends";
-    public const string AbuseEmptyFeedBusy = "The feed wasn't emptied" + Dash + "press Empty feed again when the current task ends";
+    public const string AbuseRetireFeedBusy = "The feed wasn't retired" + Dash + "press Retire feed again when the current task ends";
     private const string AbuseNewAddressesNotKnown = "The new addresses aren't known for the last download.";
 
     // The rolling list's unusable states, shown on their own and before what a download, a write or a grouping did
@@ -458,18 +490,29 @@ public static partial class AppText
     public const string WriteFeed = "Write feed";
     public const string WriteFeedTooltip = "Write the ticked ranges to a threat feed of each type ticked in Settings";
     public const string CloudResultsHeader = "Ranges";
+    public const string CloudTickAll = "Tick all";
+    public const string CloudTickAllTooltip = "Tick every range in the list";
+    public const string CloudUntickAll = "Untick all";
+    public const string CloudUntickAllTooltip = "Untick every range in the list";
     public const string ColumnRegion = "Region";
     public const string ColumnStatus = "Status";
     public const string CloudSummaryInitial = "Checked ranges will appear below here.";
     public const string GoogleCloudEmptyInitial = "Choose a region, then choose Check ranges.";
     public const string GoogleCloudLoading = "Loading Google Cloud ranges" + Ellipsis;
+    public const string CloudWaitsForRefresh = "Waiting for Refresh all to finish" + Ellipsis;
+    public const string CloudSourceRechecked = "Refresh all updated the ranges, so they were checked again.";
+    public const string CloudSourcePickGone =
+        "Refresh all updated the ranges and the selection is gone. Choose again, then choose Check ranges.";
     public const string GoogleCloudLoadOffline = "The Google Cloud ranges couldn't be loaded. Check the network connection, then try again.";
     public const string GoogleCloudLoadFailed = "The Google Cloud ranges couldn't be loaded. Please try again or contact the Infra Team.";
     public const string GoogleCloudLoadUnreadable = "The Google Cloud ranges couldn't be read.";
-    public const string CloudNoDataset = "No dataset has been downloaded yet. Choose Update dataset before writing a feed.";
+    public const string CloudNoDataset = "No dataset has been downloaded yet. Choose " + UpdateDatasetEllipsis + UnderDatasetStatus + " before writing a feed.";
     public const string GoogleCloudNothingSelected = "No ranges match this region.";
     public const string CloudCheckFailed = "The ranges couldn't be checked. Please try again or contact the Infra Team.";
+    public const string CloudPickGone =
+        "The ranges couldn't be checked. The selection is no longer in the provider's file. Choose again, then choose Check ranges.";
     public const string CloudSettingsChanged = "The feed couldn't be written. The settings changed after the ranges were checked. Choose Check ranges again.";
+    public const string CloudDatasetChanged = "The feed couldn't be written. The dataset changed after the ranges were checked. Choose Check ranges again.";
     public const string CloudWriteFailed = "The feed couldn't be written. Please try again or contact the Infra Team.";
     public const string CloudLargeRangesBusy = "The feed wasn't written" + Dash + "press Write feed again when the current task ends";
 
@@ -478,11 +521,12 @@ public static partial class AppText
     /// old files left. With none of them and nothing unsaved it is <see cref="CloudWriteFailed"/>.
     /// </summary>
     public static string CloudWriteFailedLine(string? failedFile, IReadOnlyList<string> writtenBefore,
-                                              IReadOnlyList<string>? oldFilesLeft, bool unsaved)
+                                              IReadOnlyList<string>? oldFilesLeft, bool unsaved,
+                                              FeedRecordResult? record = null)
     {
         ArgumentNullException.ThrowIfNull(writtenBefore);
         return (failedFile is null ? "The feed couldn't be written." : FailedFileLead(failedFile, "written"))
-            + DoneBeforeFailure(writtenBefore, "written") + OldFilesLeftSentence(oldFilesLeft)
+            + DoneBeforeFailure(writtenBefore, "written") + OldFilesLeftSentence(oldFilesLeft) + FeedRecordSentence(record)
             + (unsaved && writtenBefore.Count > 0 ? UnsavedSettingsSentence : "") + TryAgain;
     }
     public const string CloudLargeRangesTitle = "Write the feed?";
@@ -514,14 +558,23 @@ public static partial class AppText
     public const string StatusConfirmed = "Confirmed";
     public const string StatusMixed = "Mixed";
     public const string StatusNotInDatabase = "Not in IPinfo";
-    public const string CloudNothingTicked = "Nothing was written" + Dash + "no ranges were ticked";
-    public const string CloudAllLeftOut = "Nothing was written" + Dash + "every ticked range is a large range that was left out";
-    public const string CloudAllExcepted = "Nothing was written" + Dash + "exceptions cover every ticked range";
-    public const string CloudAllLeftOutOrExcepted = "Nothing was written" + Dash + "every ticked range was left out as a large range or removed by exceptions";
-    public const string CloudAllWhole = "Nothing was written" + Dash + "every ticked range covers every address, which no feed takes";
-    public const string CloudAllLeftOutOrWhole = "Nothing was written" + Dash + "every ticked range was left out as a large range or for covering every address";
-    public const string CloudAllWholeOrExcepted = "Nothing was written" + Dash + "every ticked range covers every address or was removed by exceptions";
-    public const string CloudAllLeftOutWholeOrExcepted = "Nothing was written" + Dash + "every ticked range was left out as a large range or for covering every address, or removed by exceptions";
+    public const string CloudWhyNothingTicked = "no ranges were ticked";
+    public const string CloudWhyAllLeftOut = "every ticked range is a large range that was left out";
+    public const string CloudWhyAllExcepted = "exceptions cover every ticked range";
+    public const string CloudWhyAllLeftOutOrExcepted = "every ticked range was left out as a large range or removed by exceptions";
+    public const string CloudWhyAllWhole = "every ticked range covers every address, which no feed takes";
+    public const string CloudWhyAllLeftOutOrWhole = "every ticked range was left out as a large range or for covering every address";
+    public const string CloudWhyAllWholeOrExcepted = "every ticked range covers every address or was removed by exceptions";
+    public const string CloudWhyAllLeftOutWholeOrExcepted = "every ticked range was left out as a large range or for covering every address, or removed by exceptions";
+    private const string NothingWrittenLead = "Nothing was written" + Dash;
+    public const string CloudNothingTicked = NothingWrittenLead + CloudWhyNothingTicked;
+    public const string CloudAllLeftOut = NothingWrittenLead + CloudWhyAllLeftOut;
+    public const string CloudAllExcepted = NothingWrittenLead + CloudWhyAllExcepted;
+    public const string CloudAllLeftOutOrExcepted = NothingWrittenLead + CloudWhyAllLeftOutOrExcepted;
+    public const string CloudAllWhole = NothingWrittenLead + CloudWhyAllWhole;
+    public const string CloudAllLeftOutOrWhole = NothingWrittenLead + CloudWhyAllLeftOutOrWhole;
+    public const string CloudAllWholeOrExcepted = NothingWrittenLead + CloudWhyAllWholeOrExcepted;
+    public const string CloudAllLeftOutWholeOrExcepted = NothingWrittenLead + CloudWhyAllLeftOutWholeOrExcepted;
 
     // Menus
     public const string MenuSettings = "Settings" + Ellipsis;
@@ -568,6 +621,24 @@ public static partial class AppText
     // The same as a sentence, on a failure line after the files done before the failure
     private const string UnsavedSettingsSentence = " Unsaved changes on the Settings page weren't used.";
 
+    /// <summary>Leads a feed's success line, which can trim: the saved feed or the history that failed.</summary>
+    public static string FeedRecordLead(FeedRecordResult? record) => (SaveFailed(record), HistoryFailed(record)) switch
+    {
+        (true, true) => "The saved feed couldn't be updated and this change wasn't recorded in the history. ",
+        (true, false) => "The saved feed couldn't be updated. ",
+        (false, true) => "This change wasn't recorded in the history. ",
+        _ => "",
+    };
+
+    private static string FeedRecordSentence(FeedRecordResult? record) =>
+        (SaveFailed(record) ? " The saved feed couldn't be updated." : "")
+        + (HistoryFailed(record) ? " This change wasn't recorded in the history." : "");
+
+    private static bool SaveFailed(FeedRecordResult? record) =>
+        record?.Save is FeedSaveOutcome.TooMany or FeedSaveOutcome.Unavailable or FeedSaveOutcome.StorageError;
+
+    private static bool HistoryFailed(FeedRecordResult? record) => record?.History == HistoryOutcome.Failed;
+
     /// <summary>What exceptions did to a feed, after a dash: the ranges they cut smaller and the ranges they removed.</summary>
     public static string ExceptionsApplied(int cut, int removed, string singular, string plural)
     {
@@ -578,13 +649,13 @@ public static partial class AppText
         return removed > 0 ? Dash + Count(removed, singular, plural) + " removed by exceptions" : "";
     }
 
-    /// <summary>The feed files from an earlier write that were left in place, by file name, after a dash.</summary>
-    public static string OldFeedFilesLeft(IReadOnlyList<string>? paths)
+    /// <summary>Feed files rewritten header-only as nothing was left to write, by file name, after a dash.</summary>
+    public static string FilesEmptied(IReadOnlyList<string>? paths)
     {
         if (paths is not { Count: > 0 })
             return "";
 
-        return Dash + "the old " + FileNames(paths) + (paths.Count == 1 ? " was left as it was" : " were left as they were");
+        return Dash + FileNames(paths) + (paths.Count == 1 ? " was emptied" : " were emptied");
     }
 
     // The same as a sentence, on a failure line
@@ -701,8 +772,26 @@ public static partial class AppText
         + Number(mixed) + " mixed, "
         + Number(notInDatabase) + " not in IPinfo";
 
+    /// <summary>The ranges whose tick a saved feed changed from the default after a check.</summary>
+    public static string CloudSavedTicksApplied(int ticked, int unticked) =>
+        "The saved feed's ticks were applied" + Dash + (ticked > 0, unticked > 0) switch
+        {
+            (true, true) => Count(ticked, "range", "ranges") + " ticked and " + Number(unticked) + " unticked by hand",
+            (true, false) => Count(ticked, "range", "ranges") + " ticked by hand",
+            _ => Count(unticked, "range", "ranges") + " unticked by hand",
+        };
+
+    /// <summary>The rows whose tick a check after Refresh all put back as the user had left it.</summary>
+    public static string CloudSourceTicksKept(int count) =>
+        count == 1 ? "Your change to 1 range was kept." : "Your changes to " + Count(count, "range", "ranges") + " were kept.";
+
     public static string CloudFeedWritten(int ranges, int files) =>
         "Wrote " + Count(ranges, "range", "ranges") + " to " + Count(files, "file", "files");
+
+    /// <summary>A write that only rewrote old files header-only, then why nothing was left.</summary>
+    public static string Emptied(int files, string reason) => "Emptied " + Count(files, "file", "files") + Dash + reason;
+
+    public static string CloudNothingWritten(string reason) => NothingWrittenLead + reason;
 
     public static string CloudUnconfirmed(int count) =>
         Dash + Count(count, "range", "ranges") + " added without confirmation";
@@ -734,7 +823,12 @@ public static partial class AppText
         count.IsOne ? "1 /64 subnet" : count.ToString("N0", CultureInfo.InvariantCulture) + " /64 subnets";
 
     public static string HelpDatasetText() =>
-        $"{AppInfo.Name} checks for a newer dataset each time it opens. Choose Update dataset to download it. IPinfo allows {IpInfoLimits.DownloadsPerDay} downloads a day.";
+        $"{AppInfo.Name} checks for a newer dataset each time it opens. The dataset status at the top of the window shows the answer; choose it to check again or to download the dataset. Closing the update window keeps the download running. IPinfo allows {IpInfoLimits.DownloadsPerDay} downloads a day.";
+
+    /// <summary>The pill while an update reads or imports, as "Updating 42%".</summary>
+    public static string UpdatingPercent(int percent) => UpdatingWord + UpdatingPercentSuffix(percent);
+
+    public static string UpdatingPercentSuffix(int percent) => " " + percent.ToString(CultureInfo.InvariantCulture) + "%";
 
     public static string HelpSearchText() =>
         $"Enter an ASN such as AS15169 or an IP address, then choose Search. The list shows up to {MainViewModel.ResultLimit} networks. "
@@ -749,7 +843,7 @@ public static partial class AppText
         + "on ipinfo.io, or a new address to open it on ipinfo.io or AbuseIPDB's website. Write feed writes a threat feed of the "
         + "addresses listed in the days before the last download, as many days as Settings sets, leaving out the networks "
         + "under Exceptions. "
-        + "With IPv6 off, the download asks for IPv4 addresses only, and an existing IPv6 feed file is emptied. Empty feed rewrites the feed files with no addresses, so a "
+        + "With IPv6 off, the download asks for IPv4 addresses only, and an existing IPv6 feed file is emptied. Retire feed rewrites the feed files with no addresses until the next Write feed, so a "
         + "FortiGate or ModSecurity server that reads them blocks none. " + FortiOsPool;
 
     // From FortiOS 7.4.4 the threat feed entries are counted per device, across every IP address feed
@@ -951,9 +1045,7 @@ public static partial class AppText
                 + Number(AbuseIpDbLimits.MaxFeedEntries) + " a file";
         }
 
-        if (result.EmptiedFiles is { Count: > 0 } emptied)
-            line += Dash + FileNames(emptied) + (emptied.Count == 1 ? " was emptied" : " were emptied");
-        return line;
+        return line + FilesEmptied(result.EmptiedFiles);
     }
 
     /// <summary>
@@ -984,7 +1076,7 @@ public static partial class AppText
                 (result.FailedFile is { } failed ? FailedFileLead(failed, "written") : "The feed couldn't be written.")
                 + DoneBeforeFailure(result.Files.Where(f => !IsEmptied(f)).ToList(), "written")
                 + DoneBeforeFailure(result.Files.Where(IsEmptied).ToList(), "emptied")
-                + OldFilesLeftSentence(result.OldFilesLeft)
+                + OldFilesLeftSentence(result.OldFilesLeft) + FeedRecordSentence(result.Record)
                 + (unsaved && result.Files.Count > 0 ? UnsavedSettingsSentence : "") + TryAgain,
             _ => Generic,
         };
@@ -993,26 +1085,27 @@ public static partial class AppText
         bool IsEmptied(string file) => result.EmptiedFiles.Contains(file, StringComparer.Ordinal);
     }
 
-    public static string AbuseFeedEmptied(AbuseFeedWriteResult result, string exportFolder)
+    public static string AbuseFeedRetired(AbuseFeedWriteResult result, string exportFolder)
     {
         ArgumentNullException.ThrowIfNull(result);
-        return "Feed emptied: " + FileNames(result.Files) + " in " + exportFolder;
+        return FeedRecordLead(result.Record) + "Feed retired: " + FileNames(result.Files) + " in " + exportFolder;
     }
 
     /// <summary>
-    /// An Empty feed that failed; a failed write names the failed file first, when it is known, then the files emptied
-    /// before it and the old files it left. Like the Empty feed line it has no unsaved note: Empty feed writes no address.
+    /// A Retire feed that failed; a failed write names the failed file first, when it is known, then the files emptied
+    /// before it and the old files it left. It has no unsaved note: Retire feed writes no address.
     /// </summary>
-    public static string AbuseFeedEmptyFailureLine(AbuseFeedWriteResult result, string exportFolder)
+    public static string AbuseFeedRetireFailureLine(AbuseFeedWriteResult result, string exportFolder)
     {
         ArgumentNullException.ThrowIfNull(result);
         return result.Failure switch
         {
-            AbuseFeedWriteFailure.NothingToWrite => "Nothing was emptied" + Dash
+            AbuseFeedWriteFailure.NothingToWrite => "Nothing was retired" + Dash
                 + "there's no AbuseIPDB feed file in the fortigate or modsecurity folder of " + exportFolder,
             AbuseFeedWriteFailure.WriteFailed =>
-                (result.FailedFile is { } failed ? FailedFileLead(failed, "emptied") : "The feed couldn't be emptied.")
-                + DoneBeforeFailure(result.Files, "emptied") + OldFilesLeftSentence(result.OldFilesLeft) + TryAgain,
+                (result.FailedFile is { } failed ? FailedFileLead(failed, "emptied") : "The feed couldn't be retired.")
+                + DoneBeforeFailure(result.Files, "emptied") + OldFilesLeftSentence(result.OldFilesLeft)
+                + FeedRecordSentence(result.Record) + TryAgain,
             _ => Generic,
         };
     }
@@ -1118,7 +1211,8 @@ public static partial class AppText
     private static string UtcMinute(DateTimeOffset at) =>
         UpToMinute(at.UtcDateTime).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
 
-    // A past UTC time on the AbuseIPDB page (the last download), cut to its whole minute so the time named is never after it
+    // A past UTC time (the last AbuseIPDB download, a cloud file's save), cut to its whole minute so the time named
+    // is never after it
     private static string UtcMinuteDown(DateTimeOffset at)
     {
         DateTime utc = at.UtcDateTime;

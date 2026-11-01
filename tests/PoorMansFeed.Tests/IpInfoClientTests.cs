@@ -19,6 +19,8 @@ public class IpInfoClientTests
         return (client, handler);
     }
 
+    private static UpdateFailure Send() => UpdateFailure.None;
+
     private static HttpResponseMessage Json(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
@@ -176,7 +178,7 @@ public class IpInfoClientTests
             var (client, _) = Create((_, _) => Bytes(body));
             var progress = new RecordingProgress();
 
-            DownloadOutcome result = await client.DownloadAsync("token", path, progress, CancellationToken.None);
+            DownloadOutcome result = await client.DownloadAsync("token", path, progress, Send, CancellationToken.None);
 
             Assert.Equal(UpdateFailure.None, result.Failure);
             Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(body)), result.Sha256);
@@ -208,7 +210,7 @@ public class IpInfoClientTests
             var (client, handler) = Create((_, call) =>
                 call == 1 ? throw new HttpRequestException("transient") : Bytes(body));
 
-            DownloadOutcome result = await client.DownloadAsync("token", path, null, CancellationToken.None);
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, Send, CancellationToken.None);
 
             Assert.Equal(UpdateFailure.None, result.Failure);
             Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(body)), result.Sha256);
@@ -229,7 +231,7 @@ public class IpInfoClientTests
         {
             var (client, handler) = Create((_, _) => throw new HttpRequestException("down"), options);
 
-            DownloadOutcome result = await client.DownloadAsync("token", path, null, CancellationToken.None);
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, Send, CancellationToken.None);
 
             Assert.Equal(UpdateFailure.Offline, result.Failure);
             Assert.Null(result.Sha256);
@@ -250,7 +252,7 @@ public class IpInfoClientTests
         {
             var (client, handler) = Create((_, _) => new HttpResponseMessage(HttpStatusCode.Unauthorized));
 
-            DownloadOutcome result = await client.DownloadAsync("token", path, null, CancellationToken.None);
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, Send, CancellationToken.None);
 
             Assert.Equal(UpdateFailure.TokenRejected, result.Failure);
             Assert.Equal(1, handler.Calls);
@@ -269,7 +271,7 @@ public class IpInfoClientTests
         {
             var (client, handler) = Create((_, _) => new HttpResponseMessage((HttpStatusCode)429));
 
-            DownloadOutcome result = await client.DownloadAsync("token", path, null, CancellationToken.None);
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, Send, CancellationToken.None);
 
             Assert.Equal(UpdateFailure.RateLimited, result.Failure);
             Assert.Equal(1, handler.Calls);
@@ -293,11 +295,135 @@ public class IpInfoClientTests
                 return response;
             });
 
-            DownloadOutcome result = await client.DownloadAsync("token", path, null, CancellationToken.None);
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, Send, CancellationToken.None);
 
             Assert.Equal(UpdateFailure.NotEnoughDiskSpace, result.Failure);
             Assert.Null(result.Sha256);
             Assert.Equal(1, handler.Calls);
+        }
+        finally
+        {
+            DeleteIfExists(path);
+        }
+    }
+
+    // ---- The hook before each download request ----
+
+    [Fact]
+    public async Task Download_AsksTheHookBeforeEveryRequest_RetriesIncluded()
+    {
+        byte[] body = new byte[1024];
+        string path = TempPath();
+        try
+        {
+            int asked = 0;
+            var askedAtRequest = new List<int>();
+            var (client, handler) = Create((_, call) =>
+            {
+                askedAtRequest.Add(asked);
+                return call < 3 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) : Bytes(body);
+            });
+
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, () =>
+            {
+                asked++;
+                return UpdateFailure.None;
+            }, CancellationToken.None);
+
+            Assert.Equal(UpdateFailure.None, result.Failure);
+            Assert.Equal(3, handler.Calls);
+            Assert.Equal([1, 2, 3], askedAtRequest);
+        }
+        finally
+        {
+            DeleteIfExists(path);
+        }
+    }
+
+    [Fact]
+    public async Task Checksum_NeverAsksTheDownloadHook()
+    {
+        int asked = 0;
+        var (client, handler) = Create((_, _) => Json(ChecksumJson));
+
+        await client.FetchChecksumAsync("token", CancellationToken.None);
+        await client.DownloadAsync("token", TempPath(), null, () =>
+        {
+            asked++;
+            return UpdateFailure.KeptForUser;
+        }, CancellationToken.None);
+
+        Assert.Equal(1, asked);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Theory]
+    [InlineData(UpdateFailure.KeptForUser)]
+    [InlineData(UpdateFailure.RateLimited)]
+    [InlineData(UpdateFailure.StorageError)]
+    public async Task Download_HookRefusingTheFirstRequest_SendsNothing_AndLeavesNoFile(UpdateFailure refusal)
+    {
+        string path = TempPath();
+        try
+        {
+            File.WriteAllText(path, "an earlier partial download");
+            var (client, handler) = Create((_, _) => Bytes(new byte[16]));
+
+            DownloadOutcome result = await client.DownloadAsync("token", path, null, () => refusal, CancellationToken.None);
+
+            Assert.Equal(refusal, result.Failure);
+            Assert.Null(result.Sha256);
+            Assert.Equal(0, handler.Calls);
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            DeleteIfExists(path);
+        }
+    }
+
+    [Fact]
+    public async Task Download_HookRefusingARetry_EndsOnTheAttemptsFailure_AndLeavesNoFile()
+    {
+        string path = TempPath();
+        try
+        {
+            int asked = 0;
+            var (client, handler) = Create((_, _) =>
+            {
+                File.WriteAllText(path, "partial");
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            });
+
+            DownloadOutcome result = await client.DownloadAsync("token", path, null,
+                () => ++asked == 1 ? UpdateFailure.None : UpdateFailure.KeptForUser, CancellationToken.None);
+
+            Assert.Equal(UpdateFailure.ServiceError, result.Failure);
+            Assert.Equal(1, handler.Calls);
+            Assert.Equal(2, asked);
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            DeleteIfExists(path);
+        }
+    }
+
+    [Fact]
+    public async Task Download_OfflineThenARetryRefused_IsOffline()
+    {
+        string path = TempPath();
+        try
+        {
+            int asked = 0;
+            var (client, handler) = Create((_, _) => throw new HttpRequestException("down"));
+
+            DownloadOutcome result = await client.DownloadAsync("token", path, null,
+                () => ++asked == 1 ? UpdateFailure.None : UpdateFailure.KeptForUser, CancellationToken.None);
+
+            Assert.Equal(UpdateFailure.Offline, result.Failure);
+            Assert.Equal(1, handler.Calls);
+            Assert.False(File.Exists(path));
         }
         finally
         {

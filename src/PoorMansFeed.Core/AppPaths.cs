@@ -44,6 +44,9 @@ public sealed record AppPaths(string DataFolder, string DefaultExportFolder)
     /// <summary>The AbuseIPDB rolling list: the addresses recent blacklist downloads listed. Kept until the list is cleared.</summary>
     public string AbuseIpDbDatabasePath => Path.Combine(DataFolder, "abuseipdb.db");
 
+    /// <summary>The change history of feed writes: the user's data, removed only by Clear history.</summary>
+    public string HistoryDatabasePath => Path.Combine(DataFolder, "history.db");
+
     /// <summary>The token file of earlier builds, encrypted under a passphrase in the source. Deleted at start-up.</summary>
     public string LegacyTokenPath => Path.Combine(DataFolder, ".ipinfo_token");
 
@@ -54,6 +57,10 @@ public sealed record AppPaths(string DataFolder, string DefaultExportFolder)
     /// <summary>The cached AWS ip-ranges.json, exactly as downloaded, and the record that says where it came from.</summary>
     public string AwsIpRangesPath       => Path.Combine(DataFolder, "aws_ip_ranges.json");
     public string AwsIpRangesSourcePath => Path.Combine(DataFolder, "aws_ip_ranges.source.json");
+
+    /// <summary>Google Cloud's cloud.json, exactly as downloaded, and the record of where it came from.</summary>
+    public string GoogleCloudRangesPath       => Path.Combine(DataFolder, "google_cloud_ranges.json");
+    public string GoogleCloudRangesSourcePath => Path.Combine(DataFolder, "google_cloud_ranges.source.json");
 
     /// <summary>
     /// Resolves the per-user data folder (LocalApplicationData) and default export folder (MyDocuments).

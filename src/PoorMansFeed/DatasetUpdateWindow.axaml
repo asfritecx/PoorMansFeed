@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:PoorMansFeed"
+        x:Class="PoorMansFeed.DatasetUpdateWindow"
+        x:DataType="vm:MainViewModel"
+        Title="{x:Static vm:AppText.DatasetUpdateTitle}"
+        Width="480"
+        SizeToContent="Height"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <!-- Not modal: the pages stay usable while the update runs, and closing only hides the window -->
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto" Margin="24" RowSpacing="16">
+    <StackPanel Spacing="2">
+      <TextBlock x:Name="TitleText" Text="{x:Static vm:AppText.DatasetUpdateTitle}" Classes="subtitle" />
+      <TextBlock Text="{x:Static vm:AppText.DatasetUpdateCaption}" Classes="caption" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <!-- Fixed heights, so the window keeps its size while the update moves through its phases -->
+    <StackPanel Grid.Row="1" Spacing="4">
+      <TextBlock x:Name="UpdateStatus" Text="{Binding DatasetStatusText}" Classes="card-title"
+                 TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+      <TextBlock x:Name="UpdateDetail" Text="{Binding DatasetDetailText}" Classes="secondary" Height="66" LineHeight="22"
+                 TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding DatasetDetailText}" />
+      <TextBlock x:Name="UpdateFacts" Text="{Binding DatasetFactsText}" Classes="caption" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+
+    <!-- Two bars of the same size: one determinate, one indeterminate. Only one is visible, so the determinate bar
+         never has to leave indeterminate mode. -->
+    <Panel Grid.Row="2">
+      <ProgressBar x:Name="UpdateProgress" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
+                   IsVisible="{Binding !IsProgressIndeterminate}"
+                   AutomationProperties.Name="{x:Static vm:AppText.ProgressName}" />
+      <ProgressBar x:Name="UpdateProgressWaiting" IsIndeterminate="True" IsVisible="{Binding IsProgressIndeterminate}"
+                   AutomationProperties.Name="{x:Static vm:AppText.ProgressName}" />
+    </Panel>
+
+    <!-- Esc and Close hide the window; the update goes on. No button is the default, so Enter alone starts nothing. -->
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+      <Button x:Name="CancelUpdateButton" Content="{x:Static vm:AppText.CancelUpdate}" MinWidth="88"
+              Command="{Binding CancelUpdateCommand}" />
+      <Button x:Name="RetryUpdateButton" Classes="accent" Content="{x:Static vm:AppText.UpdateButton}" MinWidth="88"
+              Command="{Binding UpdateDatasetInWindowCommand}" ToolTip.Tip="{x:Static vm:AppText.UpdateTooltip}" />
+      <Button x:Name="CloseButton" Content="{x:Static vm:AppText.Close}" MinWidth="88" IsCancel="True" Click="CloseClicked" />
+    </StackPanel>
+  </Grid>
+</Window>

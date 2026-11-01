@@ -58,3 +58,22 @@ public sealed record AbuseNewAddress(PublicAddress Address, int Score, DateTimeO
 public sealed record AbuseDownloadResult(AbuseIpDbFailure Failure, bool NewGeneration, int Listed, int Skipped,
                                          int Added, int Lapsed, int Expired, DateTimeOffset? GeneratedAt,
                                          DateTimeOffset? RetryAt, bool Counted = false);
+
+/// <summary>
+/// A download kept back for the user: sent only when at least <see cref="LeftForUser"/> downloads remain after it and
+/// the list's last download or send is at least <see cref="MinAge"/> old.
+/// </summary>
+public sealed record AbuseDownloadPolicy(int LeftForUser, TimeSpan MinAge)
+{
+    public static AbuseDownloadPolicy RefreshAll { get; } = new(1, TimeSpan.FromHours(6));
+}
+
+/// <summary>A change to the rolling list: a download merged into it, or Clear list removed it.</summary>
+public sealed record AbuseListChange(long Version, AbuseListChangeKind Kind);
+
+public enum AbuseListChangeKind { Merged, Cleared }
+
+/// <summary>The call holding the download gate.</summary>
+public sealed record AbuseWork(AbuseWorkKind Kind);
+
+public enum AbuseWorkKind { Download, ClearList, WriteFeed, RetireFeed, RefreshFeed }

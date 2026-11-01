@@ -246,13 +246,15 @@ public sealed class AbuseIpDbPageTextTests
     public void EveryDownloadFailureHasItsOwnLine()
     {
         AbuseIpDbFailure[] failures = Enum.GetValues<AbuseIpDbFailure>()
-            .Where(f => f is not (AbuseIpDbFailure.None or AbuseIpDbFailure.NotPublic)).ToArray();
+            .Where(f => f is not (AbuseIpDbFailure.None or AbuseIpDbFailure.NotPublic or AbuseIpDbFailure.KeptForUser)).ToArray();
 
         var lines = failures.Select(f => AppText.AbuseDownloadFailure(f, null)).ToList();
 
         Assert.Equal(lines.Count, lines.Distinct().Count());
         Assert.DoesNotContain(AppText.Generic, lines);
         Assert.Equal(AppText.Generic, AppText.AbuseDownloadFailure(AbuseIpDbFailure.NotPublic, null));
+        // The page passes no download policy, so it never sees a download kept for the user
+        Assert.Equal(AppText.Generic, AppText.AbuseDownloadFailure(AbuseIpDbFailure.KeptForUser, null));
     }
 
     [Fact]
@@ -465,10 +467,10 @@ public sealed class AbuseIpDbPageTextTests
         AbuseFeedWriteResult failed = Failed(AbuseFeedWriteFailure.WriteFailed) with { FailedFile = ipv4 };
 
         Assert.Equal($"{V4} couldn't be emptied. Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(failed, folder));
+            AppText.AbuseFeedRetireFailureLine(failed, folder));
         Assert.Equal($"{V6} couldn't be emptied. {V4} was emptied before the "
             + "failure. Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6 }, folder));
+            AppText.AbuseFeedRetireFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6 }, folder));
     }
 
     [Fact]
@@ -490,25 +492,25 @@ public sealed class AbuseIpDbPageTextTests
                 ipv6Enabled: true, unsaved: true));
         Assert.Equal($"{V4} couldn't be emptied. The old {V6} was left as it "
             + "was. Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed) with { FailedFile = ipv4, OldFilesLeft = [ipv6] },
+            AppText.AbuseFeedRetireFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed) with { FailedFile = ipv4, OldFilesLeft = [ipv6] },
                 folder));
         Assert.Equal($"{V6} couldn't be emptied. {V4} was emptied before the "
             + $"failure. The old {V6} was left as it was. Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6, OldFilesLeft = [ipv6] }, folder));
+            AppText.AbuseFeedRetireFailureLine(FailedWrite([ipv4], [ipv4]) with { FailedFile = ipv6, OldFilesLeft = [ipv6] }, folder));
     }
 
     [Fact]
     public void AFailedEmptyNamesTheFilesEmptiedBeforeIt()
     {
-        Assert.Equal("The feed couldn't be emptied. Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed), "/e"));
-        Assert.Equal($"The feed couldn't be emptied. {V4} was emptied before the failure. "
+        Assert.Equal("The feed couldn't be retired. Please try again or contact the Infra Team.",
+            AppText.AbuseFeedRetireFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed), "/e"));
+        Assert.Equal($"The feed couldn't be retired. {V4} was emptied before the failure. "
             + "Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
+            AppText.AbuseFeedRetireFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
                 "/e/fortigate/AbuseIPDB_rolling_ipv4.txt"), "/e"));
-        Assert.Equal($"The feed couldn't be emptied. {V4} and {V6} were emptied "
+        Assert.Equal($"The feed couldn't be retired. {V4} and {V6} were emptied "
             + "before the failure. Please try again or contact the Infra Team.",
-            AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
+            AppText.AbuseFeedRetireFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed, 0,
                 "/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"), "/e"));
     }
 
@@ -519,11 +521,74 @@ public sealed class AbuseIpDbPageTextTests
             ["/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"], 0, 0, 0, 0,
             ["/e/fortigate/AbuseIPDB_rolling_ipv4.txt", "/e/fortigate/AbuseIPDB_rolling_ipv6.txt"]);
 
-        Assert.Equal($"Feed emptied: {V4} and {V6} in /e",
-            AppText.AbuseFeedEmptied(emptied, "/e"));
-        Assert.Equal("Nothing was emptied" + AppText.Dash
+        Assert.Equal($"Feed retired: {V4} and {V6} in /e",
+            AppText.AbuseFeedRetired(emptied, "/e"));
+        Assert.Equal("Nothing was retired" + AppText.Dash
             + "there's no AbuseIPDB feed file in the fortigate or modsecurity folder of /e",
-            AppText.AbuseFeedEmptyFailureLine(Failed(AbuseFeedWriteFailure.NothingToWrite), "/e"));
+            AppText.AbuseFeedRetireFailureLine(Failed(AbuseFeedWriteFailure.NothingToWrite), "/e"));
+    }
+
+    [Fact]
+    public void RetireFeedHasItsLabelTooltipAndProgressLine()
+    {
+        Assert.Equal("Retire feed", AppText.RetireFeed);
+        Assert.Equal("Rewrite the rolling feed files with no addresses until the next Write feed. The AbuseIPDB list is "
+            + "kept.", AppText.RetireFeedTooltip);
+        Assert.Equal("Retiring the feed\u2026", AppText.RetiringAbuseFeed);
+    }
+
+    [Fact]
+    public void ARetiredFeedLeadsWithTheSaveOrHistoryThatFailed()
+    {
+        AbuseFeedWriteResult retired = new(AbuseFeedWriteFailure.None,
+            ["/e/fortigate/AbuseIPDB_rolling_ipv4.txt"], 0, 0, 0, 0, ["/e/fortigate/AbuseIPDB_rolling_ipv4.txt"]);
+        string line = $"Feed retired: {V4} in /e";
+
+        Assert.Equal(line, AppText.AbuseFeedRetired(retired, "/e"));
+        Assert.Equal(line, AppText.AbuseFeedRetired(retired with
+        {
+            Record = new FeedRecordResult(FeedSaveOutcome.Saved, HistoryOutcome.Recorded),
+        }, "/e"));
+        Assert.Equal(line, AppText.AbuseFeedRetired(retired with
+        {
+            Record = new FeedRecordResult(FeedSaveOutcome.NotAsked, HistoryOutcome.NothingToRecord),
+        }, "/e"));
+        Assert.Equal("The saved feed couldn't be updated. " + line, AppText.AbuseFeedRetired(retired with
+        {
+            Record = new FeedRecordResult(FeedSaveOutcome.StorageError, HistoryOutcome.Recorded),
+        }, "/e"));
+        Assert.Equal("This change wasn't recorded in the history. " + line, AppText.AbuseFeedRetired(retired with
+        {
+            Record = new FeedRecordResult(FeedSaveOutcome.Saved, HistoryOutcome.Failed),
+        }, "/e"));
+        Assert.Equal("The saved feed couldn't be updated and this change wasn't recorded in the history. " + line,
+            AppText.AbuseFeedRetired(retired with
+            {
+                Record = new FeedRecordResult(FeedSaveOutcome.Unavailable, HistoryOutcome.Failed),
+            }, "/e"));
+    }
+
+    [Fact]
+    public void AFailedRetirePutsTheRecordSentenceBeforeTryAgain()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "e", "fortigate");
+        string ipv4 = Path.Combine(folder, "AbuseIPDB_rolling_ipv4.txt");
+        string ipv6 = Path.Combine(folder, "AbuseIPDB_rolling_ipv6.txt");
+        AbuseFeedWriteResult failed = FailedWrite([ipv4], [ipv4]) with
+        {
+            FailedFile = ipv6,
+            OldFilesLeft = [ipv6],
+            Record = new FeedRecordResult(FeedSaveOutcome.StorageError, HistoryOutcome.Failed),
+        };
+
+        Assert.Equal($"{V6} couldn't be emptied. {V4} was emptied before the failure. The old {V6} was left as it was. "
+            + "The saved feed couldn't be updated. This change wasn't recorded in the history. Please try again or "
+            + "contact the Infra Team.", AppText.AbuseFeedRetireFailureLine(failed, folder));
+        Assert.Equal("The feed couldn't be retired. This change wasn't recorded in the history. Please try again or "
+            + "contact the Infra Team.", AppText.AbuseFeedRetireFailureLine(Failed(AbuseFeedWriteFailure.WriteFailed) with
+            {
+                Record = new FeedRecordResult(FeedSaveOutcome.Saved, HistoryOutcome.Failed),
+            }, "/e"));
     }
 
     [Fact]
@@ -644,13 +709,13 @@ public sealed class AbuseIpDbPageTextTests
         Assert.Equal("Clear the AbuseIPDB list?", AppText.ClearAbuseListTitle);
         Assert.Equal("Clear list", AppText.ClearAbuseListButton);
         Assert.Equal("Every downloaded address is removed from this computer. The download count, the AbuseIPDB key and the "
-            + "feed files are kept; choose Empty feed to empty the files. This cannot be undone.", AppText.ClearAbuseListBody);
-        Assert.Equal("Empty the AbuseIPDB feed?", AppText.EmptyAbuseFeedTitle);
-        Assert.Equal("Empty feed", AppText.EmptyAbuseFeedButton);
+            + "feed files are kept; choose Retire feed to empty the files. This cannot be undone.", AppText.ClearAbuseListBody);
+        Assert.Equal("Retire the AbuseIPDB feed?", AppText.RetireAbuseFeedTitle);
+        Assert.Equal("Retire feed", AppText.RetireAbuseFeedButton);
         Assert.Equal("Each AbuseIPDB feed file in the export folder's fortigate and modsecurity folders, whatever is ticked, "
             + "is rewritten with no addresses, so a FortiGate or ModSecurity server matches none of them once it reads the "
-            + "file again. The AbuseIPDB list is kept, and the next Write feed fills the files again.",
-            AppText.EmptyAbuseFeedBody);
+            + "file again. The files stay so until Write feed fills them again. The AbuseIPDB list and the change history are "
+            + "kept.", AppText.RetireAbuseFeedBody);
     }
 
     [Fact]
@@ -668,7 +733,8 @@ public sealed class AbuseIpDbPageTextTests
         Assert.Equal("5. AbuseIPDB", AppText.HelpAbuseHeading);
         string help = AppText.HelpAbuseText();
         Assert.Contains("FortiOS 7.4.4", help);
-        Assert.Contains("Empty feed", help);
+        Assert.Contains("Retire feed", help);
+        Assert.DoesNotContain("Empty feed", help);
         Assert.Contains(AbuseIpDbLimits.FreeBlacklistDownloadsPerDay + " downloads a day", help);
         Assert.Contains(" downloads a day. New addresses lists the addresses the last download added. "
             + "Right-click an offending network to open its ASN on ipinfo.io, or a new address to open it on ipinfo.io "
@@ -676,7 +742,8 @@ public sealed class AbuseIpDbPageTextTests
             + "Write feed writes a threat feed of the addresses listed in the days "
             + "before the last download, as many days as Settings sets, leaving out the networks under Exceptions. "
             + "With IPv6 off, the download asks for IPv4 addresses only, and an existing IPv6 feed file is emptied.", help);
-        Assert.Contains("Empty feed rewrites the feed files with no addresses, so a FortiGate or ModSecurity server that "
+        Assert.Contains("Retire feed rewrites the feed files with no addresses until the next Write feed, so a FortiGate or "
+            + "ModSecurity server that "
             + "reads them blocks none.", help);
         Assert.Contains("of the last download", AppText.AbuseIpDbKeepDaysCaption);
     }
@@ -727,17 +794,66 @@ public sealed class AbuseIpDbPageTextTests
             AppText.AbuseNewAddressesBusy);
         Assert.Equal("The list wasn't cleared \u2014 press Clear list again when the current task ends",
             AppText.AbuseClearListBusy);
-        Assert.Equal("The feed wasn't emptied \u2014 press Empty feed again when the current task ends",
-            AppText.AbuseEmptyFeedBusy);
+        Assert.Equal("The feed wasn't retired \u2014 press Retire feed again when the current task ends",
+            AppText.AbuseRetireFeedBusy);
     }
 
     [Fact]
     public void TheInProgressLinesEndInAnEllipsis()
     {
         foreach (string line in new[] { AppText.ReadingAbuseList, AppText.DownloadingBlacklist, AppText.ClearingAbuseList,
-                     AppText.WritingAbuseFeed, AppText.EmptyingAbuseFeed })
+                     AppText.WritingAbuseFeed, AppText.RetiringAbuseFeed })
         {
             Assert.EndsWith("\u2026", line);
+        }
+    }
+
+    public static TheoryData<FeedSaveOutcome, HistoryOutcome, string, bool> FailedRecords => new()
+    {
+        { FeedSaveOutcome.StorageError, HistoryOutcome.Recorded, " The saved feed couldn't be updated.", false },
+        { FeedSaveOutcome.TooMany, HistoryOutcome.Recorded, " The saved feed couldn't be updated.", true },
+        { FeedSaveOutcome.Unavailable, HistoryOutcome.Recorded, " The saved feed couldn't be updated.", false },
+        { FeedSaveOutcome.Saved, HistoryOutcome.Failed, " This change wasn't recorded in the history.", true },
+        { FeedSaveOutcome.StorageError, HistoryOutcome.Failed,
+          " The saved feed couldn't be updated. This change wasn't recorded in the history.", false },
+        { FeedSaveOutcome.TooMany, HistoryOutcome.Failed,
+          " The saved feed couldn't be updated. This change wasn't recorded in the history.", true },
+    };
+
+    // The record's sentences go after the files and before the unsaved sentence, as on the ASN export's line
+    [Theory]
+    [MemberData(nameof(FailedRecords))]
+    public void AFailedWriteSaysWhenTheSaveOrTheHistoryFailed(FeedSaveOutcome save, HistoryOutcome history, string sentence,
+                                                               bool unsaved)
+    {
+        AbuseFeedWriteResult failed = Failed(AbuseFeedWriteFailure.WriteFailed, 0, "/e/fortigate/AbuseIPDB_rolling_ipv4.txt")
+            with { Record = new FeedRecordResult(save, history) };
+
+        Assert.Equal($"The feed couldn't be written. {V4} was written before the failure." + sentence
+            + (unsaved ? " Unsaved changes on the Settings page weren't used." : "")
+            + " Please try again or contact the Infra Team.",
+            AppText.AbuseFeedWriteFailureLine(failed, 30, ipv6Enabled: true, unsaved));
+    }
+
+    public static TheoryData<FeedSaveOutcome, HistoryOutcome> QuietRecords => new()
+    {
+        { FeedSaveOutcome.Saved, HistoryOutcome.Recorded },
+        { FeedSaveOutcome.Saved, HistoryOutcome.NothingToRecord },
+        { FeedSaveOutcome.NotAsked, HistoryOutcome.Recorded },
+        { FeedSaveOutcome.NotAsked, HistoryOutcome.NothingToRecord },
+    };
+
+    [Theory]
+    [MemberData(nameof(QuietRecords))]
+    public void AFailedWriteWhoseRecordWentWellReadsAsBefore(FeedSaveOutcome save, HistoryOutcome history)
+    {
+        foreach (bool unsaved in new[] { false, true })
+        {
+            AbuseFeedWriteResult failed = Failed(AbuseFeedWriteFailure.WriteFailed, 0, "/e/fortigate/AbuseIPDB_rolling_ipv4.txt");
+
+            Assert.Equal(AppText.AbuseFeedWriteFailureLine(failed, 30, ipv6Enabled: true, unsaved),
+                AppText.AbuseFeedWriteFailureLine(failed with { Record = new FeedRecordResult(save, history) }, 30,
+                                                  ipv6Enabled: true, unsaved));
         }
     }
 }

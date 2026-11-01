@@ -439,6 +439,39 @@
   <Style Selector="Border.pill.warning Ellipse.dot">
     <Setter Property="Fill" Value="{DynamicResource GraphiteCautionBrush}" />
   </Style>
+  <!-- Success lights only the dot, like an LED: a green tint behind every healthy state would be loud -->
+  <Style Selector="Border.pill.success Ellipse.dot">
+    <Setter Property="Fill" Value="{DynamicResource GraphiteSuccessBrush}" />
+  </Style>
+
+  <!-- A pill that opens something: the button is a 2px halo around the pill, filled on hover and press as subtle is -->
+  <Style Selector="Button.chip">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="Padding" Value="2" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="CornerRadius" Value="14" />
+  </Style>
+  <Style Selector="Button.chip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource GraphiteControlFillHoverBrush}" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.chip:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource GraphiteControlFillPressedBrush}" />
+  </Style>
+  <Style Selector="Button.chip:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+
+  <!-- A drop-down panel under an app bar control: the dialog surface with the overlay corner -->
+  <Style Selector="FlyoutPresenter.panel">
+    <Setter Property="Background" Value="{DynamicResource GraphiteBgSolidBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GraphiteStrokeDividerBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="20,16" />
+  </Style>
 
   <!-- Matched by name, not by a class: a Border class selector cost about 470 bytes per list row in a soak test. The
        text colour and weight are inherited from the border, as in pill. -->

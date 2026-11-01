@@ -4,7 +4,7 @@ namespace PoorMansFeed;
 
 /// <summary>One line of the results list, already formatted for display.</summary>
 public sealed record ResultRow(string NetworkText, string CountryText, string AsText, string DomainText,
-                               bool IsLargeRange, string AccessibleText)
+                               bool IsLargeRange, string AccessibleText, string? AsnText)
 {
     public static ResultRow From(NetworkRecord record)
     {
@@ -25,7 +25,8 @@ public sealed record ResultRow(string NetworkText, string CountryText, string As
         string accessible = string.Join(", ", record.Network, countryText, asText, domainText)
             + (record.IsLargeRange ? AppText.LargeRangeSpoken : "");
 
-        return new ResultRow(record.Network, countryText, asText, domainText, record.IsLargeRange, accessible);
+        return new ResultRow(record.Network, countryText, asText, domainText, record.IsLargeRange, accessible,
+                             AsNumberText.TryNormalise(record.Asn));
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

@@ -18,6 +18,7 @@ public sealed class AppPathsTests
         Assert.Equal(Path.Combine(temp.Path, "abuseipdb_key"), paths.AbuseIpDbKeyPath);
         Assert.NotEqual(paths.TokenPath, paths.AbuseIpDbKeyPath);
         Assert.Equal(Path.Combine(temp.Path, "abuseipdb.db"), paths.AbuseIpDbDatabasePath);
+        Assert.Equal(Path.Combine(temp.Path, "history.db"), paths.HistoryDatabasePath);
         Assert.Equal(Path.Combine(temp.Path, ".ipinfo_token"), paths.LegacyTokenPath);
         Assert.Equal(Path.Combine(temp.Path, "settings.json"), paths.SettingsPath);
         Assert.Equal(Path.Combine(temp.Path, "exceptions.json"), paths.ExceptionsPath);
@@ -37,6 +38,8 @@ public sealed class AppPathsTests
         Assert.Equal(Path.Combine(temp.Path, "azure_service_tags.source.json"), paths.AzureServiceTagsSourcePath);
         Assert.Equal(Path.Combine(temp.Path, "aws_ip_ranges.json"), paths.AwsIpRangesPath);
         Assert.Equal(Path.Combine(temp.Path, "aws_ip_ranges.source.json"), paths.AwsIpRangesSourcePath);
+        Assert.Equal(Path.Combine(temp.Path, "google_cloud_ranges.json"), paths.GoogleCloudRangesPath);
+        Assert.Equal(Path.Combine(temp.Path, "google_cloud_ranges.source.json"), paths.GoogleCloudRangesSourcePath);
     }
 
     [Fact]

@@ -10,7 +10,7 @@ namespace PoorMansFeed;
 /// The AbuseIPDB Blacklist page. Its runs keep their own IsWorking, not the work gate, so an update never disables it;
 /// only its dialogs hold the gate. The grouping has its own IsGrouping, so it and a download never lock each other.
 /// </summary>
-public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
+public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable, ICloseParticipant
 {
     /// <summary>The most offending networks shown; the summary names the rest.</summary>
     public const int RowLimit = 300;
@@ -33,6 +33,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     private int _statusVersion;
     private bool _disposed;
     private bool _isWorking;
+    private IDisposable? _pageWork;
     private string _factsText;
     private string _factsHeadText;
     private string _factsDetailText = "";
@@ -68,6 +69,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     private int _groupingVersion;
     private CancellationTokenSource? _groupingCts;
     private GroupingInputs? _groupingInputs;
+    private long _groupedListVersion;
+    private bool _listStale;
     private AbuseNetworksFailure? _groupingOutcome;
     private bool _isGrouping;
     private double _groupingProgress;
@@ -91,19 +94,25 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         }
 
         _abuse = abuse;
+        if (abuse is not null)
+        {
+            abuse.ListChanged += AbuseListChanged;
+            abuse.WorkChanged += AbuseWorkChanged;
+        }
         _abuseKeys = abuseKeys ?? (abuse is null ? null : new AbuseKeyPrompt(ui, abuse, gate));
         _unsaved = unsaved;
         _rulesPress = new ModSecurityRulesPress(ipinfo, ui, gate);
         _rulesFiles.ShowsChanged += RulesFilesShowsChanged;
         _defaultExportFolder = defaultExportFolder ?? Path.Combine(ipinfo.DataFolder, "exports");
         _factsText = abuse is null ? AppText.AbuseKeysUnavailable : AppText.ReadingAbuseList;
-        _factsHeadText = _factsText;
+        _factsHeadText = abuse is null ? AppText.AbuseUnavailableHead : _factsText;
+        _factsDetailText = abuse is null ? AppText.AbuseUnavailableDetail : "";
         _writeFeedTooltip = AppText.WriteAbuseFeedTooltip(ReadIPv6Enabled() ?? true);
 
-        DownloadCommand = new AsyncRelayCommand(DownloadAsync, CanRun);
-        ClearListCommand = new AsyncRelayCommand(ClearListAsync, CanRun);
-        WriteFeedCommand = new AsyncRelayCommand(WriteFeedAsync, CanRun);
-        EmptyFeedCommand = new AsyncRelayCommand(EmptyFeedAsync, CanRun);
+        DownloadCommand = new AsyncRelayCommand(DownloadAsync, CanWriteNow);
+        ClearListCommand = new AsyncRelayCommand(ClearListAsync, CanWriteNow);
+        WriteFeedCommand = new AsyncRelayCommand(WriteFeedAsync, CanWriteNow);
+        EmptyFeedCommand = new AsyncRelayCommand(EmptyFeedAsync, CanWriteNow);
         OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync, () => IsAvailable && !_disposed);
         ShowNewAddressesCommand = new AsyncRelayCommand(ShowNewAddressesAsync, CanShowNewAddresses);
         ModSecurityRulesCommand = new AsyncRelayCommand(ShowModSecurityRulesAsync, () => CanRun() && ShowsModSecurityRules);
@@ -115,23 +124,41 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         OpenNetworkInIpinfoCommand = new AsyncRelayCommand<OffendingNetworkRow>(OpenNetworkInIpinfoAsync,
             row => row is not null && IsAvailable && !_disposed);
 
+        // Never on the work gate: a copy puts one row's text on the clipboard and runs nothing
+        CopyAsNumberCommand = new AsyncRelayCommand<OffendingNetworkRow>(CopyAsNumberAsync,
+            row => row is not null && IsAvailable && !_disposed);
+
         // IsStarted flips once, when start-up opens the service; until then nothing the page shows is the saved state
         _gate.Changed += GateChanged;
     }
 
     public bool IsAvailable => _abuse is not null;
 
+    /// <summary>Set by the window as it shows this page or another.</summary>
+    internal bool IsOnShow { get; set; }
+
+    /// <summary>The newest status read a list or work change started, for tests to await.</summary>
+    internal Task? PendingListenerRead { get; private set; }
+
     /// <summary>The last Write feed succeeded and wrote ModSecurity copies.</summary>
     public bool ShowsModSecurityRules => _rulesFiles.Shows;
 
-    /// <summary>A download, Clear list, Write feed or Empty feed is running, from the press to the end.</summary>
+    /// <summary>A download, Clear list, Write feed or Retire feed is running, from the press to the end.</summary>
     public bool IsWorking
     {
         get => _isWorking;
         private set
         {
-            if (SetProperty(ref _isWorking, value))
-                RefreshCommands();
+            if (value == _isWorking)
+                return;
+
+            // Marked before the change is raised, so a listener already sees the page's call in the gate
+            if (value && !_disposed)
+                _pageWork ??= _gate.EnterPageWork();
+            else if (!value)
+                ReleasePageWork();
+            SetProperty(ref _isWorking, value);
+            RefreshCommands();
         }
     }
 
@@ -180,7 +207,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _isStatusWarning, value);
     }
 
-    /// <summary>The line under the actions: Write feed, Empty feed and Open folder.</summary>
+    /// <summary>The line under the actions: Write feed, Retire feed and Open folder.</summary>
     public string ActionText
     {
         get => _actionText;
@@ -258,9 +285,14 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     /// <summary>Opens a row's AS on ipinfo.io, from the row's menu. The page is built from the grouping's ASN alone.</summary>
     public IAsyncRelayCommand<OffendingNetworkRow> OpenNetworkInIpinfoCommand { get; }
 
-    /// <summary>A download, Clear list, Write feed or Empty feed is with the service, from just before its call to
+    /// <summary>Copies a row's AS number, from the row's menu.</summary>
+    public IAsyncRelayCommand<OffendingNetworkRow> CopyAsNumberCommand { get; }
+
+    /// <summary>A download, Clear list, Write feed or Retire feed is with the service, from just before its call to
     /// its end; not while a confirmation or the key prompt is open, nor for the grouping or a status read.</summary>
     public bool AsksBeforeClose => _callOut && !_disposed;
+
+    bool ICloseParticipant.HoldsClose => AsksBeforeClose;
 
     /// <summary>Asks whether to stop the page's work and close. True at once when nothing is with the service. Asking
     /// cancels nothing; a dialog that fails to show keeps the window open (false).</summary>
@@ -356,6 +388,12 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
         _disposed = true;
         _gate.Changed -= GateChanged;
+        if (_abuse is not null)
+        {
+            _abuse.ListChanged -= AbuseListChanged;
+            _abuse.WorkChanged -= AbuseWorkChanged;
+        }
+        ReleasePageWork();
 
         // Linked to the lifetime, so it goes first. Its run can end inside Cancel while it is still the newest grouping,
         // so only the disposed check in its finally keeps it from setting anything
@@ -372,7 +410,16 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     private bool CanRun() => IsAvailable && _gate.IsStarted && !IsWorking && !_disposed && _closeHolds == 0 && !_showingNew
                              && !_showingRules;
 
+    // The list's writes and the download only: New addresses and the rules button read nothing a refresh writes
+    private bool CanWriteNow() => CanRun() && !_gate.IsRefreshing;
+
     private bool CanShowNewAddresses() => CanRun() && _newCount > 0;
+
+    private void ReleasePageWork()
+    {
+        _pageWork?.Dispose();
+        _pageWork = null;
+    }
 
     // Marks the service call as out for the close question, from just before the call to its end, and keeps the call
     // itself for the stop to wait on
@@ -431,6 +478,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         ModSecurityRulesCommand.NotifyCanExecuteChanged();
         LookUpCommand.NotifyCanExecuteChanged();
         OpenNetworkInIpinfoCommand.NotifyCanExecuteChanged();
+        CopyAsNumberCommand.NotifyCanExecuteChanged();
     }
 
     private void SetStatus(string text, bool warning)
@@ -505,6 +553,65 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
     // The read chooses the line itself, so an activation is the read alone
     private async Task ActivateCoreAsync(IAbuseIpDbService abuse) => await ReadStatusAsync(abuse);
 
+    // The service raises on the thread that changed the list, so each listener only posts
+    private void AbuseListChanged(object? sender, AbuseListChange change) => _ui.PostToUiThread(() => HearListChanged(change));
+
+    private void AbuseWorkChanged(object? sender, EventArgs e) => _ui.PostToUiThread(HearWorkChanged);
+
+    // The page's own download and Clear list regroup at their run's end, so their change is already covered
+    private void HearListChanged(AbuseListChange change)
+    {
+        if (_disposed || _closing || _abuse is not { } abuse || change.Version <= _groupedListVersion || IsWorking)
+            return;
+
+        if (IsOnShow)
+            PendingListenerRead = ReadAndRegroupAsync(abuse, change.Version);
+        else
+            _listStale = true;
+    }
+
+    // The activation waited for may have grouped this version already, or a page run may have started meanwhile
+    private async Task ReadAndRegroupAsync(IAbuseIpDbService abuse, long version)
+    {
+        if (_disposed || _closing || !await AfterActivationAsync() || version <= _groupedListVersion)
+            return;
+
+        // A Write feed or Retire started meanwhile doesn't regroup at its end, so the next show does
+        if (IsWorking)
+        {
+            _listStale = true;
+            return;
+        }
+
+        await ReadStatusAsync(abuse, callerRegroups: true);
+        if (!_disposed && !_closing)
+            Regroup(abuse);
+    }
+
+    // A read started meanwhile would overtake the activation's read, and New addresses' line with it
+    private async Task<bool> AfterActivationAsync()
+    {
+        if (_activation is { IsCompleted: false } running)
+            await running;
+
+        return !_disposed && !_closing;
+    }
+
+    private async Task ListenerReadStatusAsync(IAbuseIpDbService abuse)
+    {
+        if (await AfterActivationAsync())
+            await ReadStatusAsync(abuse);
+    }
+
+    // A hidden page reads the status on its next show, so only the page on show reads it here
+    private void HearWorkChanged()
+    {
+        if (_disposed || _closing || _abuse is not { } abuse || abuse.WorkUnderWay is not null || IsWorking || !IsOnShow)
+            return;
+
+        PendingListenerRead = ListenerReadStatusAsync(abuse);
+    }
+
     /// <summary>
     /// Null when the read failed, was cancelled or was overtaken by a newer read; the last status and line then stay.
     /// <paramref name="callerRegroups"/>: the caller groups again right after, so the read starts no grouping.
@@ -558,7 +665,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
     private async Task DownloadAsync()
     {
-        if (_abuse is not { } abuse || !CanRun())
+        if (_abuse is not { } abuse || !CanWriteNow())
             return;
 
         IsWorking = true;
@@ -570,7 +677,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
             string? line = null;
             try
             {
-                result = await CallServiceAsync(abuse.DownloadBlacklistAsync, isDownload: true);
+                result = await CallServiceAsync(ct => abuse.DownloadBlacklistAsync(null, ct), isDownload: true);
                 if (_disposed || _closing)
                     return;
 
@@ -590,7 +697,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                     {
                         case AbuseKeyOutcome.Saved:
                             // One more download with the saved key; whatever it says goes to the line, and nothing asks again
-                            result = await CallServiceAsync(abuse.DownloadBlacklistAsync, isDownload: true);
+                            result = await CallServiceAsync(ct => abuse.DownloadBlacklistAsync(null, ct), isDownload: true);
                             if (_disposed || _closing)
                                 return;
                             break;
@@ -665,7 +772,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
     private async Task ClearListAsync()
     {
-        if (_abuse is not { } abuse || !CanRun())
+        if (_abuse is not { } abuse || !CanWriteNow())
             return;
 
         // Working from the press to the end, the confirmation included, and it owns the line for as long
@@ -739,7 +846,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
     private async Task WriteFeedAsync()
     {
-        if (_abuse is not { } abuse || !CanRun())
+        if (_abuse is not { } abuse || !CanWriteNow())
             return;
 
         int rulesMark = _rulesFiles.Clear();
@@ -775,7 +882,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                 ActionText = result.Failure switch
                 {
                     AbuseFeedWriteFailure.None =>
-                        AppText.AbuseFeedWritten(result, folder) + (unsaved ? AppText.UnsavedSettingsNote : ""),
+                        AppText.FeedRecordLead(result.Record) + AppText.AbuseFeedWritten(result, folder)
+                        + (unsaved ? AppText.UnsavedSettingsNote : ""),
                     // Exceptions emptied the feed, so the unsaved ones might have left something to write
                     AbuseFeedWriteFailure.NothingToWrite => AppText.AbuseFeedWriteFailureLine(result, keepDays, ipv6Enabled)
                         + (unsaved && result.ExceptionRemovals > 0 ? AppText.UnsavedSettingsNote : ""),
@@ -833,7 +941,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
     private async Task EmptyFeedAsync()
     {
-        if (_abuse is not { } abuse || !CanRun())
+        if (_abuse is not { } abuse || !CanWriteNow())
             return;
 
         _rulesFiles.Clear();
@@ -843,12 +951,12 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         {
             if (_gate.IsHeld)
             {
-                ActionText = AppText.AbuseEmptyFeedBusy;
+                ActionText = AppText.AbuseRetireFeedBusy;
                 return;
             }
 
-            bool? confirmed = await ConfirmAsync(AppText.EmptyAbuseFeedTitle, AppText.EmptyAbuseFeedBody,
-                AppText.EmptyAbuseFeedButton);
+            bool? confirmed = await ConfirmAsync(AppText.RetireAbuseFeedTitle, AppText.RetireAbuseFeedBody,
+                AppText.RetireAbuseFeedButton);
             if (_disposed)
                 return;
             if (confirmed is null)
@@ -860,7 +968,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
             if (confirmed == false)
                 return;
 
-            ActionText = AppText.EmptyingAbuseFeed;
+            ActionText = AppText.RetiringAbuseFeed;
             string folder = "";
             try
             {
@@ -869,10 +977,10 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
                 if (_disposed || _closing)
                     return;
 
-                // No unsaved note: Empty feed writes no address, so the exceptions it could have used don't matter
+                // No unsaved note: Retire feed writes no address; the record lead and sentence are in each line
                 ActionText = result.Failure == AbuseFeedWriteFailure.None
-                    ? AppText.AbuseFeedEmptied(result, folder)
-                    : AppText.AbuseFeedEmptyFailureLine(result, folder);
+                    ? AppText.AbuseFeedRetired(result, folder)
+                    : AppText.AbuseFeedRetireFailureLine(result, folder);
             }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
             {
@@ -882,7 +990,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
             {
                 if (_disposed || _closing)
                     return;
-                ActionText = AppText.AbuseFeedEmptyFailureLine(FailedWrite, folder);
+                ActionText = AppText.AbuseFeedRetireFailureLine(FailedWrite, folder);
             }
 
             await ReadStatusAsync(abuse);
@@ -1052,6 +1160,27 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         }
     }
 
+    // Only a failure gets a line, so a copy never erases the page's action line, except its own earlier failure
+    private async Task CopyAsNumberAsync(OffendingNetworkRow? row)
+    {
+        if (row is null || !IsAvailable || _disposed)
+            return;
+
+        try
+        {
+            await _ui.CopyTextAsync(row.AsnText);
+        }
+        catch (Exception)
+        {
+            if (!_disposed)
+                ActionText = AppText.AsNumberCopyFailed;
+            return;
+        }
+
+        if (!_disposed && ActionText == AppText.AsNumberCopyFailed)
+            ActionText = "";
+    }
+
     private void LookUp(OffendingNetworkRow? row)
     {
         if (row is null || !IsAvailable || _disposed)
@@ -1085,8 +1214,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         && kept.KeepDays == current.KeepDays;
 
     /// <summary>
-    /// Groups when none was made or the inputs changed, and after a failure that can heal (a storage error, a failed
-    /// lookup, a changed dataset); rerunning the other failures on every show would read the whole feed each time.
+    /// Groups when none was made, the inputs or the hidden page's list changed, or after a failure that can heal
+    /// (storage, lookup, a changed dataset); rerunning the other failures on every show would read the whole feed.
     /// </summary>
     private void GroupIfStale(IAbuseIpDbService abuse)
     {
@@ -1094,6 +1223,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
             return;
 
         bool stale = _groupingInputs is not { } kept
+            || _listStale
             || !SameInputs(kept, current)
             || (!IsGrouping && _groupingOutcome is AbuseNetworksFailure.StorageError or AbuseNetworksFailure.LookupFailed
                 or AbuseNetworksFailure.DatasetChanged);
@@ -1124,6 +1254,8 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
         int version = ++_groupingVersion;
         _groupingCts = cts;
         _groupingInputs = inputs;
+        _groupedListVersion = abuse.ListVersion;
+        _listStale = false;
         superseded?.Cancel();
 
         IsGrouping = true;
@@ -1214,7 +1346,7 @@ public sealed class AbuseIpDbViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Holds the gate only while the dialog is open, so the service call that follows doesn't lock Lookup or Settings.
-    /// Null when the dialog failed to show. Clear list and Empty feed test IsHeld before calling it; the close doesn't.
+    /// Null when the dialog failed to show. Clear list and Retire feed test IsHeld first; the close doesn't.
     /// </summary>
     private async Task<bool?> ConfirmAsync(string title, string message, string confirmText)
     {

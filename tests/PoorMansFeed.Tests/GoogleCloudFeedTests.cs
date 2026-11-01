@@ -3,6 +3,7 @@ using System.Text;
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.CloudFeeds;
 using PoorMansFeed.Core.GoogleCloud;
+using PoorMansFeed.Core.History;
 using Microsoft.Extensions.Time.Testing;
 
 namespace PoorMansFeed.Tests;
@@ -96,6 +97,88 @@ public sealed class GoogleCloudFeedTests : IDisposable
     }
 
     [Fact]
+    public async Task The_Check_Carries_The_Region_And_Whether_Global_Was_Added()
+    {
+        using FeedHarness feeds = Feed(FeedJson, Overlaps(EmptyGroups));
+        CatalogueResult catalogue = await feeds.Service.LoadCatalogueAsync(CancellationToken.None);
+        Assert.True(GoogleCloudScope.TryCreate("us-central1", out GoogleCloudScope scope));
+        Assert.True(GoogleCloudScope.TryCreate(GoogleCloudScope.GlobalId, out GoogleCloudScope global));
+
+        CheckResult regional = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(scope, true), CancellationToken.None);
+        CheckResult globalOnly = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(global, true), CancellationToken.None);
+
+        Assert.Equal(new CloudFeedPick(FeedKind.GoogleCloud, "us-central1", true, null, null, null), regional.Check!.Pick);
+        Assert.Equal(new CloudFeedPick(FeedKind.GoogleCloud, "global", false, null, null, null), globalOnly.Check!.Pick);
+    }
+
+    [Fact]
+    public async Task A_Region_That_Is_Gone_Fails_As_PickGone_Before_The_Dataset_Is_Asked()
+    {
+        using FeedHarness feeds = Feed(FeedJson, Overlaps(EmptyGroups));
+        CatalogueResult catalogue = await feeds.Service.LoadCatalogueAsync(CancellationToken.None);
+        Assert.True(GoogleCloudScope.TryCreate("europe-west9", out GoogleCloudScope gone));
+
+        CheckResult result = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(gone, true), CancellationToken.None);
+        Assert.Equal(CheckFailure.PickGone, result.Failure);
+        Assert.Null(result.Check);
+        Assert.Equal(0, feeds.IpInfo.OverlapCalls);
+
+        feeds.IpInfo.Dataset = null;
+        CheckResult noDataset = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(gone, false), CancellationToken.None);
+        Assert.Equal(CheckFailure.PickGone, noDataset.Failure);
+    }
+
+    [Fact]
+    public async Task A_Region_And_Global_Pick_Fails_As_PickGone_When_The_Catalogue_Has_No_Global_Scope()
+    {
+        const string json = """
+            {
+              "syncToken": "1",
+              "creationTime": "2026-01-15T00:00:00Z",
+              "prefixes": [
+                {"ipv4Prefix": "9.9.9.0/24", "service": "Google Cloud", "scope": "us-central1"}
+              ]
+            }
+            """;
+        using FeedHarness feeds = Feed(json, Overlaps(EmptyGroups));
+        CatalogueResult catalogue = await feeds.Service.LoadCatalogueAsync(CancellationToken.None);
+        Assert.True(GoogleCloudScope.TryCreate("us-central1", out GoogleCloudScope scope));
+        Assert.DoesNotContain(catalogue.Catalogue!.Regions, region => region.Scope.IsGlobal);
+
+        CheckResult withGlobal = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(scope, true), CancellationToken.None);
+        Assert.Equal(CheckFailure.PickGone, withGlobal.Failure);
+        Assert.Equal(0, feeds.IpInfo.OverlapCalls);
+
+        CheckResult regionOnly = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(scope, false), CancellationToken.None);
+        Assert.NotEqual(CheckFailure.PickGone, regionOnly.Failure);
+        Assert.Equal(1, feeds.IpInfo.OverlapCalls);
+    }
+
+    [Fact]
+    public async Task A_Region_Left_With_No_Prefix_Selects_Nothing_And_Is_Not_Gone()
+    {
+        const string json = """
+            {
+              "syncToken": "1",
+              "creationTime": "2026-01-15T00:00:00Z",
+              "prefixes": [
+                {"ipv4Prefix": "9.9.9.0/24", "service": "Google Cloud", "scope": "us-central1"},
+                {"ipv6Prefix": "2001:db8::/32", "service": "Google Cloud", "scope": "us-east9"}
+              ]
+            }
+            """;
+        using FeedHarness feeds = Feed(json, Overlaps(EmptyGroups));
+        feeds.IpInfo.Settings = new UserSettings { IPv6Enabled = false, WriteFortigateFeeds = true };
+        CatalogueResult catalogue = await feeds.Service.LoadCatalogueAsync(CancellationToken.None);
+        Assert.True(GoogleCloudScope.TryCreate("us-east9", out GoogleCloudScope scope));
+        Assert.Contains(catalogue.Catalogue!.Regions, region => region.Scope == scope);
+
+        CheckResult result = await feeds.Service.CheckAsync(catalogue.Catalogue!, new RegionSelection(scope, false), CancellationToken.None);
+
+        Assert.Equal(CheckFailure.NothingSelected, result.Failure);
+    }
+
+    [Fact]
     public async Task Unusable_Database_Returns_NoDataset_And_Writes_No_File()
     {
         using var http = new HttpClient(new StubHttpHandler((_, _) => JsonResponse("{}")));
@@ -108,7 +191,7 @@ public sealed class GoogleCloudFeedTests : IDisposable
         var service = new FakeIpInfoService { Dataset = null };
         service.OverlapFunc = _ => throw new InvalidOperationException("queried");
         using var cloudHttp = new HttpClient(new StubHttpHandler((_, _) => JsonResponse(OnePrefixJson)));
-        var feeds = new GoogleCloudFeedService(service, cloudHttp, new CoreOptions(), _time, _temp.ExportFolder);
+        var feeds = new GoogleCloudFeedService(service, cloudHttp, new CoreOptions(), _time, null, _temp.ExportFolder);
         CatalogueResult catalogue = await feeds.LoadCatalogueAsync(CancellationToken.None);
         Assert.True(GoogleCloudScope.TryCreate("us-central1", out GoogleCloudScope scope));
         CheckResult check = await feeds.CheckAsync(
@@ -224,7 +307,7 @@ public sealed class GoogleCloudFeedTests : IDisposable
             OverlapFunc = overlaps,
         };
         var http = new HttpClient(new StubHttpHandler((_, _) => JsonResponse(json)));
-        var service = new GoogleCloudFeedService(ipinfo, http, new CoreOptions(), _time, _temp.ExportFolder);
+        var service = new GoogleCloudFeedService(ipinfo, http, new CoreOptions(), _time, null, _temp.ExportFolder);
         return new FeedHarness(ipinfo, http, service);
     }
 

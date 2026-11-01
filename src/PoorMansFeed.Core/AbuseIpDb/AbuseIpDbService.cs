@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using PoorMansFeed.Core.FeedExceptions;
+using PoorMansFeed.Core.History;
 using PoorMansFeed.Core.Secrets;
 
 namespace PoorMansFeed.Core.AbuseIpDb;
@@ -29,6 +30,9 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     // Set once a write of the accounting to config.db has failed, with every answer of the session applied, so it
     // refuses at least as soon as the store would. Written only under the download gate; the status reads it unguarded
     private volatile AbuseAccounting? _unrecorded;
+
+    private volatile AbuseWork? _work;
+    private long _listVersion;
 
     /// <summary>The service for the current user, with the key in the operating system's store and its own HTTP client.</summary>
     public static AbuseIpDbService ForCurrentUser(AppPaths paths, IpInfoService ipinfo, CoreOptions options, TimeProvider time)
@@ -158,46 +162,65 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     }
 
     /// <inheritdoc/>
-    public async Task<AbuseDownloadResult> DownloadBlacklistAsync(CancellationToken ct)
+    public async Task<AbuseDownloadResult> DownloadBlacklistAsync(AbuseDownloadPolicy? policy, CancellationToken ct)
     {
         // One download at a time, so the second sees the answer the first stored before it decides to send
         await _downloadGate.WaitAsync(ct);
+        AbuseDownloadResult result;
+        long? merged = null;
         try
         {
-            return await Task.Run(() => DownloadCoreAsync(ct));
+            BeginWork(AbuseWorkKind.Download);
+            result = await Task.Run(() => DownloadCoreAsync(policy, ct));
+            // Only a merge that wrote ends with None
+            if (result.Failure == AbuseIpDbFailure.None)
+                merged = Interlocked.Increment(ref _listVersion);
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
             TraceUnexpected(nameof(DownloadBlacklistAsync), ex);
-            return DownloadFailure(AbuseIpDbFailure.ServiceError, null);
+            result = DownloadFailure(AbuseIpDbFailure.ServiceError, null);
         }
         finally
         {
-            _downloadGate.Release();
+            EndWork();
         }
+
+        if (merged is long version)
+            Tell(ListChanged, new AbuseListChange(version, AbuseListChangeKind.Merged));
+        return result;
     }
 
     /// <inheritdoc/>
     public async Task<AbuseIpDbFailure> ClearListAsync(CancellationToken ct)
     {
         await _downloadGate.WaitAsync(ct);
+        AbuseIpDbFailure result;
+        long? cleared = null;
         try
         {
-            return await Task.Run(() =>
+            BeginWork(AbuseWorkKind.ClearList);
+            result = await Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
                 return _list.Delete() ? AbuseIpDbFailure.None : AbuseIpDbFailure.StorageError;
             });
+            if (result == AbuseIpDbFailure.None)
+                cleared = Interlocked.Increment(ref _listVersion);
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
         {
             TraceUnexpected(nameof(ClearListAsync), ex);
-            return AbuseIpDbFailure.StorageError;
+            result = AbuseIpDbFailure.StorageError;
         }
         finally
         {
-            _downloadGate.Release();
+            EndWork();
         }
+
+        if (cleared is long version)
+            Tell(ListChanged, new AbuseListChange(version, AbuseListChangeKind.Cleared));
+        return result;
     }
 
     /// <inheritdoc/>
@@ -208,10 +231,15 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         await _downloadGate.WaitAsync(ct);
         try
         {
+            BeginWork(AbuseWorkKind.WriteFeed);
             return await Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
-                return WriteFeedCore();
+                // Before the settings, so a write that waited for another holder of the feed writes what is set now
+                using IDisposable hold = _ipinfo.Records.EnterWrite(AbuseIpDbFeedWriter.FileStem);
+                // One read of the settings, so the types, the keep days, the IPv6 switch and the folder agree
+                UserSettings settings = _ipinfo.Settings;
+                return WriteFeedCore(settings, FeedOptions.ForRollingFeed(settings));
             });
         }
         catch (Exception ex) when (!IsCallerCancellation(ex, ct))
@@ -221,9 +249,87 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         }
         finally
         {
-            _downloadGate.Release();
+            EndWork();
         }
     }
+
+    /// <summary>Writes the saved rolling feed again from the list, with no download, as a Refresh all change.</summary>
+    internal async Task<RollingFeedRefresh> RefreshFeedAsync(CancellationToken ct)
+    {
+        // Behind the download gate, as Write feed is: the same files and the same .tmp names
+        await _downloadGate.WaitAsync(ct);
+        try
+        {
+            BeginWork(AbuseWorkKind.RefreshFeed);
+            return await Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                IDisposable hold;
+                try
+                {
+                    hold = _ipinfo.Records.EnterWrite(AbuseIpDbFeedWriter.FileStem);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+                {
+                    Trace.TraceError($"The rolling feed's refresh wasn't admitted ({ex.GetType().FullName})");
+                    return RollingNotRefreshed(RollingRefreshOutcome.Failed);
+                }
+
+                using (hold)
+                    return RefreshFeedHeld();
+            });
+        }
+        catch (Exception ex) when (!IsCallerCancellation(ex, ct))
+        {
+            TraceUnexpected(nameof(RefreshFeedAsync), ex);
+            return RollingNotRefreshed(RollingRefreshOutcome.Failed);
+        }
+        finally
+        {
+            EndWork();
+        }
+    }
+
+    Task<RollingFeedRefresh> IAbuseIpDbService.RefreshFeedAsync(CancellationToken ct) => RefreshFeedAsync(ct);
+
+    // The saved feed and the list are read inside the lock, so the refresh is as fresh as a page write
+    private RollingFeedRefresh RefreshFeedHeld()
+    {
+        SavedFeedsRead read = _ipinfo.Records.ReadSavedFeeds();
+        if (!read.Available)
+            return RollingNotRefreshed(RollingRefreshOutcome.SavedFeedsUnavailable);
+
+        SavedFeed? stored = read.Feeds.FirstOrDefault(feed => feed.Kind == FeedKind.AbuseIpDbRolling
+            && string.Equals(feed.Key, AbuseIpDbFeedWriter.FileStem, StringComparison.OrdinalIgnoreCase));
+        if (stored is null)
+            return RollingNotRefreshed(RollingRefreshOutcome.Missing);
+        if (stored.Retired)
+            return RollingNotRefreshed(RollingRefreshOutcome.Retired);
+        // The store kept an older feed than the files hold, so writing over them would undo the page's write
+        if (_ipinfo.Records.SaveRefusedThisSession(stored.Key))
+            return RollingNotRefreshed(RollingRefreshOutcome.SaveRefused);
+
+        UserSettings settings = _ipinfo.Settings;
+        var refresh = new RefreshWrite(stored);
+        AbuseFeedWriteResult result = WriteFeedCore(settings, FeedOptions.ForRollingFeed(settings), refresh);
+        DateTimeOffset nowUtc = _time.GetUtcNow();
+        // Unchanged only from a skip or an empty plan, so any other result that wrote nothing fails closed
+        (RollingRefreshOutcome outcome, SavedFeedStamp? stamp) = result.Failure switch
+        {
+            AbuseFeedWriteFailure.None when refresh.Skipped =>
+                (RollingRefreshOutcome.Unchanged, new SavedFeedStamp(stored, null, stored.Proof, nowUtc)),
+            AbuseFeedWriteFailure.NothingToWrite when result.FeedChanges is null =>
+                (RollingRefreshOutcome.Unchanged, new SavedFeedStamp(stored, null, stored.Proof, nowUtc)),
+            AbuseFeedWriteFailure.None => (RollingRefreshOutcome.Written, new SavedFeedStamp(stored, null, refresh.Proof, nowUtc)),
+            // A file moved, so the stored proof no longer describes the files
+            AbuseFeedWriteFailure.WriteFailed when result.FeedChanges is not null =>
+                (RollingRefreshOutcome.Failed, new SavedFeedStamp(stored, null, null, null)),
+            _ => (RollingRefreshOutcome.Failed, (SavedFeedStamp?)null),
+        };
+        return new RollingFeedRefresh(outcome, outcome == RollingRefreshOutcome.Unchanged ? null : result, stamp);
+    }
+
+    private static RollingFeedRefresh RollingNotRefreshed(RollingRefreshOutcome outcome) => new(outcome, null, null);
 
     /// <inheritdoc/>
     public async Task<AbuseFeedWriteResult> EmptyFeedAsync(CancellationToken ct)
@@ -232,9 +338,12 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         await _downloadGate.WaitAsync(ct);
         try
         {
+            BeginWork(AbuseWorkKind.RetireFeed);
             return await Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
+                // The feed lock after the download gate, as Write feed takes them, so neither waits on the other's hold
+                using IDisposable hold = _ipinfo.Records.EnterWrite(AbuseIpDbFeedWriter.FileStem);
                 return EmptyFeedCore();
             });
         }
@@ -245,7 +354,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         }
         finally
         {
-            _downloadGate.Release();
+            EndWork();
         }
     }
 
@@ -263,6 +372,68 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
             TraceUnexpected(nameof(FindOffendingNetworksAsync), ex);
             return NetworksFailure(AbuseNetworksFailure.LookupFailed, false, 0, null);
         }
+    }
+
+    /// <inheritdoc/>
+    public long ListVersion => Interlocked.Read(ref _listVersion);
+
+    /// <inheritdoc/>
+    public event EventHandler<AbuseListChange>? ListChanged;
+
+    /// <inheritdoc/>
+    public AbuseWork? WorkUnderWay => _work;
+
+    /// <inheritdoc/>
+    public event EventHandler? WorkChanged;
+
+    // Each listener on its own, so one that throws neither costs the caller its typed result nor silences the rest
+    private void Tell<T>(EventHandler<T>? handler, T args)
+    {
+        if (handler is null)
+            return;
+        foreach (EventHandler<T> listener in handler.GetInvocationList().Cast<EventHandler<T>>())
+        {
+            try
+            {
+                listener(this, args);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"An AbuseIPDB listener failed ({ex.GetType().FullName}).");
+            }
+        }
+    }
+
+    private void Tell(EventHandler? handler, EventArgs args)
+    {
+        if (handler is null)
+            return;
+        foreach (EventHandler listener in handler.GetInvocationList().Cast<EventHandler>())
+        {
+            try
+            {
+                listener(this, args);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"An AbuseIPDB listener failed ({ex.GetType().FullName}).");
+            }
+        }
+    }
+
+    // Called first inside each hold of the download gate
+    private void BeginWork(AbuseWorkKind kind)
+    {
+        _work = new AbuseWork(kind);
+        Tell(WorkChanged, EventArgs.Empty);
+    }
+
+    // Releases the download gate; listeners hear of it only once it is free
+    private void EndWork()
+    {
+        _work = null;
+        _downloadGate.Release();
+        Tell(WorkChanged, EventArgs.Empty);
     }
 
     /// <summary>16 to 256 characters, each a printable ASCII character other than the space ('!' to '~').</summary>
@@ -303,7 +474,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         return check is null ? Failure(AbuseIpDbFailure.BadResponse) : new AbuseCheckResult(AbuseIpDbFailure.None, check, null);
     }
 
-    private async Task<AbuseDownloadResult> DownloadCoreAsync(CancellationToken ct)
+    private async Task<AbuseDownloadResult> DownloadCoreAsync(AbuseDownloadPolicy? policy, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         DateTimeOffset now = _time.GetUtcNow();
@@ -332,6 +503,10 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         if (RefusedUntil(EffectiveAccounting(), now) is DateTimeOffset until)
             return DownloadFailure(AbuseIpDbFailure.LimitReached, until);
 
+        // Judged before anything is written or the key is read, so a download kept for the user costs nothing
+        if (policy is not null && !PolicyAllows(policy, EffectiveAccounting(), facts.Value, now))
+            return DownloadFailure(AbuseIpDbFailure.KeptForUser, null);
+
         // Before the pre-send write, so a disk too full to take the answer and its merge spends no download and writes nothing
         if (IsDiskNearlyFull())
             return DownloadFailure(AbuseIpDbFailure.DiskNearlyFull, null);
@@ -345,6 +520,11 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         AbuseIpDbFailure keyFailure = TryLoadKey(out string? key);
         if (keyFailure != AbuseIpDbFailure.None)
             return DownloadFailure(keyFailure, null);
+
+        // The policy's age counts from this write, so an attempt stopped at the key holds no download back
+        AbuseListState send = _list.RecordSend(now);
+        if (send != AbuseListState.Usable)
+            return DownloadFailure(ListFailure(send) ?? AbuseIpDbFailure.StorageError, null);
 
         // While IPv6 is off the list asks for IPv4 alone, so the whole allowance goes to addresses the feed can use
         AbuseFetch fetch = await _client.GetBlacklistAsync(key!, ipv4Only: !settings.IPv6Enabled, ct);
@@ -411,18 +591,16 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
                                        merge.Added, merge.Lapsed, merge.Expired, list.GeneratedAt, null, counted);
     }
 
-    private AbuseFeedWriteResult WriteFeedCore()
+    private AbuseFeedWriteResult WriteFeedCore(UserSettings settings, FeedOptions options, RefreshWrite? refresh = null)
     {
-        // One read of the settings, so the keep days, the IPv6 switch and the folder come from the same snapshot
-        UserSettings settings = _ipinfo.Settings;
         // With no type ticked there is nowhere to write, so nothing is read, not even the exceptions or the list
-        if (!settings.TicksAnyFeedType())
+        if (options.Types.Count == 0)
             return FeedFailure(AbuseFeedWriteFailure.NoFeedType);
 
-        ExceptionList exceptions = _ipinfo.Exceptions;
         // A feed written as if there were no exceptions could block the operator's own networks, so nothing is read
         // or written while they can't be read
-        if (!exceptions.IsReadable)
+        ReadableExceptions? exceptions = IpInfoService.ExceptionsForFeed(_ipinfo);
+        if (exceptions is null)
             return FeedFailure(AbuseFeedWriteFailure.ExceptionsUnreadable);
 
         DateTimeOffset now = _time.GetUtcNow();
@@ -461,19 +639,16 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         var header = new AbuseFeedHeader(keepDays, now, list.LastDownloadAt, list.GeneratedAt);
         // Rendered once per family, so the copies can differ only in their first line
         AbuseFeedBody[] bodies = [AbuseFeedBody.Of(ipv4, header), AbuseFeedBody.Of(ipv6, header)];
-        var plan = new List<PlannedFeedFile>();
-        foreach (FeedType type in FeedTypes.Ticked(settings))
-        {
-            foreach (AbuseFeedBody body in bodies)
-            {
-                string path = AbuseIpDbFeedWriter.PathFor(folder, type, body.Family.IsIpv6);
-                if (body.Family.Addresses.Count == 0 && !File.Exists(path))
-                    continue;
-                plan.Add(new PlannedFeedFile(type, path, body));
-            }
-        }
+        IReadOnlyList<RollingFeedFile> plan = PlanRollingFeed(folder, options.Types, bodies);
         if (plan.Count == 0)
             return new AbuseFeedWriteResult(AbuseFeedWriteFailure.NothingToWrite, [], 0, 0, 0, removed, []);
+
+        if (refresh is not null && FeedSkip.IsUnchanged(folder, plan.Select(file => file.Planned).ToList(),
+                                                        SavedFeedWriteProof.FingerprintOf(options), refresh.Of.Proof))
+        {
+            refresh.Skipped = true;
+            return new AbuseFeedWriteResult(AbuseFeedWriteFailure.None, [], 0, 0, ipv4.LeftOut + ipv6.LeftOut, removed, []);
+        }
 
         // Only the export folder is made here; a type's folder is made by its first file, so one that can't be made
         // fails that file, and the FortiGate copies, written first, stay written when the ModSecurity folder fails
@@ -489,7 +664,42 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         }
 
         // Both families' removals and left-out counts, written or not: a family with no file still had them
-        return WritePlan(plan, ipv4.LeftOut + ipv6.LeftOut, removed, "The feed could not be written");
+        AbuseFeedWriteResult result = WritePlan(plan, ipv4.LeftOut + ipv6.LeftOut, removed, "The feed could not be written");
+        if (result.FeedChanges is null)
+            return result;
+
+        // A removed address that is no exception, not past the cap, not switched off and not in the list within the
+        // keep days went because they passed; the sets are in memory, as the reasons are read after the write
+        var source = list.Entries.Select(entry => entry.Address.Bytes).Select(bytes => (bytes, bytes)).ToList();
+        var leftOut = ipv4.PastCap.Concat(ipv6.PastCap).Select(address => address.Bytes)
+                          .Select(bytes => (bytes, bytes)).ToList();
+        FeedFamilies? familiesOff = settings.IPv6Enabled ? null : FeedFamilies.IPv6;
+        var reasons = new RemovalReasons(exceptions, source, leftOut, familiesOff, FeedRemovalReason.LeftTheList);
+        var pick = new SavedFeedPick(null, null, false, null, null, null, [], [], [], [], null, null, null);
+        // Only a write that moved every planned file proves what the files hold
+        SavedFeedWriteProof? proof = result.Failure == AbuseFeedWriteFailure.None
+            ? SavedFeedWriteProof.Of(folder, options, result.FeedChanges)
+            : null;
+        if (refresh is not null)
+            refresh.Proof = proof;
+        // A refresh saves no pick: its stamp is committed with every other feed's after the refresh
+        FeedRecordResult record = refresh is null
+            ? RecordRollingWrite(FeedChangeCause.PageWrite, new SavedFeedIntent.Written(pick, proof), now, options.Types,
+                                 result.FeedChanges, reasons, list.LastDownloadAt)
+            : RecordRollingWrite(FeedChangeCause.RefreshAll, null, now, options.Types, result.FeedChanges, reasons,
+                                 list.LastDownloadAt);
+        return result with { Record = record };
+    }
+
+    // Called with the feed lock held, so a Remove waiting for the lock is ordered after this save
+    private FeedRecordResult RecordRollingWrite(FeedChangeCause cause, SavedFeedIntent? intent, DateTimeOffset atUtc,
+                                                IReadOnlyCollection<FeedType> types, IReadOnlyList<FeedFileChange> changes,
+                                                RemovalReasons? reasons, DateTimeOffset? listDownloadedUtc)
+    {
+        // No dataset date: the rolling feed holds nothing from IPinfo
+        var record = new FeedWriteRecord(AbuseIpDbFeedWriter.FileStem, FeedKind.AbuseIpDbRolling, cause, atUtc, types,
+                                         changes, reasons, null, listDownloadedUtc, intent);
+        return IpInfoService.RecordFeedWrite(_ipinfo, record);
     }
 
     private AbuseFeedWriteResult EmptyFeedCore()
@@ -501,7 +711,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
         string folder = ExportFolders.Resolve(settings, _defaultExportFolder);
 
         // No download line and no keep days: the file no longer holds anything from a download, and says it was
-        // emptied by hand
+        // retired by hand
         var header = new AbuseFeedHeader(null, now, null, null);
         // Both types whatever is ticked and both families whatever the IPv6 switch, so any file left is retired.
         // A folder at a feed's path counts, so it fails the write rather than reading as nothing to empty
@@ -510,7 +720,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
             AbuseFeedBody.Of(new AbuseFeedFamily(false, [], 0, 0), header),
             AbuseFeedBody.Of(new AbuseFeedFamily(true, [], 0, 0), header),
         ];
-        var plan = new List<PlannedFeedFile>();
+        var plan = new List<RollingFeedFile>();
         foreach (FeedType type in FeedTypes.All)
         {
             foreach (AbuseFeedBody body in bodies)
@@ -518,29 +728,41 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
                 string path = AbuseIpDbFeedWriter.PathFor(folder, type, body.Family.IsIpv6);
                 if (!Path.Exists(path))
                     continue;
-                plan.Add(new PlannedFeedFile(type, path, body));
+                plan.Add(new RollingFeedFile(type, body.Family.IsIpv6 ? FeedFamilies.IPv6 : FeedFamilies.IPv4, path, body));
             }
         }
         if (plan.Count == 0)
             return FeedFailure(AbuseFeedWriteFailure.NothingToWrite);
 
-        return WritePlan(plan, 0, 0, "The feed could not be emptied");
+        AbuseFeedWriteResult result = WritePlan(plan, 0, 0, "The feed could not be retired");
+        if (result.FeedChanges is null)
+            return result;
+
+        // Files already header-only give no history row, but the saved feed is still marked retired
+        FeedRecordResult record = RecordRollingWrite(FeedChangeCause.Retire, new SavedFeedIntent.Retired(), now,
+                                                     FeedTypes.All, result.FeedChanges, null, null);
+        return result with { Record = record };
     }
 
     /// <summary>
     /// Writes the planned files in order. A file written before a failure stays written, and the result names it, the
     /// failed file and the planned files left as they were.
     /// </summary>
-    private static AbuseFeedWriteResult WritePlan(IReadOnlyList<PlannedFeedFile> plan, int leftOut, int removed,
+    private static AbuseFeedWriteResult WritePlan(IReadOnlyList<RollingFeedFile> plan, int leftOut, int removed,
                                                   string failureTrace)
     {
-        var done = new List<PlannedFeedFile>();
+        var done = new List<RollingFeedFile>();
+        var changes = new List<FeedFileChange>();
         try
         {
-            foreach (PlannedFeedFile file in plan)
+            foreach (RollingFeedFile file in plan)
             {
-                AbuseIpDbFeedWriter.WriteFile(file.Path, file.Type, file.Body);
+                // Never throws: a missing, unreadable or folder path reads as no entries, and the write then decides
+                FeedFileRead before = FeedFileEntries.Read(file.Path);
+                string written = AbuseIpDbFeedWriter.WriteFile(file.Path, file.Type, file.Body);
                 done.Add(file);
+                changes.Add(FeedFileEntries.Compare(file.Path, file.Type, file.Families, before, file.Body.Lines)
+                            with { WrittenSha256 = written });
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -549,7 +771,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
             // The failed file's earlier copy is whole, because the move never ran, and a file after it is never tried;
             // the readers keep reading both. A folder at a feed's path is not a file and isn't named
             List<string> left = plan.Skip(done.Count).Select(file => file.Path).Where(File.Exists).ToList();
-            return WrittenResult(AbuseFeedWriteFailure.WriteFailed, done, leftOut, removed)
+            return WrittenResult(AbuseFeedWriteFailure.WriteFailed, done, changes, leftOut, removed)
                 with
                 {
                     FailedFile = plan[done.Count].Path,
@@ -557,7 +779,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
                 };
         }
 
-        return WrittenResult(AbuseFeedWriteFailure.None, done, leftOut, removed);
+        return WrittenResult(AbuseFeedWriteFailure.None, done, changes, leftOut, removed);
     }
 
     /// <summary>
@@ -565,7 +787,8 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     /// however many copies were written; the left-out and removal totals are both families', written or not.
     /// </summary>
     private static AbuseFeedWriteResult WrittenResult(AbuseFeedWriteFailure failure,
-                                                      IReadOnlyList<PlannedFeedFile> done, int leftOut, int removed)
+                                                      IReadOnlyList<RollingFeedFile> done,
+                                                      IReadOnlyList<FeedFileChange> changes, int leftOut, int removed)
     {
         AbuseFeedFamily[] families = done.Select(file => file.Body.Family).DistinctBy(family => family.IsIpv6).ToArray();
         List<string> modSecurity = done.Where(file => file.Type == FeedType.ModSecurity)
@@ -577,11 +800,38 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
             done.Where(file => file.Body.Family.Addresses.Count == 0).Select(file => file.Path).ToList())
         {
             ModSecurityFiles = modSecurity.Count > 0 ? modSecurity : null,
+            FeedChanges = changes.Count > 0 ? changes : null,
         };
     }
 
+    /// <summary>
+    /// The files a rolling-feed write moves, in write order: in each type, a family with addresses, and one with none
+    /// whose file exists, rewritten header-only, so the reader follows the list down to empty.
+    /// </summary>
+    internal static IReadOnlyList<RollingFeedFile> PlanRollingFeed(string folder, IReadOnlyList<FeedType> types,
+                                                                   IReadOnlyList<AbuseFeedBody> bodies)
+    {
+        var plan = new List<RollingFeedFile>();
+        foreach (FeedType type in types)
+        {
+            foreach (AbuseFeedBody body in bodies)
+            {
+                string path = AbuseIpDbFeedWriter.PathFor(folder, type, body.Family.IsIpv6);
+                if (body.Family.Addresses.Count == 0 && !File.Exists(path))
+                    continue;
+                plan.Add(new RollingFeedFile(type, body.Family.IsIpv6 ? FeedFamilies.IPv6 : FeedFamilies.IPv4, path, body));
+            }
+        }
+
+        return plan;
+    }
+
     /// <summary>One file of a write, in write order: the feed types in turn, each with IPv4 then IPv6.</summary>
-    private readonly record struct PlannedFeedFile(FeedType Type, string Path, AbuseFeedBody Body);
+    internal readonly record struct RollingFeedFile(FeedType Type, FeedFamilies Families, string Path, AbuseFeedBody Body)
+    {
+        public PlannedFeedFile Planned =>
+            new(Path, Type, Families, Body.Text, Body.Lines, Emptied: Body.Family.Addresses.Count == 0);
+    }
 
     private async Task<AbuseNetworksResult> NetworksCoreAsync(IProgress<GroupingProgress>? progress, CancellationToken ct)
     {
@@ -913,6 +1163,36 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     }
 
     /// <summary>
+    /// Whether a download leaves the policy's count for the user, by the stored remaining count or else today's count
+    /// against the free plan, and the last download or send is the policy's age old; one after now is too recent.
+    /// </summary>
+    private static bool PolicyAllows(AbuseDownloadPolicy policy, AbuseAccounting accounting, ListFacts? facts,
+                                     DateTimeOffset now)
+    {
+        long needed = (long)policy.LeftForUser + 1;
+        bool leaves = accounting.RateLimit is { } limit
+            ? LeftUnderLimit(limit, accounting, now) is int remaining && remaining >= needed
+            : DownloadsToday(accounting, now) <= AbuseIpDbLimits.FreeBlacklistDownloadsPerDay - needed;
+        // An answer counted but never merged still spent a download, and every send writes its time first
+        DateTimeOffset? last = Latest(NotFarAhead(facts?.LastDownloadAt, now), NotFarAhead(facts?.LastSentAt, now));
+        return leaves && (last is not { } at || (at <= now && now - at >= policy.MinAge));
+    }
+
+    // As with a reset, a time this far ahead is from a clock set back since or another computer: it holds nothing back
+    private static DateTimeOffset? NotFarAhead(DateTimeOffset? time, DateTimeOffset now) =>
+        time is { } at && at - now > TimeSpan.FromHours(AbuseIpDbLimits.MaxClockDifferenceHours) ? null : time;
+
+    // Once the stored reset has passed the limit is back, less the downloads counted today, which no answer has
+    // subtracted since; with no limit known the stored remaining count stands
+    private static int? LeftUnderLimit(AbuseRateLimit limit, AbuseAccounting accounting, DateTimeOffset now) =>
+        limit.ResetAt is DateTimeOffset reset && reset <= now && limit.Limit is int whole
+            ? Math.Max(0, whole - DownloadsToday(accounting, now))
+            : limit.Remaining;
+
+    private static int DownloadsToday(AbuseAccounting accounting, DateTimeOffset now) =>
+        accounting.DownloadsDay == UtcDay(now) ? accounting.DownloadsOnDay : 0;
+
+    /// <summary>
     /// A reset more than <see cref="AbuseIpDbLimits.MaxResetAheadHours"/> hours ahead is unknown and refuses nothing,
     /// so a clock set back since the answer, or a list from another computer, can't refuse for days.
     /// </summary>
@@ -975,7 +1255,7 @@ public sealed class AbuseIpDbService : IAbuseIpDbService
     /// <summary>A status with no addresses and no download, and the accounting's limit, today's count and refusal.</summary>
     private static AbuseListStatus AccountingStatus(AbuseListState state, AbuseAccounting accounting, DateTimeOffset now) =>
         new(state, 0, 0, null, null, accounting.RateLimit,
-            accounting.DownloadsDay == UtcDay(now) ? accounting.DownloadsOnDay : 0, RefusedUntil(accounting, now));
+            DownloadsToday(accounting, now), RefusedUntil(accounting, now));
 
     private static AbuseCheckResult Failure(AbuseIpDbFailure failure) => new(failure, null, null);
 

@@ -12,9 +12,13 @@ public interface ICloudFeedService
     CloudFeedPlan PlanWrite(CloudFeedCheck check, IReadOnlyCollection<CidrBlock> ticked);
 
     /// <summary>
-    /// Writes {export folder}/fortigate/{FileStem}_ipv4.txt and _ipv6.txt through a temp file and a move; a family with
-    /// no rows writes no file. Large ranges not in includedLargeRanges are left out; SettingsChanged writes nothing.
+    /// Writes each ticked type's {FileStem}_ipv4.txt and _ipv6.txt through a temp file and a move, returning each file's
+    /// changed entries; a family with no rows writes no file. Large ranges not in includedLargeRanges are left out.
     /// </summary>
     Task<CloudFeedWriteResult> WriteAsync(CloudFeedPlan plan, IReadOnlyCollection<CidrBlock> includedLargeRanges,
                                           CancellationToken ct);
+
+    /// <summary>Writes the check's saved feed again; checkStartedUtc is taken before its source was read.</summary>
+    internal Task<CloudFeedRefresh> RefreshAsync(CloudFeedCheck check, DateTimeOffset checkStartedUtc, CancellationToken ct) =>
+        Task.FromResult(new CloudFeedRefresh(CloudRefreshOutcome.SavedFeedsUnavailable, null, null, [], []));
 }

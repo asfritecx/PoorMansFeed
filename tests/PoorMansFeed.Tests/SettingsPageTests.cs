@@ -133,7 +133,10 @@ public sealed class SettingsPageTests
                 ListBox nav = shown.Find<ListBox>("NavList");
                 Rect settings = BoundsIn(shown.Find<ListBoxItem>("NavSettings"), window);
                 Rect abuse = BoundsIn(shown.Find<ListBoxItem>("NavAbuseIpDb"), window);
+                Rect savedFeeds = BoundsIn(shown.Find<ListBoxItem>("NavSavedFeeds"), window);
+                Rect changeHistory = BoundsIn(shown.Find<ListBoxItem>("NavChangeHistory"), window);
                 Rect aws = BoundsIn(shown.Find<ListBoxItem>("NavAws"), window);
+                Rect cloudSearch = BoundsIn(shown.Find<ListBoxItem>("NavCloudSearch"), window);
                 Rect azure = BoundsIn(shown.Find<ListBoxItem>("NavAzure"), window);
                 Rect footer = BoundsIn(shown.Find<TextBlock>("FooterNotice"), window);
                 Panel panel = nav.GetVisualDescendants().OfType<ItemsPresenter>().Single().Panel!;
@@ -142,9 +145,12 @@ public sealed class SettingsPageTests
                 Assert.True(Math.Abs(settings.Bottom - content.Bottom) <= 1,
                     $"{width}x{height}: Settings ends at {settings.Bottom}, the list's content at {content.Bottom}.");
                 Assert.True(settings.Bottom <= footer.Top, $"{width}x{height}: Settings overlaps the attribution.");
-                Assert.True(settings.Top > abuse.Bottom + 40, $"{width}x{height}: Settings is not docked at the foot.");
+                Assert.True(settings.Top > changeHistory.Bottom + 40, $"{width}x{height}: Settings is not docked at the foot.");
                 Assert.Equal(2, aws.Top - azure.Bottom, 1);
-                Assert.Equal(2, abuse.Top - aws.Bottom, 1);
+                Assert.Equal(2, cloudSearch.Top - aws.Bottom, 1);
+                Assert.Equal(2, abuse.Top - cloudSearch.Bottom, 1);
+                Assert.Equal(2, savedFeeds.Top - abuse.Bottom, 1);
+                Assert.Equal(2, changeHistory.Top - savedFeeds.Bottom, 1);
             }
             finally
             {
@@ -163,8 +169,22 @@ public sealed class SettingsPageTests
             Navigate(keyed, "NavAws");
             keyed.Find<ListBoxItem>("NavAws").Focus();
             PressKey(keyed.Window, Key.Down, PhysicalKey.ArrowDown);
+            Assert.Same(keyed.Find<ListBoxItem>("NavCloudSearch"), nav.SelectedItem);
+            Assert.True(keyed.Find<Control>("CloudSearchPage").IsVisible);
+            Assert.True(keyed.Find<Control>("CloudSearchHeading").IsVisible);
+
+            PressKey(keyed.Window, Key.Down, PhysicalKey.ArrowDown);
             Assert.Same(keyed.Find<ListBoxItem>("NavAbuseIpDb"), nav.SelectedItem);
             Assert.True(keyed.Find<Control>("AbuseIpDbPage").IsVisible);
+
+            PressKey(keyed.Window, Key.Down, PhysicalKey.ArrowDown);
+            Assert.Same(keyed.Find<ListBoxItem>("NavSavedFeeds"), nav.SelectedItem);
+            Assert.True(keyed.Find<Control>("SavedFeedsPage").IsVisible);
+
+            PressKey(keyed.Window, Key.Down, PhysicalKey.ArrowDown);
+            Assert.Same(keyed.Find<ListBoxItem>("NavChangeHistory"), nav.SelectedItem);
+            Assert.True(keyed.Find<Control>("ChangeHistoryPage").IsVisible);
+            Assert.True(keyed.Find<Control>("ChangeHistoryHeading").IsVisible);
 
             PressKey(keyed.Window, Key.Down, PhysicalKey.ArrowDown);
             Assert.Same(keyed.Find<ListBoxItem>("NavSettings"), nav.SelectedItem);
@@ -172,9 +192,14 @@ public sealed class SettingsPageTests
             Assert.True(keyed.Find<Control>("SettingsHeading").IsVisible);
 
             PressKey(keyed.Window, Key.Up, PhysicalKey.ArrowUp);
-            Assert.Same(keyed.Find<ListBoxItem>("NavAbuseIpDb"), nav.SelectedItem);
-            Assert.True(keyed.Find<Control>("AbuseIpDbPage").IsVisible);
-            Assert.True(keyed.Find<Control>("AbuseIpDbHeading").IsVisible);
+            Assert.Same(keyed.Find<ListBoxItem>("NavChangeHistory"), nav.SelectedItem);
+            Assert.True(keyed.Find<Control>("ChangeHistoryPage").IsVisible);
+            Assert.True(keyed.Find<Control>("ChangeHistoryHeading").IsVisible);
+
+            PressKey(keyed.Window, Key.Up, PhysicalKey.ArrowUp);
+            Assert.Same(keyed.Find<ListBoxItem>("NavSavedFeeds"), nav.SelectedItem);
+            Assert.True(keyed.Find<Control>("SavedFeedsPage").IsVisible);
+            Assert.True(keyed.Find<Control>("SavedFeedsHeading").IsVisible);
         }
         finally
         {
@@ -356,6 +381,47 @@ public sealed class SettingsPageTests
             Assert.Equal(32m, shown.Find<NumericUpDown>("IPv4PrefixBox").Maximum);
             Assert.Equal(1m, shown.Find<NumericUpDown>("IPv6PrefixBox").Minimum);
             Assert.Equal(128m, shown.Find<NumericUpDown>("IPv6PrefixBox").Maximum);
+        }
+        finally
+        {
+            shown.Window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task TheRefreshTimerSectionComesAfterTheKeepDaysAndItsBoxIsOnOnlyWhileTicked()
+    {
+        Shown shown = await ShowAsync();
+        try
+        {
+            CheckBox timer = shown.Find<CheckBox>("RefreshAllOnTimerBox");
+            NumericUpDown hours = shown.Find<NumericUpDown>("RefreshAllEveryHoursBox");
+            NumericUpDown keepDays = shown.Find<NumericUpDown>("AbuseIpDbKeepDaysBox");
+            ScrollViewer page = shown.Find<ScrollViewer>("SettingsScroll");
+            double extentBefore = page.Extent.Height;
+
+            Assert.Equal(AppText.RefreshAllOnTimer, timer.Content);
+            Assert.Equal(AppText.RefreshAllOnTimer, AutomationProperties.GetName(timer));
+            Assert.Equal(AppText.RefreshAllEveryHoursLabel, AutomationProperties.GetName(hours));
+            Assert.False(timer.IsChecked == true);
+            Assert.Equal((decimal)RefreshAllLimits.MinHours, hours.Minimum);
+            Assert.Equal((decimal)RefreshAllLimits.MaxHours, hours.Maximum);
+            Assert.Equal((decimal?)RefreshAllLimits.DefaultHours, hours.Value);
+            Assert.False(hours.IsEffectivelyEnabled);
+            Assert.True(timer.TranslatePoint(default, keepDays)!.Value.Y > 0);
+            Assert.Same(shown.Find<StackPanel>("SettingsInputs"), timer.FindAncestorOfType<StackPanel>()!.Parent);
+
+            timer.IsChecked = true;
+            Settle(shown.Window);
+            Assert.True(hours.IsEffectivelyEnabled);
+            Assert.True(shown.Page.Settings.RefreshAllOnTimer);
+            Assert.Equal(AppText.ChangesNotSaved, shown.Find<TextBlock>("SettingsStatus").Text);
+
+            hours.Value = null;
+            Settle(shown.Window);
+            Assert.False(shown.Find<Button>("SettingsSaveButton").IsEffectivelyEnabled);
+            Assert.Equal(AppText.EnterRefreshAllHours, shown.Find<TextBlock>("SettingsStatus").Text);
+            Assert.Equal(extentBefore, page.Extent.Height);
         }
         finally
         {
@@ -583,7 +649,7 @@ public sealed class SettingsPageTests
         Shown shown = await ShowAsync(navigate: false);
         try
         {
-            foreach (string item in new[] { "NavLookup", "NavGoogleCloud", "NavAzure", "NavAws", "NavAbuseIpDb", "NavSettings", "NavLookup" })
+            foreach (string item in new[] { "NavLookup", "NavGoogleCloud", "NavAzure", "NavAws", "NavCloudSearch", "NavAbuseIpDb", "NavSettings", "NavLookup" })
             {
                 Navigate(shown, item);
                 Assert.False(shown.Find<Button>("AddExceptionButton").IsDefault);
@@ -762,7 +828,7 @@ public sealed class SettingsPageTests
             Assert.True(Math.Abs(frame.Extent.Height - frame.Viewport.Height) < 0.5,
                 $"The frame is {frame.Extent.Height} px high in a {frame.Viewport.Height} px viewport.");
             Assert.True(page.Extent.Height > page.Viewport.Height, "The Settings page does not scroll.");
-            Assert.Equal(755d, shown.Find<Border>("PageFrame").MinHeight);
+            Assert.Equal(598d, shown.Find<Border>("PageFrame").MinHeight);
         }
         finally
         {

@@ -17,7 +17,7 @@ Each release's source is the commit its tag points to, and `main` holds the late
 ```bash
 git clone https://github.com/asfritecx/PoorMansFeed.git
 cd PoorMansFeed
-git checkout v1.2.1      # or any release's tag
+git checkout v1.3.0      # or any release's tag
 ```
 
 ## Run, build and test

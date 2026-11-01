@@ -85,7 +85,7 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
     [Fact]
     public async Task ModSecurity_Only_Never_Touches_Or_Names_An_Existing_FortiGate_File()
     {
-        // The exceptions empty the IPv4 family, so its old file in each folder is a candidate for OldFilesLeft
+        // The exceptions empty the IPv4 family, so its old file in each folder is a candidate for emptying
         _ipinfo.Exceptions = RangeSubtractionTests.List("34.1.0.0/16");
         _ipinfo.Settings = _ipinfo.Settings with { WriteFortigateFeeds = false, WriteModSecurityLists = true };
         string oldFortigate = Fortigate("Azure_Test_ipv4.txt");
@@ -101,8 +101,9 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
         CloudFeedWriteResult written = await engine.WriteAsync(await PlanAll(engine, "34.1.0.0/16", "2001:db8::/32"), [], CancellationToken.None);
 
         Assert.Equal(CloudFeedWriteFailure.None, written.Failure);
-        Assert.Equal([ModSecurity("Azure_Test_ipv6.txt")], written.Files.ToArray());
-        Assert.Equal([oldModSecurity], written.OldFilesLeft!);
+        Assert.Equal([oldModSecurity, ModSecurity("Azure_Test_ipv6.txt")], written.Files.ToArray());
+        Assert.Equal([oldModSecurity], written.EmptiedFiles!);
+        Assert.Null(written.OldFilesLeft);
         Assert.Equal("old fortigate\n", File.ReadAllText(oldFortigate));
         Assert.Equal(stamp, File.GetLastWriteTimeUtc(oldFortigate));
         Assert.Equal([oldFortigate], Directory.GetFiles(Path.GetDirectoryName(oldFortigate)!));
@@ -137,7 +138,7 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
     }
 
     [Fact]
-    public async Task Exceptions_Cut_Both_Copies_Alike_And_An_Emptied_Family_Names_Each_Old_File_FortiGate_First()
+    public async Task Exceptions_Cut_Both_Copies_Alike_And_An_Emptied_Family_Rewrites_Each_Old_File_Header_Only()
     {
         _ipinfo.Exceptions = RangeSubtractionTests.List("34.1.0.0/17", "2001:db8::/32");
         _ipinfo.Settings = _ipinfo.Settings with { WriteModSecurityLists = true };
@@ -145,19 +146,22 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
         string oldModSecurity = ModSecurity("Azure_Test_ipv6.txt");
         Directory.CreateDirectory(Path.GetDirectoryName(oldFortigate)!);
         Directory.CreateDirectory(Path.GetDirectoryName(oldModSecurity)!);
-        File.WriteAllText(oldFortigate, "old\n");
-        File.WriteAllText(oldModSecurity, "old\n");
+        File.WriteAllText(oldFortigate, "2001:db8::/32\n");
+        File.WriteAllText(oldModSecurity, "2001:db8::/32\n");
         CloudFeedEngine engine = Engine();
 
         CloudFeedWriteResult written = await engine.WriteAsync(await PlanAll(engine, "34.1.0.0/16", "2001:db8::/32"), [], CancellationToken.None);
 
         Assert.Equal(CloudFeedWriteFailure.None, written.Failure);
-        Assert.Equal([Fortigate("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv4.txt")], written.Files.ToArray());
-        Assert.Equal([oldFortigate, oldModSecurity], written.OldFilesLeft!);
+        string[] ipv4 = [Fortigate("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv4.txt")];
+        Assert.Equal([ipv4[0], oldFortigate, ipv4[1], oldModSecurity], written.Files.ToArray());
+        Assert.Equal([oldFortigate, oldModSecurity], written.EmptiedFiles!);
+        Assert.Equal([ipv4[1], oldModSecurity], written.ModSecurityFiles!);
+        Assert.Null(written.OldFilesLeft);
         Assert.Equal(1, written.ExceptionCuts);
         Assert.Equal(1, written.ExceptionRemovals);
         Assert.Equal(1, written.RangesWritten);
-        foreach (string file in written.Files)
+        foreach (string file in ipv4)
         {
             string text = File.ReadAllText(file);
             Assert.Contains("# Entries: 1 (1 confirmed by IPinfo, 0 added without confirmation)" + Nl +
@@ -165,8 +169,23 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
             Assert.EndsWith(Nl + "34.1.128.0/17" + Nl, text);
         }
 
-        Assert.Equal("old\n", File.ReadAllText(oldFortigate));
-        Assert.Equal("old\n", File.ReadAllText(oldModSecurity));
+        string body =
+            "# Ranges: Test source" + Nl +
+            "# Address Family: IPv6" + Nl +
+            "# Generated: 2026-03-19 04:05:06 UTC" + Nl +
+            "# Entries: 0 (0 confirmed by IPinfo, 0 added without confirmation)" + Nl +
+            "# Exceptions: 0 ranges cut, 1 removed" + Nl +
+            "# Confirmed against: IPinfo Lite dataset of 2026-10-08" + Nl +
+            "# IP address data powered by IPinfo (https://ipinfo.io)" + Nl;
+        Assert.Equal(FortigateTitle + Nl + body, File.ReadAllText(oldFortigate));
+        Assert.Equal(ModSecurityTitle + Nl + body, File.ReadAllText(oldModSecurity));
+        FeedFormat.AssertWellFormed(File.ReadAllBytes(oldModSecurity));
+        Assert.Equal(written.Files, written.FeedChanges!.Select(change => change.Path));
+        foreach (FeedFileChange change in written.FeedChanges!.Where(change => written.EmptiedFiles!.Contains(change.Path)))
+        {
+            Assert.Equal(["2001:db8::/32"], change.IPv6.Removed);
+            Assert.Empty(change.IPv6.Added);
+        }
     }
 
     [Fact]
@@ -211,9 +230,25 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
         Assert.Equal(0, written.LargeRangesLeftOut);
         Assert.Equal(1, written.ExceptionCuts);
         Assert.Equal(1, written.RangesWritten);
-        Assert.Equal([Fortigate("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv4.txt")], written.Files.ToArray());
-        Assert.Equal([oldFortigate, oldModSecurity], written.OldFilesLeft!);
-        foreach (string file in written.Files)
+        string[] ipv4 = [Fortigate("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv4.txt")];
+        Assert.Equal([ipv4[0], oldFortigate, ipv4[1], oldModSecurity], written.Files.ToArray());
+        Assert.Equal([oldFortigate, oldModSecurity], written.EmptiedFiles!);
+        Assert.Null(written.OldFilesLeft);
+        foreach (string file in new[] { oldFortigate, oldModSecurity })
+        {
+            string text = File.ReadAllText(file);
+            Assert.Contains(
+                "# Entries: 0 (0 confirmed by IPinfo, 0 added without confirmation)" + Nl +
+                "# Left out: 1 range covering every address: ::/0" + Nl +
+                "# Confirmed against: IPinfo Lite dataset of 2026-10-08" + Nl +
+                "# IP address data powered by IPinfo (https://ipinfo.io)" + Nl,
+                text);
+            Assert.DoesNotContain("# Exceptions:", text);
+            Assert.All(text.Split(Nl, StringSplitOptions.RemoveEmptyEntries), line => Assert.StartsWith("#", line));
+            FeedFormat.AssertWellFormed(File.ReadAllBytes(file));
+        }
+
+        foreach (string file in ipv4)
         {
             string text = File.ReadAllText(file);
             Assert.Contains(
@@ -239,7 +274,8 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
         Assert.Equal(CloudFeedWriteFailure.NothingToWrite, written.Failure);
         Assert.Equal(1, written.WholeRangesLeftOut);
         Assert.Empty(written.Files);
-        Assert.Empty(written.OldFilesLeft!);
+        Assert.Null(written.OldFilesLeft);
+        Assert.Null(written.EmptiedFiles);
         Assert.False(Directory.Exists(_temp.ExportFolder));
     }
 
@@ -318,7 +354,7 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
     }
 
     [Fact]
-    public async Task A_Failed_Write_Names_The_Emptied_Old_Files_Then_The_Failed_File_Then_The_Untried_Ones()
+    public async Task A_Failed_Write_Names_The_Failed_File_Then_Every_Untried_One_Emptied_Or_Not()
     {
         _ipinfo.Exceptions = RangeSubtractionTests.List("2001:db8::/32");
         _ipinfo.Settings = _ipinfo.Settings with { WriteModSecurityLists = true };
@@ -336,9 +372,37 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
         Assert.Equal(CloudFeedWriteFailure.WriteFailed, written.Failure);
         Assert.Equal(Fortigate("Azure_Test_ipv4.txt"), written.FailedFile);
         Assert.Empty(written.Files);
+        Assert.Null(written.EmptiedFiles);
         Assert.Equal(
-            [Fortigate("Azure_Test_ipv6.txt"), ModSecurity("Azure_Test_ipv6.txt"), Fortigate("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv4.txt")],
+            [Fortigate("Azure_Test_ipv4.txt"), Fortigate("Azure_Test_ipv6.txt"), ModSecurity("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv6.txt")],
             written.OldFilesLeft!);
+    }
+
+    [Fact]
+    public async Task A_Failure_After_An_Emptied_File_Keeps_It_Written_And_Names_The_Failed_And_Untried_Files()
+    {
+        _ipinfo.Exceptions = RangeSubtractionTests.List("34.1.0.0/16");
+        _ipinfo.Settings = _ipinfo.Settings with { WriteModSecurityLists = true };
+        string[] names = ["Azure_Test_ipv4.txt", "Azure_Test_ipv6.txt"];
+        foreach (string file in names.Select(Fortigate).Concat(names.Select(ModSecurity)))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, "old\n");
+        }
+        Directory.CreateDirectory(Fortigate("Azure_Test_ipv6.txt") + ".tmp");
+        CloudFeedEngine engine = Engine();
+
+        CloudFeedWriteResult written = await engine.WriteAsync(await PlanAll(engine, "34.1.0.0/16", "2001:db8::/32"), [], CancellationToken.None);
+
+        Assert.Equal(CloudFeedWriteFailure.WriteFailed, written.Failure);
+        Assert.Equal(Fortigate("Azure_Test_ipv6.txt"), written.FailedFile);
+        Assert.Equal([Fortigate("Azure_Test_ipv4.txt")], written.Files.ToArray());
+        Assert.Null(written.EmptiedFiles);
+        Assert.Contains("# Entries: 0 (0 confirmed by IPinfo", File.ReadAllText(Fortigate("Azure_Test_ipv4.txt")));
+        Assert.Equal(
+            [Fortigate("Azure_Test_ipv6.txt"), ModSecurity("Azure_Test_ipv4.txt"), ModSecurity("Azure_Test_ipv6.txt")],
+            written.OldFilesLeft!);
+        Assert.Equal("old\n", File.ReadAllText(ModSecurity("Azure_Test_ipv4.txt")));
     }
 
     [Fact]
@@ -374,7 +438,7 @@ public sealed class ModSecurityFeedCloudTests : IDisposable
         _ipinfo.OverlapFunc ??= blocks => Found(blocks, _ => [Group("microsoft.com")]);
         FeedPrefix[] prefixes = cidrs.Select(Prefix).ToArray();
         CheckResult result = await engine.CheckAsync(new FeedDescription("microsoft.com", ["Ranges: Test source"], "Azure_Test"), prefixes,
-                                                     CancellationToken.None);
+                                                     CloudFeedEngineTests.TestPick, CancellationToken.None);
         Assert.Equal(CheckFailure.None, result.Failure);
         return engine.PlanWrite(result.Check!, result.Check!.Ranges.Select(range => range.Prefix.Block).ToList());
     }

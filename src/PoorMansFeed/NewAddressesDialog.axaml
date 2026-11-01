@@ -21,6 +21,7 @@
             <ContextMenu Opening="MenuOpening">
               <MenuItem x:Name="OpenInIpinfoItem" Header="{x:Static local:AppText.OpenInIpinfo}" Click="OpenInIpinfoClicked" />
               <MenuItem x:Name="OpenInAbuseIpDbItem" Header="{x:Static local:AppText.OpenInAbuseIpDb}" Click="OpenInAbuseIpDbClicked" />
+              <MenuItem x:Name="CopyAddressItem" Header="{x:Static local:AppText.CopyAddress}" Click="CopyAddressClicked" />
             </ContextMenu>
           </ItemsControl.ContextMenu>
           <ItemsControl.ItemsPanel>

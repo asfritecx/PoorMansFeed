@@ -36,7 +36,7 @@ public interface IAbuseIpDbService
     /// Every local refusal comes before the key is read or anything is sent. Once a 2xx answer's headers are in, the
     /// download is spent: its body is read and merged even if the caller cancels, and Counted is true.
     /// </summary>
-    Task<AbuseDownloadResult> DownloadBlacklistAsync(CancellationToken ct);
+    Task<AbuseDownloadResult> DownloadBlacklistAsync(AbuseDownloadPolicy? policy, CancellationToken ct);
 
     /// <summary>Removes the rolling list. None, or StorageError when it couldn't be removed.</summary>
     Task<AbuseIpDbFailure> ClearListAsync(CancellationToken ct);
@@ -58,4 +58,26 @@ public interface IAbuseIpDbService
     /// from the written feed. Doesn't wait for a download, clear or write; it reads the list as it is before or after.
     /// </summary>
     Task<AbuseNetworksResult> FindOffendingNetworksAsync(IProgress<GroupingProgress>? progress, CancellationToken ct);
+
+    /// <summary>Rises each time a download merged into the list or Clear list removed it.</summary>
+    long ListVersion { get; }
+
+    /// <summary>
+    /// Raised after the download gate is free, on the caller's thread, so two calls can deliver theirs out of order:
+    /// a listener compares the change's Version with the last it saw, or reads ListVersion. Listeners marshal.
+    /// </summary>
+    event EventHandler<AbuseListChange>? ListChanged;
+
+    /// <summary>
+    /// A snapshot of the call holding the download gate, or null while none does. Set first inside each hold and
+    /// cleared once the gate is free, so after a clear it may already name the next call's work.
+    /// </summary>
+    AbuseWork? WorkUnderWay { get; }
+
+    /// <summary>Raised as <see cref="WorkUnderWay"/> is set and cleared, the clear once the gate is free.</summary>
+    event EventHandler? WorkChanged;
+
+    /// <summary>Writes the saved rolling feed again from the list, with no download; takes the download gate.</summary>
+    internal Task<RollingFeedRefresh> RefreshFeedAsync(CancellationToken ct) =>
+        Task.FromResult(new RollingFeedRefresh(RollingRefreshOutcome.SavedFeedsUnavailable, null, null));
 }

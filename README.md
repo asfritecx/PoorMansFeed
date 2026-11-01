@@ -29,6 +29,7 @@ The tool is in active use. It is still a manual process today: you build a feed 
 
 - **Close off cloud regions your users never come from.** Write a feed of a Google Cloud region, an Azure service tag or an AWS region, and deny it at the firewall.
 - **Block a hosting provider that keeps turning up in your logs.** Search an address from a log, see which AS holds it, and export every network of that AS as a feed.
+- **Find out which cloud service an address belongs to.** Look an address from your logs up in the saved Google Cloud, Azure and AWS ranges to see its service and region.
 - **Check an address before you act on it.** A lookup shows its network, country, ASN and the AS owner's domain, so you block the provider you meant to.
 - **Allow only the cloud services you depend on.** Use a feed as the source of an allow rule, so that only one Azure service tag, say, can reach an endpoint.
 - **Keep cloud regions in countries you must not serve off your network,** such as the AWS China regions. A region is where the servers are, not who rents them (see [From AWS ranges](https://github.com/asfritecx/PoorMansFeed/wiki/Building-feeds#from-aws-ranges)).
@@ -40,16 +41,19 @@ Before you deny a provider, check what you rely on that runs there: payment and 
 ## Features
 
 - **ASN feeds:** every network IPinfo lists for an AS (`AS15169` or `15169`), written as a feed and a text report
-- **Cloud provider feeds:** Google Cloud ranges for one region, Azure ranges for one service tag, and AWS ranges for one service and region, each confirmed against the local dataset
+- **Cloud provider feeds:** Google Cloud ranges for one region, Azure ranges for one service tag, and AWS ranges for one service and region, each confirmed against the local dataset, with **Tick all** and **Untick all**
 - **FortiGate and ModSecurity:** every feed is written for each feed type you tick in Settings, as a FortiGate threat feed, a ModSecurity IP list or both, with the same entries
 - **ModSecurity rules:** after a write, **ModSecurity rules…** gives one ready-made rule per list, which denies the matches, closes the connection with no reply or only logs them, to copy into your nginx or Apache configuration; each list keeps its rule id from one write to the next
-- **Lookups:** search by ASN or by IPv4 or IPv6 address, copy the results to the clipboard, tab-separated, for a spreadsheet, and open a result on ipinfo.io or AbuseIPDB's website from its right-click menu
+- **Lookups:** search by ASN or by IPv4 or IPv6 address, copy the results to the clipboard, tab-separated, for a spreadsheet, and open a result on ipinfo.io or AbuseIPDB's website, or copy its network or AS number, from its right-click menu
+- **Cloud address lookup:** find an address in the saved Google Cloud, Azure and AWS ranges, with the service, region and scope of each range that holds it
 - **Abuse scores:** check a searched address against [AbuseIPDB](https://www.abuseipdb.com) for its abuse confidence score and reports, only when you press **Check AbuseIPDB**; private and reserved addresses are never sent
 - **AbuseIPDB blacklist feed:** download AbuseIPDB's blacklist into a rolling list kept on your computer, write it as a feed, and see which networks hold the listed addresses
+- **Saved feeds and Refresh all:** every feed you write is saved with the ranges you ticked; **Refresh all** updates the dataset and the sources, then writes again each saved feed whose entries changed, by hand or every few hours while the app is open, and a feed you no longer need can be retired, which empties its files instead of deleting them
+- **Change history:** every address or network each feed write added or removed, with why, kept for a year and searchable by address or network
 - **Large range check:** networks broader than a set size are listed before anything is written, and are left out unless you tick them
 - **Exceptions:** networks that must never be blocked, such as your offices and partners, are cut out of every feed, FortiGate and ModSecurity, before it is written
 - **Safe updates:** the dataset is checked against the SHA-256 that IPinfo publishes, built alongside the current copy and swapped in only when complete, so a cancelled or failed update leaves the existing data in use
-- **Saved cloud files:** the Azure service tags file and the AWS ranges file are kept locally and checked for a newer version when their page opens
+- **Saved cloud files:** the Google Cloud ranges file, the Azure service tags file and the AWS ranges file are kept locally and checked for a newer version when their page opens
 - **Per-user storage:** no administrator rights needed and nothing written to the program folder; the IPinfo API token and the AbuseIPDB API key are kept by the operating system (DPAPI on Windows, the login keychain on macOS), and your settings and exceptions are kept in one encrypted file whose key the operating system keeps the same way
 
 ## Data sources
@@ -129,10 +133,10 @@ The SignPath Foundation signs open-source Windows apps for free, for projects wi
 ## First run
 
 1. The app asks for your IPinfo API token. On macOS it is saved in your login keychain. On Windows it is saved in a file protected with DPAPI, so only your Windows account can decrypt it.
-2. It downloads the dataset (about 32 MB compressed) and builds the search index. The window shows progress.
+2. It downloads the dataset (about 32 MB compressed) and builds the search index. The dataset status at the top right of the window shows the progress; choose it, then **Show progress**, to see each step.
 3. When it finishes, search from **IPInfo Lookup**, the page the app opens on.
 
-Each time the app opens, it checks whether a newer dataset is available. If one is, choose **Update dataset**. You can search while the check runs, but not while an update is running. IPinfo updates the data daily at about 4 PM UTC and allows 10 dataset downloads a day per IP address, so one update a day is enough.
+Each time the app opens, it checks whether a newer dataset is available, and the dataset status at the top right of the window shows the answer. If one is, choose the status, then **Update dataset…** (see [Keeping the dataset up to date](https://github.com/asfritecx/PoorMansFeed/wiki/Searching#keeping-the-dataset-up-to-date)). You can search while the check runs, but not while an update is running. IPinfo updates the data daily at about 4 PM UTC and allows 10 dataset downloads a day per IP address, so one update a day is enough.
 
 To use a different token, open **Settings** and choose **Reset token** under API keys (on macOS, **Reset API token…** in the app menu does the same). It removes the saved token and asks for a new one.
 
@@ -140,8 +144,10 @@ To use a different token, open **Settings** and choose **Reset token** under API
 
 How to use the app is in the [wiki](https://github.com/asfritecx/PoorMansFeed/wiki), which describes the latest release:
 
-- [Searching](https://github.com/asfritecx/PoorMansFeed/wiki/Searching): lookups by ASN or address, and checking an address with AbuseIPDB
+- [Searching](https://github.com/asfritecx/PoorMansFeed/wiki/Searching): lookups by ASN or address, checking an address with AbuseIPDB, and keeping the dataset up to date
+- [Finding an address in cloud ranges](https://github.com/asfritecx/PoorMansFeed/wiki/Finding-an-address-in-cloud-ranges): which saved Google Cloud, Azure or AWS range holds an address
 - [Building feeds](https://github.com/asfritecx/PoorMansFeed/wiki/Building-feeds): feeds from an ASN, Google Cloud, Azure, AWS and the AbuseIPDB blacklist, large ranges, exceptions and the export folder
+- [Keeping feeds current](https://github.com/asfritecx/PoorMansFeed/wiki/Keeping-feeds-current): saved feeds, retiring a feed, Refresh all and its timer, and the change history
 - [Using a feed on a FortiGate](https://github.com/asfritecx/PoorMansFeed/wiki/Using-a-feed-on-a-FortiGate): serving a feed and adding it as an external connector
 - [Using a list with ModSecurity](https://github.com/asfritecx/PoorMansFeed/wiki/Using-a-list-with-ModSecurity): the lists, the rules that load them, and what to know on nginx and Apache
 - [Settings and data](https://github.com/asfritecx/PoorMansFeed/wiki/Settings-and-data): every setting, where the app keeps its data, and what to do if the settings file can't be opened
@@ -152,13 +158,20 @@ How to build the app from its source is in [BUILDING.md](BUILDING.md), which goe
 
 ### Feature set 1
 
-Planned next. AbuseIPDB is now a source (see [From the AbuseIPDB blacklist](https://github.com/asfritecx/PoorMansFeed/wiki/Building-feeds#from-the-abuseipdb-blacklist)), and every feed can now be written as a ModSecurity IP list too, with the rules to load it (see [Using a list with ModSecurity](https://github.com/asfritecx/PoorMansFeed/wiki/Using-a-list-with-ModSecurity)); the aim is to keep feeds current on your firewalls without building and copying each one by hand.
+Planned next. AbuseIPDB is now a source (see [From the AbuseIPDB blacklist](https://github.com/asfritecx/PoorMansFeed/wiki/Building-feeds#from-the-abuseipdb-blacklist)), every feed can now be written as a ModSecurity IP list too, with the rules to load it (see [Using a list with ModSecurity](https://github.com/asfritecx/PoorMansFeed/wiki/Using-a-list-with-ModSecurity)), and since 1.3.0 the app saves every feed you write and **Refresh all** brings them up to date, by hand or on a timer while the app is open, with a searchable history of every change and Tick all and Untick all on the cloud pages (see [Keeping feeds current](https://github.com/asfritecx/PoorMansFeed/wiki/Keeping-feeds-current)). The aim is to keep feeds current on your firewalls without building and copying each one by hand.
 
 **Keeping feeds current**
 
-- **Saved feeds:** the app remembers every feed you write, with the ranges you ticked. **Refresh all** rebuilds them from the latest data under the same rules as when you wrote them: confirmed ranges go in, and new mixed or large ranges stay out until you tick them.
 - **Publishing to Azure Blob Storage:** feeds are uploaded to a private container with a SAS URL that can only write to it, kept by the operating system. A feed is uploaded only when its ranges have changed. Each feed has a read-only URL to give to a FortiGate external connector or a ModSecurity rule, and the app warns before a SAS URL expires. AbuseIPDB's terms don't allow its data to be republished, so its feed goes only to private storage.
-- **Refreshing with the window closed:** a command-line option runs Refresh all and the uploads without opening the window, so Windows Task Scheduler or macOS launchd can keep feeds current on a schedule. While the app is open, it can also refresh on a timer.
+- **Refreshing with the window closed:** a command-line option runs Refresh all and the uploads without opening the window, so Windows Task Scheduler or macOS launchd can keep feeds current on a schedule.
+- **Blocking at Cloudflare:** for your sites behind Cloudflare, the app keeps one WAF custom rule up to date with the AS numbers of the ASN feeds you export and with a custom list of the Google Cloud, Azure and AWS ranges you write (up to 10,000 outside Enterprise). It sends single addresses, such as the AbuseIPDB rolling feed, as IP Access rules for the whole account, of which every plan allows 50,000. It needs one of your zone's custom rules (the Free plan has five) and one custom list, and never changes any other. Your feed exceptions stay out of all three, and only what changed is sent. The API token only needs to edit those, and the operating system keeps it.
+- **Syncing over SFTP:** the feeds that changed are uploaded to a folder on your own server, such as the folder a ModSecurity rule reads or the web folder a FortiGate connector pulls from. Each file is uploaded under a temporary name and then renamed into place, so nothing ever reads half a file (a server that can't rename over a file isn't used), and the server's host key is confirmed the first time you connect and checked on every sync after that.
+
+**Easier to use**
+
+- **Test and preview:** a Test button for each upload target, and a preview of what an upload will add and remove before the first one.
+- **All ModSecurity rules at once:** one button builds the rules for every ModSecurity list you've written, and a SAS link's expiry warning shows on the pages that write.
+- **Smaller fixes:** status lines that fit the smallest window, a keyboard shortcut to copy a row, and contents links in Help.
 
 **Smaller feeds**
 

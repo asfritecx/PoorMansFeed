@@ -20,7 +20,14 @@ public sealed class IpDatabase(string path)
     /// The networks of an ASN, IPv4 first. With includeIPv6 false the IPv6 rows are left out, whatever the
     /// database holds, so a database built with IPv6 still answers as IPv4 only while the setting is off.
     /// </summary>
-    public List<NetworkRecord> QueryAsn(uint asn, int? limit, bool includeIPv6 = true)
+    public List<NetworkRecord> QueryAsn(uint asn, int? limit, bool includeIPv6 = true) =>
+        QueryAsn(asn, limit, includeIPv6, out _);
+
+    /// <summary>
+    /// <paramref name="answeredBy"/> is read on the same connection, so it names the file that answered even just
+    /// after a <see cref="Promote"/>. Null for a missing file, a metadata read that fails or unparsable metadata.
+    /// </summary>
+    public List<NetworkRecord> QueryAsn(uint asn, int? limit, bool includeIPv6, out DatasetInfo? answeredBy)
     {
         if (limit is not null)
             ArgumentOutOfRangeException.ThrowIfNegative(limit.Value);
@@ -29,14 +36,54 @@ public sealed class IpDatabase(string path)
                    + "WHERE asn = @asn" + Ipv4Only(includeIPv6) + " ORDER BY length(start_ip), start_ip"
                    + (limit is null ? "" : " LIMIT @limit");
 
-        return Query(conn =>
+        DatasetInfo? label = null;
+        List<NetworkRecord> rows = Query(conn =>
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = sql;
             cmd.Parameters.AddWithValue("@asn", AsnText(asn));
             if (limit is not null)
                 cmd.Parameters.AddWithValue("@limit", (long)limit.Value);
-            return ReadRows(cmd);
+            List<NetworkRecord> found = ReadRows(cmd);
+            label = LabelOf(conn);
+            return found;
+        }, []);
+        answeredBy = label;
+        return rows;
+    }
+
+    /// <summary>The smallest non-empty AS name of each ASN; an ASN with none, or a missing file, is left out.</summary>
+    public Dictionary<uint, string> QueryAsNames(IReadOnlyCollection<uint> asns)
+    {
+        ArgumentNullException.ThrowIfNull(asns);
+        uint[] wanted = asns.Distinct().ToArray();
+        if (wanted.Length == 0)
+            return [];
+
+        return Query(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            var names = new List<string>(wanted.Length);
+            for (int i = 0; i < wanted.Length; i++)
+            {
+                names.Add("@a" + i.ToString(CultureInfo.InvariantCulture));
+                cmd.Parameters.AddWithValue(names[i], AsnText(wanted[i]));
+            }
+            cmd.CommandText = "SELECT asn, MIN(as_name) FROM ip_data WHERE asn IN (" + string.Join(", ", names)
+                            + ") AND as_name <> '' GROUP BY asn;";
+
+            var found = new Dictionary<uint, string>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.IsDBNull(0) || reader.IsDBNull(1))
+                    continue;
+                string asn = reader.GetString(0);
+                if (asn.StartsWith("AS", StringComparison.Ordinal)
+                    && uint.TryParse(asn.AsSpan(2), NumberStyles.None, CultureInfo.InvariantCulture, out uint number))
+                    found[number] = reader.GetString(1);
+            }
+            return found;
         }, []);
     }
 
@@ -94,7 +141,7 @@ public sealed class IpDatabase(string path)
 
     /// <summary>
     /// <paramref name="answeredBy"/> is read on the same connection, so it names the file that answered even just
-    /// after a <see cref="Promote"/>. Null for a missing file or unparsable metadata; no metadata table throws.
+    /// after a <see cref="Promote"/>. Null for a missing file, a metadata read that fails or unparsable metadata.
     /// </summary>
     public List<NetworkOverlap> QueryOverlaps(IReadOnlyList<CidrBlock> blocks, bool includeIPv6, out DatasetInfo? answeredBy)
     {
@@ -164,7 +211,7 @@ public sealed class IpDatabase(string path)
             }
 
             // The schema version isn't checked: the live file was judged at start-up or built by this version
-            label = TryParseInfo(ReadMetadata(conn), out DatasetInfo? info) ? info : null;
+            label = LabelOf(conn);
             return results;
         }, []);
         answeredBy = label;
@@ -265,6 +312,26 @@ public sealed class IpDatabase(string path)
         var conn = new SqliteConnection(builder.ConnectionString);
         conn.Open();
         return conn;
+    }
+
+    // Only the label is lost when the metadata can't be read: the rows already answered from this connection
+    private static DatasetInfo? LabelOf(SqliteConnection conn)
+    {
+        try
+        {
+            return TryParseInfo(ReadMetadata(conn), out DatasetInfo? info) ? info : null;
+        }
+        catch (SqliteException ex)
+        {
+            Trace.TraceWarning($"The dataset's label couldn't be read (SQLite error {ex.SqliteErrorCode}).");
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            // A NULL cell, which only a file changed outside the app can hold
+            Trace.TraceWarning("The dataset's label couldn't be read (a NULL metadata value).");
+            return null;
+        }
     }
 
     private static Dictionary<string, string> ReadMetadata(SqliteConnection conn)
@@ -498,7 +565,9 @@ public sealed class IpDatabase(string path)
                 CommitBatch();
         }
 
-        /// <summary>Commits, creates the indexes, writes metadata and closes the file. The file is not promoted.</summary>
+        /// <summary>
+        /// Commits, creates the indexes, writes metadata and closes the file. The file is not promoted.
+        /// </summary>
         public void Complete(string checksum, DateOnly downloadedOn, DateTimeOffset importedUtc)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(checksum);

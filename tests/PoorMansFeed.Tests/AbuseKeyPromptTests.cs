@@ -229,10 +229,14 @@ public sealed class AbuseKeyPromptTests
         public Task<AbuseCheckResult> CheckAsync(PoorMansFeed.Core.SearchQuery query, CancellationToken ct) => throw new NotSupportedException();
         public Task<AbuseListStatus> GetStatusAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task<AbuseNewAddresses> GetNewAddressesAsync(CancellationToken ct) => throw new NotSupportedException();
-        public Task<AbuseDownloadResult> DownloadBlacklistAsync(CancellationToken ct) => throw new NotSupportedException();
+        public Task<AbuseDownloadResult> DownloadBlacklistAsync(AbuseDownloadPolicy? policy, CancellationToken ct) => throw new NotSupportedException();
         public Task<AbuseIpDbFailure> ClearListAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task<AbuseFeedWriteResult> WriteFeedAsync(CancellationToken ct) => throw new NotSupportedException();
         public Task<AbuseFeedWriteResult> EmptyFeedAsync(CancellationToken ct) => throw new NotSupportedException();
+        public long ListVersion => 0;
+        public event EventHandler<AbuseListChange>? ListChanged { add { } remove { } }
+        public AbuseWork? WorkUnderWay => null;
+        public event EventHandler? WorkChanged { add { } remove { } }
         public Task<AbuseNetworksResult> FindOffendingNetworksAsync(IProgress<GroupingProgress>? progress, CancellationToken ct) =>
             throw new NotSupportedException();
     }

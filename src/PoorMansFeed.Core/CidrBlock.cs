@@ -97,6 +97,12 @@ public sealed class CidrBlock : IEquatable<CidrBlock>
         return starts;
     }
 
+    /// <summary>Length first: a shorter span sorts first, so 4 bytes could sit between 16-byte bounds.</summary>
+    internal bool Contains(ReadOnlySpan<byte> address) =>
+        address.Length == _start.Length
+        && address.SequenceCompareTo(_start) >= 0
+        && address.SequenceCompareTo(_end) <= 0;
+
     public bool Equals(CidrBlock? other) => other is not null && string.Equals(Text, other.Text, StringComparison.Ordinal);
 
     public override bool Equals(object? obj) => obj is CidrBlock other && Equals(other);

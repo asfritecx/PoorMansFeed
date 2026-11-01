@@ -1,7 +1,7 @@
 namespace PoorMansFeed.Core;
 
 /// <summary>The feed types a write can make, in write order. Each type's files go in its own folder.</summary>
-internal enum FeedType { Fortigate, ModSecurity }
+public enum FeedType { Fortigate, ModSecurity }
 
 internal static class FeedTypes
 {

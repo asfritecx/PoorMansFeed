@@ -320,6 +320,53 @@ public sealed class AbuseIpDbListTests : IDisposable
     }
 
     [Fact]
+    public void RecordSend_on_a_missing_file_creates_an_empty_list_and_stores_the_time()
+    {
+        AbuseIpDbList list = NewList();
+        DateTimeOffset at = Gen1.AddMinutes(3);
+
+        Assert.Equal(AbuseListState.Usable, list.RecordSend(at));
+
+        Assert.Equal(["abuseipdb.db"], FolderNames());
+        ListRead<ListFacts> facts = list.ReadFacts(LongAgo, TimeSpan.Zero);
+        Assert.Equal(AbuseListState.Usable, facts.State);
+        Assert.Equal(ListFacts.Empty with { LastSentAt = at }, facts.Value);
+        Dictionary<string, string> meta = Metadata();
+        Assert.Equal("1", meta["schema_version"]);
+        Assert.Equal(Unix(at), meta["last_sent_at"]);
+        Assert.False(meta.ContainsKey("last_attempt_at"));
+        Assert.Empty(Rows());
+    }
+
+    [Fact]
+    public void RecordSend_on_a_write_protected_list_is_a_storage_error_and_changes_nothing()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("File modes are a Unix check here.");
+            return;
+        }
+
+        AbuseIpDbList list = NewList();
+        Assert.Equal(AbuseListState.Usable, list.RecordAttempt(Gen1));
+        string hash = Sha(ListPath);
+        UnixFileMode mode = File.GetUnixFileMode(ListPath);
+        File.SetUnixFileMode(ListPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        try
+        {
+            Assert.Equal(AbuseListState.StorageError, list.RecordSend(Gen1.AddDays(1)));
+        }
+        finally
+        {
+            File.SetUnixFileMode(ListPath, mode);
+        }
+
+        Assert.Equal(hash, Sha(ListPath));
+        Assert.Null(list.ReadFacts(LongAgo, TimeSpan.Zero).Value!.LastSentAt);
+        Assert.False(Metadata().ContainsKey("last_sent_at"));
+    }
+
+    [Fact]
     public void RecordAttempt_on_a_write_protected_list_is_a_storage_error_and_changes_nothing()
     {
         if (OperatingSystem.IsWindows())

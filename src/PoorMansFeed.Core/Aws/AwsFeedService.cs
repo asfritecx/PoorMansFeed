@@ -3,11 +3,14 @@ using System.Globalization;
 using System.Security.Cryptography;
 using PoorMansFeed.Core;
 using PoorMansFeed.Core.CloudFeeds;
+using PoorMansFeed.Core.History;
 
 namespace PoorMansFeed.Core.Aws;
 
 public sealed class AwsFeedService : IAwsFeedService
 {
+    public event EventHandler<CloudSourceUpdated<AwsRangeCatalogue>>? SourceUpdated;
+
     /// <summary>
     /// The IPinfo as_domain values that count as AWS: amazon.com, plus the operators of cn-north-1 (Sinnet),
     /// cn-northwest-1 (Ningxia Western Cloud Data) and the AWS European Sovereign Cloud (aws.eu).
@@ -37,9 +40,31 @@ public sealed class AwsFeedService : IAwsFeedService
     public Task<AwsRangeCatalogue?> LoadCachedAsync(CancellationToken ct) => Task.Run(() =>
     {
         CachedAwsRanges? cached = _cache.TryRead();
-        if (cached is null)
-            return null;
+        return cached is null ? null : ParseSaved(cached);
+    }, ct);
 
+    public Task<SavedRanges<AwsRangeCatalogue>> LoadSavedAsync(CancellationToken ct) => Task.Run(() =>
+    {
+        try
+        {
+            if (!_cache.AnyFileExists())
+                return new SavedRanges<AwsRangeCatalogue>(SavedRangesState.NotSaved, null, null);
+
+            CachedAwsRanges? cached = _cache.TryRead();
+            AwsRangeCatalogue? catalogue = cached is null ? null : ParseSaved(cached);
+            return catalogue is null
+                ? new SavedRanges<AwsRangeCatalogue>(SavedRangesState.Unusable, null, null)
+                : new SavedRanges<AwsRangeCatalogue>(SavedRangesState.Read, catalogue, catalogue.Source.DownloadedUtc);
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
+        {
+            Trace.TraceWarning("The saved AWS ranges could not be read: " + ex.GetType().Name);
+            return new SavedRanges<AwsRangeCatalogue>(SavedRangesState.Unusable, null, null);
+        }
+    }, ct);
+
+    private static AwsRangeCatalogue? ParseSaved(CachedAwsRanges cached)
+    {
         ParsedAwsRanges? parsed = AwsRangesParser.TryParse(cached.Json);
         if (parsed is null)
         {
@@ -48,7 +73,7 @@ public sealed class AwsFeedService : IAwsFeedService
         }
 
         return new AwsRangeCatalogue(cached.Source, parsed.Services, parsed.SkippedPrefixes);
-    }, ct);
+    }
 
     public async Task<AwsLoadResult> CheckForUpdateAsync(AwsRangeCatalogue? current, CancellationToken ct)
     {
@@ -82,8 +107,11 @@ public sealed class AwsFeedService : IAwsFeedService
         if (current is not null && IsLower(fresh.Source.SyncToken, current.Source.SyncToken))
             Trace.TraceWarning("The published AWS file has a lower sync token than the saved one.");
 
-        await Task.Run(() => _cache.TryWrite(json, fresh.Source), ct);
-        return new AwsLoadResult(AwsUpdateStatus.Updated, AwsSourceFailure.None, fresh, _time.GetUtcNow());
+        bool saved = await Task.Run(() => _cache.TryWrite(json, fresh.Source), ct);
+        var result = new AwsLoadResult(AwsUpdateStatus.Updated, AwsSourceFailure.None, fresh, _time.GetUtcNow());
+        if (saved)
+            CloudSourceEvents.Tell(this, SourceUpdated, new CloudSourceUpdated<AwsRangeCatalogue>(fresh, fresh.Source.DownloadedUtc));
+        return result;
     }
 
     public Task<CheckResult> CheckAsync(AwsRangeCatalogue catalogue, AwsSelection selection, CancellationToken ct)
@@ -97,14 +125,16 @@ public sealed class AwsFeedService : IAwsFeedService
         if (service is not null)
             prefixes = selection.Region is null ? service.AllRegionsPrefixes : service.Find(selection.Region)?.Prefixes;
 
+        // Gone before the dataset is asked, so a pick that is gone is told apart from no dataset
         if (service is null || prefixes is null)
-            return _engine.CheckAsync(new FeedDescription(ConfirmationDomains, ["Ranges: AWS ip-ranges.json"], "AWS"), [], ct);
+            return Task.FromResult(new CheckResult(CheckFailure.PickGone, null));
 
         var ordered = new List<FeedPrefix>(prefixes.Count);
         foreach (AwsPrefix prefix in prefixes)
             ordered.Add(new FeedPrefix(prefix.Block, prefix.BorderGroup));
 
-        return _engine.CheckAsync(Describe(catalogue.Source, service.Name, selection.Region), ordered, ct);
+        return _engine.CheckAsync(Describe(catalogue.Source, service.Name, selection.Region), ordered,
+                                  new CloudFeedPick(FeedKind.Aws, null, false, null, service.Name, selection.Region), ct);
     }
 
     public CloudFeedPlan PlanWrite(CloudFeedCheck check, IReadOnlyCollection<CidrBlock> ticked) =>
@@ -112,6 +142,10 @@ public sealed class AwsFeedService : IAwsFeedService
 
     public Task<CloudFeedWriteResult> WriteAsync(CloudFeedPlan plan, IReadOnlyCollection<CidrBlock> includedLargeRanges, CancellationToken ct) =>
         _engine.WriteAsync(plan, includedLargeRanges, ct);
+
+    Task<CloudFeedRefresh> ICloudFeedService.RefreshAsync(CloudFeedCheck check, DateTimeOffset checkStartedUtc,
+                                                         CancellationToken ct) =>
+        _engine.RefreshAsync(check, checkStartedUtc, ct);
 
     /// <summary>
     /// The downloaded bytes are what is already saved. If the server now names them with a different ETag, the

@@ -85,6 +85,14 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         Assert.Equal(AppText.AbuseFacts(status, keepDays, Now), vm.FactsText);
     }
 
+    // The page's two lines split the whole line, which stays the tooltip and the name
+    private static void AssertUnavailableFacts(AbuseIpDbViewModel vm)
+    {
+        Assert.Equal(AppText.AbuseUnavailableHead, vm.FactsHeadText);
+        Assert.Equal(AppText.AbuseUnavailableDetail, vm.FactsDetailText);
+        Assert.Equal(AppText.AbuseKeysUnavailable, vm.FactsText);
+    }
+
     // A line of its own: the head is the whole line and the detail is empty
     private static void AssertFactsLine(AbuseIpDbViewModel vm, string line)
     {
@@ -100,7 +108,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         Assert.False(vm.IsAvailable);
         Assert.Equal(AppText.AbuseKeysUnavailable, vm.FactsText);
-        AssertFactsLine(vm, AppText.AbuseKeysUnavailable);
+        AssertUnavailableFacts(vm);
         Assert.Equal("", vm.StatusText);
         Assert.Equal("", vm.ActionText);
         Assert.All(AllCommands(vm), command => Assert.False(command.CanExecute(null)));
@@ -108,7 +116,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         await vm.ActivateAsync();
 
         Assert.Equal(AppText.AbuseKeysUnavailable, vm.FactsText);
-        AssertFactsLine(vm, AppText.AbuseKeysUnavailable);
+        AssertUnavailableFacts(vm);
         Assert.Equal(AppText.WriteAbuseFeedTooltip(true), vm.WriteFeedTooltip);
         Assert.False(vm.IsGrouping);
         Assert.Null(vm.PendingGrouping);
@@ -1187,7 +1195,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         Assert.Empty(_ui.Confirms);
         Assert.Empty(_abuse.Calls);
-        Assert.Equal(AppText.AbuseEmptyFeedBusy, vm.ActionText);
+        Assert.Equal(AppText.AbuseRetireFeedBusy, vm.ActionText);
         Assert.False(vm.IsWorking);
 
         other.Dispose();
@@ -1289,13 +1297,13 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         Task empty = vm.EmptyFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal([(AppText.EmptyAbuseFeedTitle, AppText.EmptyAbuseFeedBody, AppText.EmptyAbuseFeedButton)], _ui.Confirms);
+        Assert.Equal([(AppText.RetireAbuseFeedTitle, AppText.RetireAbuseFeedBody, AppText.RetireAbuseFeedButton)], _ui.Confirms);
         Assert.False(canStartWhileAsking);
         Assert.True(workingWhileAsking);
         Assert.Equal(1, _abuse.EmptyCalls);
         Assert.True(_gate.CanStart);
         Assert.True(vm.IsWorking);
-        Assert.Equal(AppText.EmptyingAbuseFeed, vm.ActionText);
+        Assert.Equal(AppText.RetiringAbuseFeed, vm.ActionText);
 
         emptying.SetResult();
         await empty;
@@ -1342,8 +1350,32 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
         Assert.Equal([nameof(IAbuseIpDbService.EmptyFeedAsync), nameof(IAbuseIpDbService.GetStatusAsync)], _abuse.Calls);
-        Assert.Equal(AppText.AbuseFeedEmptied(result, root), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedRetired(result, root), vm.ActionText);
         Assert.DoesNotContain(AppText.UnsavedSettingsNote, vm.ActionText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Retire_Feed_Leads_With_The_Record_That_Failed_And_Puts_Its_Sentence_Before_Try_Again()
+    {
+        string file = Path.Combine(Fortigate(Exports), "AbuseIPDB_rolling_ipv4.txt");
+        var failedRecord = new FeedRecordResult(FeedSaveOutcome.Saved, HistoryOutcome.Failed);
+        _abuse.EmptyResults.Enqueue(new AbuseFeedWriteResult(AbuseFeedWriteFailure.None, [file], 0, 0, 0, 0, [file])
+        {
+            Record = failedRecord,
+        });
+        _abuse.EmptyResults.Enqueue(new AbuseFeedWriteResult(AbuseFeedWriteFailure.WriteFailed, [], 0, 0, 0, 0, [])
+        {
+            Record = failedRecord,
+        });
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.EmptyFeedCommand.ExecuteAsync(null);
+        Assert.Equal("This change wasn't recorded in the history. Feed retired: "
+            + Path.Combine("fortigate", "AbuseIPDB_rolling_ipv4.txt") + " in " + Exports, vm.ActionText);
+
+        await vm.EmptyFeedCommand.ExecuteAsync(null);
+        Assert.Equal("The feed couldn't be retired. This change wasn't recorded in the history. Please try again or "
+            + "contact the Infra Team.", vm.ActionText);
     }
 
     [Fact]
@@ -1355,7 +1387,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal(AppText.AbuseFeedEmptyFailureLine(result, Exports), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedRetireFailureLine(result, Exports), vm.ActionText);
     }
 
     [Fact]
@@ -1365,7 +1397,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal(AppText.AbuseFeedEmptyFailureLine(ThrownWrite, Exports), vm.ActionText);
+        Assert.Equal(AppText.AbuseFeedRetireFailureLine(ThrownWrite, Exports), vm.ActionText);
         Assert.Equal(1, _abuse.StatusCalls);
     }
 
@@ -1669,6 +1701,54 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         Assert.Equal("Feed written: 100 IPv4 and 2 IPv6 addresses to the fortigate folder of " + root, vm.ActionText);
     }
 
+    public static TheoryData<FeedSaveOutcome, HistoryOutcome, string> WrittenNotes => new()
+    {
+        { FeedSaveOutcome.Saved, HistoryOutcome.Recorded, "" },
+        { FeedSaveOutcome.Saved, HistoryOutcome.NothingToRecord, "" },
+        { FeedSaveOutcome.StorageError, HistoryOutcome.Recorded, "The saved feed couldn't be updated. " },
+        { FeedSaveOutcome.TooMany, HistoryOutcome.Recorded, "The saved feed couldn't be updated. " },
+        { FeedSaveOutcome.Unavailable, HistoryOutcome.Recorded, "The saved feed couldn't be updated. " },
+        { FeedSaveOutcome.Saved, HistoryOutcome.Failed, "This change wasn't recorded in the history. " },
+        { FeedSaveOutcome.StorageError, HistoryOutcome.Failed,
+          "The saved feed couldn't be updated and this change wasn't recorded in the history. " },
+    };
+
+    // The record's note leads the written line, which can trim, and the unsaved note follows it
+    [Theory]
+    [MemberData(nameof(WrittenNotes))]
+    public async Task The_Written_Line_Says_When_The_Save_Or_The_History_Failed(FeedSaveOutcome save, HistoryOutcome history,
+                                                                                  string lead)
+    {
+        foreach (bool unsaved in new[] { false, true })
+        {
+            string file = Path.Combine(Exports, "fortigate", "AbuseIPDB_rolling_ipv4.txt");
+            _abuse.FeedResults.Enqueue(Feed() with { Files = [file], Record = new FeedRecordResult(save, history) });
+            using AbuseIpDbViewModel vm = Create(new FakeUnsavedSettings(unsaved));
+
+            await vm.WriteFeedCommand.ExecuteAsync(null);
+
+            Assert.Equal(lead + "Feed written: 100 IPv4 and 2 IPv6 addresses to the fortigate folder of " + Exports
+                + (unsaved ? " \u2014 unsaved changes on the Settings page weren't used" : ""), vm.ActionText);
+        }
+    }
+
+    [Fact]
+    public async Task A_Failed_Write_Whose_Save_Failed_Says_So_Before_The_Unsaved_Sentence()
+    {
+        string file = Path.Combine(Exports, "fortigate", "AbuseIPDB_rolling_ipv4.txt");
+        AbuseFeedWriteResult failed = new AbuseFeedWriteResult(AbuseFeedWriteFailure.WriteFailed, [file], 1, 0, 0, 0, [])
+            with { Record = new FeedRecordResult(FeedSaveOutcome.StorageError, HistoryOutcome.Failed) };
+        _abuse.FeedResults.Enqueue(failed);
+        using AbuseIpDbViewModel vm = Create(new FakeUnsavedSettings(true));
+
+        await vm.WriteFeedCommand.ExecuteAsync(null);
+
+        Assert.Equal("The feed couldn't be written. " + Path.Combine("fortigate", "AbuseIPDB_rolling_ipv4.txt")
+            + " was written before the failure. The saved feed couldn't be updated. This change wasn't recorded in the"
+            + " history. Unsaved changes on the Settings page weren't used. Please try again or contact the Infra Team.",
+            vm.ActionText);
+    }
+
     // The settings ticked a type, but the write found none ticked: its own line, with the unsaved note
     [Theory]
     [InlineData(true)]
@@ -1707,7 +1787,7 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         await vm.EmptyFeedCommand.ExecuteAsync(null);
 
-        Assert.Equal("Feed emptied: " + Path.Combine("fortigate", "AbuseIPDB_rolling_ipv6.txt") + " and "
+        Assert.Equal("Feed retired: " + Path.Combine("fortigate", "AbuseIPDB_rolling_ipv6.txt") + " and "
             + Path.Combine("modsecurity", "AbuseIPDB_rolling_ipv6.txt") + " in " + Exports, vm.ActionText);
     }
 
@@ -1888,10 +1968,14 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
         public Task<AbuseCheckResult> CheckAsync(SearchQuery query, CancellationToken ct) => inner.CheckAsync(query, ct);
         public Task<AbuseListStatus> GetStatusAsync(CancellationToken ct) => inner.GetStatusAsync(ct);
         public Task<AbuseNewAddresses> GetNewAddressesAsync(CancellationToken ct) => inner.GetNewAddressesAsync(ct);
-        public Task<AbuseDownloadResult> DownloadBlacklistAsync(CancellationToken ct) => inner.DownloadBlacklistAsync(ct);
+        public Task<AbuseDownloadResult> DownloadBlacklistAsync(AbuseDownloadPolicy? policy, CancellationToken ct) => inner.DownloadBlacklistAsync(policy, ct);
         public Task<AbuseIpDbFailure> ClearListAsync(CancellationToken ct) => inner.ClearListAsync(ct);
         public Task<AbuseFeedWriteResult> WriteFeedAsync(CancellationToken ct) => inner.WriteFeedAsync(ct);
         public Task<AbuseFeedWriteResult> EmptyFeedAsync(CancellationToken ct) => inner.EmptyFeedAsync(ct);
+        public long ListVersion => 0;
+        public event EventHandler<AbuseListChange>? ListChanged { add { } remove { } }
+        public AbuseWork? WorkUnderWay => null;
+        public event EventHandler? WorkChanged { add { } remove { } }
 
         public Task<AbuseNetworksResult> FindOffendingNetworksAsync(IProgress<GroupingProgress>? progress, CancellationToken ct)
         {
@@ -2831,6 +2915,71 @@ public sealed class AbuseIpDbViewModelTests : IDisposable
 
         Assert.Equal(AppText.WebPageOpenFailed, vm.ActionText);
         Assert.Empty(_ui.OpenedPages);
+    }
+
+    // ---- the offending networks: Copy AS number ----
+
+    [Fact]
+    public async Task Copy_AS_Number_Copies_The_Rows_AS_And_Keeps_The_Line()
+    {
+        using AbuseIpDbViewModel vm = Create();
+        OffendingNetworkRow row = OffendingNetworkRow.From(Group(15169));
+
+        // A line first, from a page that won't open, so a success that wrote one would show
+        _ui.FailOpenWebPage = true;
+        await vm.OpenNetworkInIpinfoCommand.ExecuteAsync(row);
+        Assert.Equal(AppText.WebPageOpenFailed, vm.ActionText);
+
+        Assert.True(vm.CopyAsNumberCommand.CanExecute(row));
+        await vm.CopyAsNumberCommand.ExecuteAsync(row);
+
+        Assert.Equal("AS15169", _ui.ClipboardText);
+        Assert.Equal(AppText.WebPageOpenFailed, vm.ActionText);
+    }
+
+    [Fact]
+    public async Task Copy_AS_Number_Needs_A_Row_And_An_Available_Page()
+    {
+        OffendingNetworkRow row = OffendingNetworkRow.From(Group(15169));
+        using var unavailable = new AbuseIpDbViewModel(null, _ipinfo, _ui, _gate, null, _time, Exports);
+        Assert.False(unavailable.CopyAsNumberCommand.CanExecute(row));
+        await unavailable.CopyAsNumberCommand.ExecuteAsync(row);
+        Assert.Null(_ui.ClipboardText);
+
+        AbuseIpDbViewModel vm = Create();
+        Assert.False(vm.CopyAsNumberCommand.CanExecute(null));
+        await vm.CopyAsNumberCommand.ExecuteAsync(null);
+        Assert.Null(_ui.ClipboardText);
+
+        // Not tied to the work gate: a copy is no page run
+        using (_gate.Hold())
+        {
+            Assert.True(vm.CopyAsNumberCommand.CanExecute(row));
+        }
+
+        int changed = 0;
+        vm.CopyAsNumberCommand.CanExecuteChanged += (_, _) => changed++;
+        vm.Dispose();
+        Assert.False(vm.CopyAsNumberCommand.CanExecute(row));
+        Assert.True(changed > 0);
+    }
+
+    [Fact]
+    public async Task A_Copy_That_Fails_Gives_Its_Line()
+    {
+        _ui.FailClipboard = true;
+        using AbuseIpDbViewModel vm = Create();
+
+        await vm.CopyAsNumberCommand.ExecuteAsync(OffendingNetworkRow.From(Group(15169)));
+
+        Assert.Equal(AppText.AsNumberCopyFailed, vm.ActionText);
+        Assert.Null(_ui.ClipboardText);
+
+        _ui.FailClipboard = false;
+        await vm.CopyAsNumberCommand.ExecuteAsync(OffendingNetworkRow.From(Group(15169)));
+
+        Assert.Equal("AS15169", _ui.ClipboardText);
+        Assert.Equal("", vm.ActionText);
     }
 
     // ---- the offending networks: dispose ----

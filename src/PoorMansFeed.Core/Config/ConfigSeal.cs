@@ -7,7 +7,7 @@ namespace PoorMansFeed.Core.Config;
 
 /// <summary>
 /// A section of config.db, sealed on its own. Each has its own row, named by <see cref="ConfigSeal.SectionName"/>,
-/// except the ModSecurity rule ids, sealed as a metadata value so that older builds still open the file.
+/// except the rule ids and the saved feeds, metadata values so that older builds still open the file.
 /// </summary>
 internal enum ConfigSection
 {
@@ -15,6 +15,7 @@ internal enum ConfigSection
     Exceptions,
     Accounting,
     ModSecurityRuleIds,
+    SavedFeeds,
 }
 
 /// <summary>
@@ -75,6 +76,7 @@ internal sealed class ConfigSeal : IDisposable
         ConfigSection.Exceptions => "exceptions",
         ConfigSection.Accounting => "accounting",
         ConfigSection.ModSecurityRuleIds => "modsecurity_rule_ids",
+        ConfigSection.SavedFeeds => "saved_feeds",
         _ => throw new ArgumentOutOfRangeException(nameof(section), section, null),
     };
 

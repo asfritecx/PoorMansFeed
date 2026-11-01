@@ -17,7 +17,7 @@ internal readonly record struct ListRead<T>(AbuseListState State, T? Value) wher
 /// <see cref="NewCount"/> is 0 when the last download's new-address set isn't known or wasn't asked for.
 /// </summary>
 internal sealed record ListFacts(int IPv4Count, int IPv6Count, DateTimeOffset? LastDownloadAt, DateTimeOffset? GeneratedAt,
-                                 int NewCount = 0)
+                                 int NewCount = 0, DateTimeOffset? LastSentAt = null)
 {
     /// <summary>A list with nothing in it, as a missing file reads.</summary>
     public static ListFacts Empty { get; } = new(0, 0, null, null);
@@ -64,6 +64,7 @@ internal sealed class AbuseIpDbList(string path)
     private const string LastDownloadAtKey = "last_download_at";
     private const string LastGeneratedAtKey = "last_generated_at";
     private const string LastAttemptAtKey = "last_attempt_at";
+    private const string LastSentAtKey = "last_sent_at";
     // The download whose merge made the new_addresses table; the set is read only while it equals last_download_at
     private const string NewAddressesAtKey = "new_addresses_at";
 
@@ -120,7 +121,8 @@ internal sealed class AbuseIpDbList(string path)
             }
 
             int newCount = countNew ? CountNewQuietly(conn, meta) : 0;
-            return new ListFacts(ipv4, ipv6, lastDownload, TimeOf(meta, LastGeneratedAtKey), newCount);
+            return new ListFacts(ipv4, ipv6, lastDownload, TimeOf(meta, LastGeneratedAtKey), newCount,
+                                 TimeOf(meta, LastSentAtKey));
         });
     }
 
@@ -132,6 +134,14 @@ internal sealed class AbuseIpDbList(string path)
         Write("record a download attempt", (conn, tx, meta) =>
         {
             SetMetadata(conn, tx, LastAttemptAtKey, Text(at.ToUnixTimeSeconds()));
+            return true;
+        });
+
+    /// <summary>Written after the key read, just before the request, so only a real send starts the age rule.</summary>
+    public AbuseListState RecordSend(DateTimeOffset at) =>
+        Write("record a download send", (conn, tx, meta) =>
+        {
+            SetMetadata(conn, tx, LastSentAtKey, Text(at.ToUnixTimeSeconds()));
             return true;
         });
 

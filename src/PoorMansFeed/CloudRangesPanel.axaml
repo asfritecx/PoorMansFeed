@@ -4,16 +4,26 @@
              xmlns:ui="using:GraphiteUi"
              x:Class="PoorMansFeed.CloudRangesPanel"
              x:DataType="vm:CloudFeedPageViewModel">
-  <!-- The checked ranges, the Open folder and Write feed buttons, and the action line. All three cloud tool pages use it.
+  <!-- The checked ranges, the tick, Open folder and Write feed buttons, and the action line, on all three cloud pages.
        The card takes the height the page gives the panel; the header and the action line keep theirs. -->
   <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
     <!-- The summary has a row of its own across the panel, so it shows whole at the minimum width while the rules
          button shows; the buttons share the first row with the title -->
-    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="2" Margin="2,0,2,4">
+    <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="2" Margin="2,0,2,4">
       <TextBlock Text="{x:Static vm:AppText.CloudResultsHeader}" Classes="section-title" VerticalAlignment="Center" />
-      <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding SummaryText}" Classes="caption"
+      <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding SummaryText}" Classes="caption"
                  TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
-      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
+      <!-- By the title, as they act on the list; the file buttons keep the right -->
+      <StackPanel x:Name="CloudTickButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                  HorizontalAlignment="Left" VerticalAlignment="Bottom">
+        <Button x:Name="CloudTickAllButton" Content="{x:Static vm:AppText.CloudTickAll}" Command="{Binding TickAllCommand}"
+                ToolTip.Tip="{x:Static vm:AppText.CloudTickAllTooltip}"
+                AutomationProperties.Name="{x:Static vm:AppText.CloudTickAll}" />
+        <Button x:Name="CloudUntickAllButton" Content="{x:Static vm:AppText.CloudUntickAll}" Command="{Binding UntickAllCommand}"
+                ToolTip.Tip="{x:Static vm:AppText.CloudUntickAllTooltip}"
+                AutomationProperties.Name="{x:Static vm:AppText.CloudUntickAll}" />
+      </StackPanel>
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
         <Button x:Name="CloudModSecurityRulesButton" Content="{x:Static vm:AppText.ModSecurityRulesButton}"
                 Command="{Binding ModSecurityRulesCommand}" IsVisible="{Binding ShowsModSecurityRules}" />
         <Button x:Name="OpenFeedFolderButton" Command="{Binding OpenFeedFolderCommand}"
@@ -56,7 +66,20 @@
               </ItemsControl.ItemsPanel>
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:CloudRangeRow">
-                  <Border Classes="row" AutomationProperties.Name="{Binding AccessibleText}">
+                  <!-- Transparent, so a right-click in a gap between the columns still reaches the row's menu -->
+                  <Border Classes="row" Background="Transparent" AutomationProperties.Name="{Binding AccessibleText}">
+                    <Border.ContextMenu>
+                      <ContextMenu>
+                        <!-- Level 1: the menu is itself an ItemsControl,
+                             so the first one up is the menu, not the list -->
+                        <MenuItem Header="{x:Static vm:AppText.CopyNetwork}"
+                                  Command="{Binding $parent[ItemsControl;1].((vm:CloudFeedPageViewModel)DataContext).CopyNetworkCommand}"
+                                  CommandParameter="{Binding}" />
+                        <MenuItem Header="{x:Static vm:AppText.CopyAsNumber}"
+                                  Command="{Binding $parent[ItemsControl;1].((vm:CloudFeedPageViewModel)DataContext).CopyAsNumberCommand}"
+                                  CommandParameter="{Binding}" />
+                      </ContextMenu>
+                    </Border.ContextMenu>
                     <Grid ColumnDefinitions="32,2.2*,1.3*,1.2*,1.8*,1.3*,96" ColumnSpacing="12">
                       <CheckBox IsChecked="{Binding IsIncluded}" AutomationProperties.Name="{Binding AccessibleText}"
                                 VerticalAlignment="Center" />

@@ -107,8 +107,8 @@ public sealed class TemporaryFileTests
 
             Assert.Empty(found);
             Assert.Contains("FeedText.LineEnd", source, StringComparison.Ordinal);
-            // The rolling feed writes PublicAddress.Text, which is bare by construction
-            if (name != "AbuseIpDbFeedWriter.cs")
+            // The rolling feed writes PublicAddress.Text, bare by construction, and a retired file writes no entry
+            if (name is not ("AbuseIpDbFeedWriter.cs" or "RetiredFeedWriter.cs"))
                 Assert.True(source.Contains("FeedText.Entry(", StringComparison.Ordinal), $"{name} doesn't write its entries through FeedText.Entry.");
         }
     }

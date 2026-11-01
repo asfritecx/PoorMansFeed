@@ -63,6 +63,9 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
         AddExceptionCommand = new RelayCommand(() => Exceptions.TryAdd(), CanEdit);
         SaveExceptionsCommand = new AsyncRelayCommand(SaveExceptionsAsync, CanSaveExceptions);
         RevertExceptionsCommand = new RelayCommand(RevertExceptions, () => CanEdit() && HasUnsavedExceptions);
+        // Not CanEdit: a copy changes nothing, so it doesn't wait on the work gate
+        CopyExceptionNetworkCommand = new AsyncRelayCommand<ExceptionRow>(CopyExceptionNetworkAsync,
+            row => row is not null && !_disposed);
         ResetTokenCommand = new AsyncRelayCommand(ResetTokenAsync, CanWork);
         SetAbuseKeyCommand = new AsyncRelayCommand(SetAbuseKeyAsync, () => CanWork() && _abuseKeys is { IsOpen: false });
         RemoveAbuseKeyCommand = new AsyncRelayCommand(RemoveAbuseKeyAsync, CanRemoveAbuseKey);
@@ -121,6 +124,7 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
     public IRelayCommand AddExceptionCommand { get; }
     public IAsyncRelayCommand SaveExceptionsCommand { get; }
     public IRelayCommand RevertExceptionsCommand { get; }
+    public IAsyncRelayCommand<ExceptionRow> CopyExceptionNetworkCommand { get; }
     public IAsyncRelayCommand ResetTokenCommand { get; }
     public IAsyncRelayCommand SetAbuseKeyCommand { get; }
     public IAsyncRelayCommand RemoveAbuseKeyCommand { get; }
@@ -588,6 +592,35 @@ public sealed class SettingsPageViewModel : ObservableObject, IDisposable, IUnsa
         ResetTokenCommand.NotifyCanExecuteChanged();
         SetAbuseKeyCommand.NotifyCanExecuteChanged();
         RemoveAbuseKeyCommand.NotifyCanExecuteChanged();
+        CopyExceptionNetworkCommand.NotifyCanExecuteChanged();
+    }
+
+    // A failure's line clears the last save line, as any feedback does; a success raises nothing on the editor
+    private async Task CopyExceptionNetworkAsync(ExceptionRow? row)
+    {
+        if (row is null || _disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await _ui.CopyTextAsync(row.NetworkText);
+        }
+        catch (Exception)
+        {
+            if (!_disposed)
+            {
+                Exceptions.ShowCopyFailed();
+            }
+
+            return;
+        }
+
+        if (!_disposed)
+        {
+            Exceptions.ClearCopyFailed();
+        }
     }
 
     public void Dispose()

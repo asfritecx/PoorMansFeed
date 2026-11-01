@@ -131,6 +131,75 @@ public sealed class IpDatabaseTests : IDisposable
         Assert.Equal(new[] { "8.8.4.0/24", "8.8.8.0/24" }, networks);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void QueryAsn_With_The_Label_Gives_The_Same_Rows_And_Names_The_Dataset(bool includeIPv6)
+    {
+        var db = new IpDatabase(_temp.FilePath("ipinfo.db"));
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next.db"), "abc123", SixRows());
+
+        List<NetworkRecord> rows = db.QueryAsn(15169, null, includeIPv6, out DatasetInfo? answeredBy);
+
+        Assert.Equal(db.QueryAsn(15169, null, includeIPv6), rows);
+        Assert.Equal(includeIPv6 ? 3 : 2, rows.Count);
+        Assert.NotNull(answeredBy);
+        Assert.Equal(db.ReadInfo(), answeredBy);
+    }
+
+    [Fact]
+    public void QueryAsn_Names_The_Promoted_Dataset_Without_Reading_The_Info_First()
+    {
+        var db = new IpDatabase(_temp.FilePath("ipinfo.db"));
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next1.db"), "first", Entry("8.8.8.0/24", "first.example"));
+        db.QueryAsn(15169, null, true, out DatasetInfo? before);
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next2.db"), "second", Entry("8.8.4.0/24", "second.example"));
+
+        List<NetworkRecord> rows = db.QueryAsn(15169, null, true, out DatasetInfo? after);
+
+        Assert.Equal("first", before?.Checksum);
+        Assert.Equal("second", after?.Checksum);
+        Assert.Equal("8.8.4.0/24", Assert.Single(rows).Network);
+    }
+
+    [Fact]
+    public void QueryAsn_On_A_Missing_File_Names_No_Dataset()
+    {
+        var db = new IpDatabase(_temp.FilePath("ipinfo.db"));
+
+        List<NetworkRecord> rows = db.QueryAsn(15169, null, true, out DatasetInfo? answeredBy);
+
+        Assert.Empty(rows);
+        Assert.Null(answeredBy);
+    }
+
+    [Theory]
+    [InlineData("DROP TABLE metadata;")]
+    [InlineData("DROP TABLE metadata; CREATE TABLE metadata (key TEXT, value TEXT); "
+                + "INSERT INTO metadata (key, value) VALUES ('schema_version', NULL);")]
+    public void A_File_Whose_Metadata_Cant_Be_Read_Still_Answers_Its_Rows_With_No_Label(string damage)
+    {
+        string path = _temp.FilePath("ipinfo.db");
+        var db = new IpDatabase(path);
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next.db"), "abc123", SixRows());
+        using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+        {
+            conn.Open();
+            using SqliteCommand drop = conn.CreateCommand();
+            drop.CommandText = damage;
+            drop.ExecuteNonQuery();
+        }
+        Assert.True(CidrBlock.TryParse("8.8.0.0/16", out CidrBlock? block));
+
+        List<NetworkRecord> rows = db.QueryAsn(15169, null, true, out DatasetInfo? asnLabel);
+        List<NetworkOverlap> overlaps = db.QueryOverlaps([block], true, out DatasetInfo? overlapLabel);
+
+        Assert.Equal(["8.8.4.0/24", "8.8.8.0/24", "2001:4860::/32"], rows.Select(row => row.Network));
+        Assert.Null(asnLabel);
+        Assert.Equal(2, Assert.Single(Assert.Single(overlaps).Groups).NetworkCount);
+        Assert.Null(overlapLabel);
+    }
+
     [Fact]
     public void CountAsn_Counts_Matching_Rows()
     {
@@ -617,5 +686,22 @@ public sealed class IpDatabaseTests : IDisposable
     {
         Assert.True(CidrBlock.TryParse(text, out CidrBlock? block));
         return block!;
+    }
+
+    [Fact]
+    public void QueryAsNames_gives_the_smallest_non_empty_name_of_each_asn_it_holds()
+    {
+        string live = _temp.FilePath("ipinfo.db");
+        var db = new IpDatabase(live);
+        BuildAndPromote(db, _temp.FilePath("ipinfo.next.db"), "abc123",
+            Row("8.8.8.0/24", "AS15169", "Google LLC"),
+            Row("8.8.4.0/24", "AS15169", "Alphabet"),
+            Row("1.1.1.0/24", "AS13335", ""));
+
+        Dictionary<uint, string> names = db.QueryAsNames([15169, 13335, 64500, 15169]);
+
+        Assert.Equal(new Dictionary<uint, string> { [15169] = "Alphabet" }, names);
+        Assert.Empty(db.QueryAsNames([]));
+        Assert.Empty(new IpDatabase(_temp.FilePath("missing.db")).QueryAsNames([15169]));
     }
 }

@@ -25,6 +25,7 @@ public sealed class ExceptionsEditorModelTests
         [nameof(AppText.ExceptionAddedMasked)] = AppText.ExceptionAddedMasked(LongestNetwork),
         [nameof(AppText.ExceptionAdded)] = AppText.ExceptionAdded(LongestNetwork),
         [nameof(AppText.ExceptionRemoved)] = AppText.ExceptionRemoved(LongestNetwork),
+        [nameof(AppText.NetworkCopyFailed)] = AppText.NetworkCopyFailed,
     };
 
     // Each read of HasChanges builds a snapshot of every row, so a load that raised it per row would be quadratic

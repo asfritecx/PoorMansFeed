@@ -57,6 +57,10 @@ internal sealed class AzureTagCache
         }
     }
 
+    /// <summary>Whether either file of the pair is there, to tell nothing saved from a damaged pair.</summary>
+    internal bool AnyFileExists() =>
+        _paths is not null && (File.Exists(_paths.AzureServiceTagsPath) || File.Exists(_paths.AzureServiceTagsSourcePath));
+
     /// <summary>The file first, then its record. A failure is traced and returned, never thrown.</summary>
     public bool TryWrite(byte[] json, AzureTagFileSource source)
     {

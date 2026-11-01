@@ -82,6 +82,8 @@ public sealed class ConfigStoreTests : IDisposable
             IPv4MinPrefix = 20,
             IPv6MinPrefix = 48,
             AbuseIpDbKeepDays = 90,
+            RefreshAllOnTimer = true,
+            RefreshAllEveryHours = 17,
             WriteFortigateFeeds = false,
             WriteModSecurityLists = true,
             ModSecurityAction = ModSecurityAction.Deny,
@@ -121,6 +123,7 @@ public sealed class ConfigStoreTests : IDisposable
             IPv4MinPrefix = 40,
             IPv6MinPrefix = 0,
             AbuseIpDbKeepDays = 999,
+            RefreshAllEveryHours = 25,
             ModSecurityAction = (ModSecurityAction)7,
             ModSecurityFirstRuleId = 0,
             ModSecurityLocation = new string('x', ModSecurityLimits.MaxLocationLength + 1),
@@ -129,6 +132,7 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal(32, store.Snapshot.Settings.IPv4MinPrefix);
         Assert.Equal(1, store.Snapshot.Settings.IPv6MinPrefix);
         Assert.Equal(AbuseIpDbLimits.MaxKeepDays, store.Snapshot.Settings.AbuseIpDbKeepDays);
+        Assert.Equal(RefreshAllLimits.MaxHours, store.Snapshot.Settings.RefreshAllEveryHours);
         Assert.Equal(ModSecurityAction.LogOnly, store.Snapshot.Settings.ModSecurityAction);
         Assert.Equal(ModSecurityLimits.RuleIdMin, store.Snapshot.Settings.ModSecurityFirstRuleId);
         Assert.Equal("", store.Snapshot.Settings.ModSecurityLocation);
@@ -149,6 +153,8 @@ public sealed class ConfigStoreTests : IDisposable
         using ConfigStore store = Open();
 
         Assert.Equal(new UserSettings { WriteFortigateFeeds = true, AbuseIpDbKeepDays = 12 }, store.Snapshot.Settings);
+        Assert.False(store.Snapshot.Settings.RefreshAllOnTimer);
+        Assert.Equal(6, store.Snapshot.Settings.RefreshAllEveryHours);
     }
 
     [Theory]
@@ -345,6 +351,148 @@ public sealed class ConfigStoreTests : IDisposable
             Assert.Equal(saved, store.Current);
             Assert.Equal(TimeSpan.Zero, store.Current.RateLimit!.ResetAt!.Value.Offset);
         }
+    }
+
+    // ----- The IPinfo download counter, in the accounting section -----
+
+    private static readonly AbuseRateLimit StoredLimit = new(5, 4, DateTimeOffset.FromUnixTimeSeconds(1792195200));
+
+    [Fact]
+    public void The_IPinfo_requests_and_refusal_are_what_a_reopened_store_reads_in_whole_seconds()
+    {
+        DateTimeOffset first = Now.AddMilliseconds(400), second = Now.AddMinutes(1).AddMilliseconds(900);
+        IpInfoDownloads saved;
+        using (ConfigStore store = Open())
+        {
+            Assert.Equal(IpInfoDownloads.Empty, store.CurrentIpInfoDownloads);
+            Assert.True(store.TryRecordIpInfoRequest(first));
+            Assert.True(store.TryRecordIpInfoRequest(second));
+            Assert.True(store.TryRecordIpInfoRefusal(second, TimeSpan.FromHours(2)));
+            saved = store.CurrentIpInfoDownloads;
+            Assert.Same(saved, store.Snapshot.IpInfoDownloads);
+        }
+
+        Assert.Equal([Now, Now.AddMinutes(1)], saved.Requests);
+        Assert.Equal(Now.AddMinutes(121), saved.RefusedUntil);
+        Assert.All(saved.Requests, request => Assert.Equal(TimeSpan.Zero, request.Offset));
+        using (ConfigStore store = Open())
+            Assert.Equal(saved, store.CurrentIpInfoDownloads);
+        Assert.Contains($"\"ipinfoDownloads\":{{\"requests\":[{Now.ToUnixTimeSeconds()},{Now.AddMinutes(1).ToUnixTimeSeconds()}],"
+                        + $"\"refusedUntil\":{Now.AddMinutes(121).ToUnixTimeSeconds()}}}", AccountingJson());
+    }
+
+    [Fact]
+    public void An_AbuseIPDB_answer_keeps_the_IPinfo_requests_and_an_IPinfo_request_keeps_the_AbuseIPDB_accounting()
+    {
+        using (ConfigStore store = Open())
+        {
+            Assert.True(store.TryRecordIpInfoRequest(Now));
+            Assert.True(store.TryRecordIpInfoRefusal(Now, null));
+            Assert.True(store.TryRecordAnswer(StoredLimit, Now, countDownload: true));
+            Assert.Equal([Now], store.CurrentIpInfoDownloads.Requests);
+            Assert.True(store.TryRecordIpInfoRequest(Now.AddMinutes(1)));
+            Assert.Equal(new AbuseAccounting(StoredLimit, new DateOnly(2026, 10, 19), 1), store.Current);
+        }
+
+        using (ConfigStore store = Open())
+        {
+            Assert.Equal(new AbuseAccounting(StoredLimit, new DateOnly(2026, 10, 19), 1), store.Current);
+            Assert.Equal([Now, Now.AddMinutes(1)], store.CurrentIpInfoDownloads.Requests);
+            Assert.Equal(Now.AddHours(24), store.CurrentIpInfoDownloads.RefusedUntil);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(""","ipinfoDownloads":null""")]
+    [InlineData(",\"ipinfoDownloads\":\"bad\"")]
+    [InlineData(""","ipinfoDownloads":[1792195200]""")]
+    [InlineData(""","ipinfoDownloads":{"requests":"bad","refusedUntil":"bad"}""")]
+    [InlineData(""","ipinfoDownloads":{"requests":[1.5,"a",null,{},99999999999999999999],"refusedUntil":1.5}""")]
+    [InlineData(""","ipinfoDownloads":{"requests":[-99999999999999],"refusedUntil":99999999999999}""")]
+    public void A_missing_or_bad_IPinfo_field_reads_as_empty_and_the_AbuseIPDB_fields_still_read(string field)
+    {
+        Open().Dispose();
+        SetAccountingJson("""{"rateLimit":{"limit":5,"remaining":4,"resetAt":1792195200},"downloadsDay":"2026-10-19","""
+                          + "\"downloadsCount\":1" + field + "}");
+
+        using ConfigStore store = Open();
+        Assert.Equal(IpInfoDownloads.Empty, store.CurrentIpInfoDownloads);
+        Assert.Equal(new AbuseAccounting(StoredLimit, new DateOnly(2026, 10, 19), 1), store.Current);
+    }
+
+    [Fact]
+    public void A_bad_IPinfo_request_time_is_left_out_and_the_good_ones_read()
+    {
+        Open().Dispose();
+        long at = Now.ToUnixTimeSeconds();
+        SetAccountingJson($$$"""{"rateLimit":null,"ipinfoDownloads":{"requests":[{{{at}}},"a",{{{at - 60}}}],"refusedUntil":null}}""");
+
+        using ConfigStore store = Open();
+        Assert.Equal([Now.AddMinutes(-1), Now], store.CurrentIpInfoDownloads.Requests);
+        Assert.Null(store.CurrentIpInfoDownloads.RefusedUntil);
+    }
+
+    [Fact]
+    public void A_failed_or_closed_IPinfo_save_returns_false_and_keeps_the_counter()
+    {
+        ConfigStore store = Open();
+        Assert.True(store.TryRecordIpInfoRequest(Now));
+        IpInfoDownloads saved = store.CurrentIpInfoDownloads;
+
+        store.BeforeCommit = () => throw new SqliteException("disk I/O error", 10);
+        Assert.False(store.TryRecordIpInfoRequest(Now.AddMinutes(1)));
+        Assert.False(store.TryRecordIpInfoRefusal(Now.AddMinutes(1), null));
+        Assert.Same(saved, store.CurrentIpInfoDownloads);
+
+        store.BeforeCommit = null;
+        store.Dispose();
+        Assert.False(store.TryRecordIpInfoRequest(Now.AddMinutes(2)));
+        Assert.Same(saved, store.CurrentIpInfoDownloads);
+        using (ConfigStore reopened = Open())
+            Assert.Equal([Now], reopened.CurrentIpInfoDownloads.Requests);
+    }
+
+    [Fact]
+    public async Task AbuseIPDB_answers_and_IPinfo_requests_saved_from_two_threads_all_survive_a_reopen()
+    {
+        const int each = 40;
+        using (ConfigStore store = Open())
+        {
+            using var start = new Barrier(2);
+            Task abuse = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                for (int i = 0; i < each; i++)
+                    Assert.True(store.TryRecordAnswer(StoredLimit, Now, countDownload: true));
+            });
+            Task ipinfo = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                for (int i = 0; i < each; i++)
+                    Assert.True(store.TryRecordIpInfoRequest(Now.AddSeconds(i)));
+            });
+            await Task.WhenAll(abuse, ipinfo);
+        }
+
+        using ConfigStore reopened = Open();
+        Assert.Equal(each, reopened.Current.DownloadsOnDay);
+        Assert.Equal(each, reopened.CurrentIpInfoDownloads.Requests.Count);
+    }
+
+    private string AccountingJson()
+    {
+        using ConfigSeal seal = TestSeal();
+        Assert.True(seal.TryOpen(ConfigSection.Accounting, ConfigStore.SchemaVersion, Blobs(ConfigFile)["accounting"],
+                                 out byte[]? json));
+        return Encoding.UTF8.GetString(json);
+    }
+
+    private void SetAccountingJson(string json)
+    {
+        using ConfigSeal seal = TestSeal();
+        SetBlob(ConfigFile, "accounting", seal.Seal(ConfigSection.Accounting, ConfigStore.SchemaVersion,
+                                                    Encoding.UTF8.GetBytes(json)));
     }
 
     // ----- The lock -----

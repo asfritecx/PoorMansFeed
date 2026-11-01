@@ -6,6 +6,7 @@ using PoorMansFeed.Core;
 using PoorMansFeed.Core.AbuseIpDb;
 using PoorMansFeed.Core.Aws;
 using PoorMansFeed.Core.Azure;
+using PoorMansFeed.Core.CloudSearch;
 using PoorMansFeed.Core.GoogleCloud;
 using GraphiteUi;
 
@@ -37,9 +38,10 @@ public partial class App : Application
             var window = new MainWindow();
             var ui = new AvaloniaUiServices(window);
             string defaultExportFolder = paths?.DefaultExportFolder ?? Path.Combine(service.DataFolder, "exports");
-            var googleFeeds = new GoogleCloudFeedService(service, http, new CoreOptions(), TimeProvider.System, defaultExportFolder);
+            var googleFeeds = new GoogleCloudFeedService(service, http, new CoreOptions(), TimeProvider.System, paths, defaultExportFolder);
             var azureFeeds = new AzureFeedService(service, http, new CoreOptions(), TimeProvider.System, paths, defaultExportFolder);
             var awsFeeds = new AwsFeedService(service, http, new CoreOptions(), TimeProvider.System, paths, defaultExportFolder);
+            var cloudSearch = new CloudAddressSearchService(paths, googleFeeds, azureFeeds, awsFeeds);
             // One gate for the window: a dialog, a save or an update on one page holds the commands of the others. The
             // key prompt is built on it and shared, so Lookup and Settings never ask for the key at the same time.
             var gate = new WorkGate();
@@ -49,15 +51,37 @@ public partial class App : Application
             var main = new MainViewModel(service, ui, paths?.DefaultExportFolder, abuse, gate, abuseKeys, unsaved);
             var settings = new SettingsPageViewModel(service, ui, defaultExportFolder, gate, main.ResetTokenAsync, abuse, abuseKeys, TimeProvider.System);
             unsaved.Source = settings;
+            ISavedFeedsService? savedFeedsService = abuse is null
+                ? null
+                : new SavedFeedsService(service, abuse, TimeProvider.System, defaultExportFolder);
+            IFeedRefresher? refresher = abuse is null
+                ? null
+                : new FeedRefresher(service, abuse, googleFeeds, azureFeeds, awsFeeds, TimeProvider.System);
+            var refreshAll = new RefreshAllRunner(refresher, gate, ui);
+            main.ListenToRefresh(refreshAll);
+            var google = new GoogleCloudFeedViewModel(googleFeeds, service, ui, gate, paths?.DefaultExportFolder, unsaved);
+            var azure = new AzureFeedViewModel(azureFeeds, service, ui, TimeProvider.System, gate, paths?.DefaultExportFolder, unsaved);
+            var aws = new AwsFeedViewModel(awsFeeds, service, ui, TimeProvider.System, gate, paths?.DefaultExportFolder, unsaved);
+            var refreshTimer = new RefreshTimer(refreshAll, () => service.Settings,
+                () => google.HoldsUnwrittenCheck || azure.HoldsUnwrittenCheck || aws.HoldsUnwrittenCheck,
+                ui, TimeProvider.System);
             window.AttachViewModel(
                 main,
-                new GoogleCloudFeedViewModel(googleFeeds, service, ui, gate, paths?.DefaultExportFolder, unsaved),
-                new AzureFeedViewModel(azureFeeds, service, ui, TimeProvider.System, gate, paths?.DefaultExportFolder, unsaved),
-                new AwsFeedViewModel(awsFeeds, service, ui, TimeProvider.System, gate, paths?.DefaultExportFolder, unsaved),
+                google,
+                azure,
+                aws,
                 settings,
                 initializeOnOpen: true,
                 abuseIpDb: new AbuseIpDbViewModel(abuse, service, ui, gate, abuseKeys, TimeProvider.System,
-                                                  paths?.DefaultExportFolder, unsaved));
+                                                  paths?.DefaultExportFolder, unsaved),
+                cloudSearch: new CloudAddressSearchViewModel(cloudSearch, ui),
+                savedFeeds: new SavedFeedsViewModel(savedFeedsService, ui, gate, TimeProvider.System, refreshAll,
+                                                    refreshTimer),
+                records: service.Records,
+                ui: ui,
+                gate: gate,
+                refreshAll: refreshAll,
+                refreshTimer: refreshTimer);
             desktop.MainWindow = window;
         }
 

@@ -38,7 +38,8 @@ public sealed class ModSecurityFeedExportTests
 
     private static FeedWrite Write(string folder, IReadOnlyList<NetworkRecord> rows, UserSettings settings, ExceptionList? exceptions = null,
                                    DateTimeOffset? at = null) =>
-        ExportWriter.WriteFeeds(folder, "AS15169", "Google LLC", rows, settings, at ?? FixedUtc, exceptions ?? ExceptionList.Empty);
+        ExportWriter.WriteFeeds(folder, "AS15169", "Google LLC", rows, FeedOptions.ForAsnExport(settings), at ?? FixedUtc,
+            ReadableExceptions.WrapForFeed(exceptions ?? ExceptionList.Empty)!);
 
     private static string In(string folder, string type, string name) => Path.Combine(folder, type, name);
 
@@ -59,7 +60,8 @@ public sealed class ModSecurityFeedExportTests
 
         // A FortiGate-only write in a folder of its own is the reference every other write here is compared with
         IReadOnlyList<string> expectedFortigate = ExportWriter.WriteFeeds(
-            reference.Folder, "AS15169", "Google LLC", Rows, Types(true, false, split), FixedUtc, ExceptionList.Empty).Files;
+            reference.Folder, "AS15169", "Google LLC", Rows, FeedOptions.ForAsnExport(Types(true, false, split)), FixedUtc,
+            ReadableExceptions.WrapForFeed(ExceptionList.Empty)!).Files;
         FeedWrite fortigate = Write(fortigateOnly.Folder, Rows, Types(true, false, split));
         Assert.Equal(names.Select(n => In(fortigateOnly.Folder, "fortigate", n)), fortigate.Files);
         Assert.Empty(fortigate.ModSecurityFiles);
@@ -82,7 +84,7 @@ public sealed class ModSecurityFeedExportTests
         {
             Assert.DoesNotContain(oldFortigate, write.Files);
             Assert.DoesNotContain(oldFortigate, write.ModSecurityFiles);
-            Assert.DoesNotContain(oldFortigate, write.OldFilesLeft);
+            Assert.DoesNotContain(oldFortigate, write.EmptiedFiles);
         }
         Assert.Equal("old", File.ReadAllText(oldFortigate));
         Assert.Equal(oldTime, File.GetLastWriteTimeUtc(oldFortigate));
@@ -110,7 +112,7 @@ public sealed class ModSecurityFeedExportTests
     }
 
     [Fact]
-    public void Exceptions_cut_both_copies_alike_and_an_emptied_family_names_its_old_file_in_each_folder()
+    public void Exceptions_cut_both_copies_alike_and_an_emptied_family_rewrites_its_old_file_in_each_folder()
     {
         using var temp = new ExportTempFolder();
         Write(temp.Folder, Rows, Types(true, true));
@@ -120,13 +122,18 @@ public sealed class ModSecurityFeedExportTests
 
         string fortigateV4 = In(temp.Folder, "fortigate", "AS15169_ipv4.txt");
         string modSecurityV4 = In(temp.Folder, "modsecurity", "AS15169_ipv4.txt");
-        Assert.Equal([fortigateV4, modSecurityV4], write.Files);
-        Assert.Equal([modSecurityV4], write.ModSecurityFiles);
+        string fortigateV6 = In(temp.Folder, "fortigate", "AS15169_ipv6.txt");
+        string modSecurityV6 = In(temp.Folder, "modsecurity", "AS15169_ipv6.txt");
+        Assert.Equal([fortigateV4, fortigateV6, modSecurityV4, modSecurityV6], write.Files);
+        Assert.Equal([modSecurityV4, modSecurityV6], write.ModSecurityFiles);
         Assert.Equal(1, write.ExceptionCuts);
         Assert.Equal(2, write.ExceptionRemovals);
-        Assert.Equal([In(temp.Folder, "fortigate", "AS15169_ipv6.txt"), In(temp.Folder, "modsecurity", "AS15169_ipv6.txt")],
-                     write.OldFilesLeft);
-        foreach (string file in write.Files)
+        Assert.Equal([fortigateV6, modSecurityV6], write.EmptiedFiles);
+        foreach (string file in write.EmptiedFiles)
+            Assert.EndsWith("# Entries: 0\n# Exceptions: 0 ranges cut, 1 removed\n# IP address data powered by IPinfo (https://ipinfo.io)\n",
+                            File.ReadAllText(file));
+        Assert.Equal(AfterFirstLine(File.ReadAllText(fortigateV6)), AfterFirstLine(File.ReadAllText(modSecurityV6)));
+        foreach (string file in new[] { fortigateV4, modSecurityV4 })
         {
             string text = File.ReadAllText(file);
             Assert.Contains("# Exceptions: 1 range cut, 1 removed\n", text);
@@ -199,7 +206,7 @@ public sealed class ModSecurityFeedExportTests
     }
 
     [Fact]
-    public void A_failed_write_names_the_emptied_old_files_then_the_failed_file_then_the_untried_ones()
+    public void A_failed_write_names_an_emptied_familys_untried_old_files_in_their_slots()
     {
         using var temp = new ExportTempFolder();
         Write(temp.Folder, Rows, Types(true, true));
@@ -212,10 +219,10 @@ public sealed class ModSecurityFeedExportTests
         Assert.Equal(fortigateV4, ex.FilePath);
         Assert.Equal(
             [
-                In(temp.Folder, "fortigate", "AS15169_ipv6.txt"),
-                In(temp.Folder, "modsecurity", "AS15169_ipv6.txt"),
                 fortigateV4,
+                In(temp.Folder, "fortigate", "AS15169_ipv6.txt"),
                 In(temp.Folder, "modsecurity", "AS15169_ipv4.txt"),
+                In(temp.Folder, "modsecurity", "AS15169_ipv6.txt"),
             ],
             ex.OldFilesLeft);
     }
@@ -263,16 +270,18 @@ public sealed class ModSecurityFeedExportTests
         // An IPv6 family the settings leave out counts nothing and names nothing
         FeedWrite noV6 = Write(temp.Folder, [WholeV6, GoogleV4], Types(true, false) with { FortigateIncludeIPv6 = false });
         Assert.Equal(0, noV6.WholeRangesLeftOut);
-        Assert.Empty(noV6.OldFilesLeft);
+        Assert.Empty(noV6.EmptiedFiles);
         Assert.DoesNotContain("Left out", File.ReadAllText(noV6.Files.Single()));
 
-        // A family of only a whole range gets no file, and its earlier copy is named in each folder
+        // A family of only a whole range rewrites its earlier copy in each folder header-only, with its left-out line
         FeedWrite onlyWhole = Write(temp.Folder, [GoogleV4, WholeV6], Types(true, true));
         Assert.Equal(1, onlyWhole.WholeRangesLeftOut);
-        Assert.Equal([In(temp.Folder, "fortigate", "AS15169_ipv4.txt"), In(temp.Folder, "modsecurity", "AS15169_ipv4.txt")],
-                     onlyWhole.Files);
-        Assert.Equal([In(temp.Folder, "fortigate", "AS15169_ipv6.txt"), In(temp.Folder, "modsecurity", "AS15169_ipv6.txt")],
-                     onlyWhole.OldFilesLeft);
+        string[] onlyWholeV6 = [In(temp.Folder, "fortigate", "AS15169_ipv6.txt"), In(temp.Folder, "modsecurity", "AS15169_ipv6.txt")];
+        Assert.Equal([In(temp.Folder, "fortigate", "AS15169_ipv4.txt"), onlyWholeV6[0], In(temp.Folder, "modsecurity", "AS15169_ipv4.txt"),
+                      onlyWholeV6[1]], onlyWhole.Files);
+        Assert.Equal(onlyWholeV6, onlyWhole.EmptiedFiles);
+        Assert.All(onlyWholeV6, file => Assert.EndsWith("# Entries: 0\n# Left out: 1 range covering every address: ::/0\n"
+                                                        + "# IP address data powered by IPinfo (https://ipinfo.io)\n", File.ReadAllText(file)));
 
         // The report keeps the row
         string report = ExportWriter.WriteAsnReport(temp.Folder, "AS15169", "Google LLC", rows, FixedUtc);
@@ -281,20 +290,24 @@ public sealed class ModSecurityFeedExportTests
     }
 
     [Fact]
-    public void No_ticked_type_writes_nothing_checks_no_list_and_names_no_file()
+    public void No_ticked_type_writes_nothing_and_names_no_file()
     {
         using var temp = new ExportTempFolder();
 
-        FeedWrite none = Write(temp.Folder, Rows, Types(false, false), ExceptionList.Unreadable);
+        FeedWrite none = Write(temp.Folder, Rows, Types(false, false));
 
         Assert.Empty(none.Files);
         Assert.Empty(none.ModSecurityFiles);
-        Assert.Empty(none.OldFilesLeft);
+        Assert.Empty(none.EmptiedFiles);
         Assert.Empty(Directory.GetFileSystemEntries(temp.Folder));
 
         FeedWrite both = Write(temp.Folder, Rows, Types(true, true));
-        Assert.Empty(ExportWriter.ExistingFeedFiles(temp.Folder, "AS15169", Rows, Types(false, false)));
-        Assert.Equal(both.Files, ExportWriter.ExistingFeedFiles(temp.Folder, "AS15169", Rows, Types(true, true)));
-        Assert.Equal(both.ModSecurityFiles, ExportWriter.ExistingFeedFiles(temp.Folder, "AS15169", Rows, Types(false, true)));
+        Assert.Empty(Existing(temp.Folder, Rows, FeedOptions.ForAsnExport(Types(false, false))));
+        Assert.Equal(both.Files, Existing(temp.Folder, Rows, FeedOptions.ForAsnExport(Types(true, true))));
+        Assert.Equal(both.ModSecurityFiles, Existing(temp.Folder, Rows, FeedOptions.ForAsnExport(Types(false, true))));
     }
+
+    private static IReadOnlyList<string> Existing(string folder, IReadOnlyList<NetworkRecord> rows, FeedOptions options) =>
+        ExportWriter.ExistingFiles(ExportWriter.PlanFeeds(folder, "AS15169", "Google LLC", rows, options, FixedUtc,
+                                                          ReadableExceptions.WrapForFeed(ExceptionList.Empty)!, datasetHasIPv6: true));
 }

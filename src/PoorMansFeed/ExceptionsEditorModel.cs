@@ -132,6 +132,17 @@ public sealed class ExceptionsEditorModel : ObservableObject
     /// </summary>
     public bool TryAddPending() => string.IsNullOrWhiteSpace(NetworkText) || TryAdd();
 
+    public void ShowCopyFailed() => ShowFeedback(AppText.NetworkCopyFailed, isError: true);
+
+    /// <summary>Clears the line only while it says a copy failed, so a copy raises nothing otherwise.</summary>
+    public void ClearCopyFailed()
+    {
+        if (FeedbackText == AppText.NetworkCopyFailed)
+        {
+            ShowFeedback(string.Empty, isError: false);
+        }
+    }
+
     public IReadOnlyList<ExceptionEntry> ToEntries() => Rows.Select(row => row.Entry).ToList();
 
     private List<(string Network, string Note)> Snapshot() => Rows.Select(row => (row.Entry.Network.Text, row.Entry.Note)).ToList();

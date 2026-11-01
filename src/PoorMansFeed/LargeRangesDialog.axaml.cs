@@ -6,8 +6,8 @@ using Avalonia.Markup.Xaml;
 namespace PoorMansFeed;
 
 /// <summary>
-/// Asks which large ranges to export. Every range starts unticked. Returns the networks ticked, which may be empty,
-/// or null when cancelled.
+/// Asks which large ranges to export, each starting as its choice says. Returns the networks ticked, which may be
+/// empty, or null when cancelled.
 /// </summary>
 public sealed partial class LargeRangesDialog : Window
 {

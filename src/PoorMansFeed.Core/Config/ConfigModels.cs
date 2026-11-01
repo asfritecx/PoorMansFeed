@@ -41,6 +41,7 @@ internal enum ConfigOpenState
     Missing,
 }
 
-/// <summary>The values config.db holds, as last committed.</summary>
+/// <summary>The values config.db holds, as last committed. The accounting section holds both <see cref="Accounting"/>
+/// and <see cref="IpInfoDownloads"/>, so every save of it writes both.</summary>
 internal sealed record ConfigSnapshot(UserSettings Settings, ExceptionList Exceptions, AbuseAccounting Accounting,
-                                      ModSecurityRuleIds RuleIds);
+                                      IpInfoDownloads IpInfoDownloads, ModSecurityRuleIds RuleIds, SavedFeedList SavedFeeds);

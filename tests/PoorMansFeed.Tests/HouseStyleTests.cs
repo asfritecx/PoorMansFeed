@@ -333,6 +333,7 @@ public sealed partial class HouseStyleTests
             _ => Task.CompletedTask, _ => Task.CompletedTask);
         yield return new HelpDialog();
         yield return new ConfigureFeedsDialog();
+        yield return new DatasetUpdateWindow();
         yield return new ModSecurityRulesDialog(new ModSecurityRulesModel(new ModSecurityRulesPrompt(
             ["AS15169_ipv4.txt", "AS15169_ipv6.txt"], [10000, 10001], "AS15169", "/etc/modsecurity/lists",
             PoorMansFeed.Core.ModSecurity.ModSecurityAction.LogOnly), TimeProvider.System, _ => Task.CompletedTask));

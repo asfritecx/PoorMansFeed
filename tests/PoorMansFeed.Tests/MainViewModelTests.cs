@@ -848,7 +848,8 @@ public sealed class MainViewModelTests
         Assert.Equal(DatasetState.NoDataset, vm.State);
         Assert.Equal("No dataset", vm.PillText);
         Assert.True(vm.IsPillWarning);
-        Assert.Equal("An API token is needed to download the dataset. Choose Update dataset to enter one.", vm.DatasetDetailText);
+        Assert.Equal("An API token is needed to download the dataset. Choose Update dataset" + Ellipsis + " to enter one.",
+            vm.DatasetDetailText);
         Assert.Equal("No dataset has been downloaded yet", vm.DatasetFactsText);
 
         vm.SearchText = "AS15169";
@@ -899,7 +900,9 @@ public sealed class MainViewModelTests
 
         Assert.Equal("Update available", availableVm.PillText);
         Assert.True(availableVm.IsPillWarning);
-        Assert.Equal("A newer dataset is available. Choose Update dataset to download it.", availableVm.DatasetDetailText);
+        Assert.False(availableVm.IsPillSuccess);
+        Assert.Equal("A newer dataset is available. Choose Update dataset" + Ellipsis + " to download it.",
+            availableVm.DatasetDetailText);
         Assert.Equal(DatasetState.UpdateAvailable, availableVm.State);
 
         var current = WithDataset();
@@ -908,6 +911,8 @@ public sealed class MainViewModelTests
 
         Assert.Equal("Dataset up to date", currentVm.PillText);
         Assert.False(currentVm.IsPillWarning);
+        Assert.True(currentVm.IsPillSuccess);
+        Assert.Equal("No newer dataset is available.", currentVm.DatasetDetailText);
     }
 
     [Fact]
@@ -926,7 +931,7 @@ public sealed class MainViewModelTests
             (new UpdateCheckResult(UpdateCheckOutcome.RateLimited, TimeSpan.FromSeconds(90)),
                 "IPinfo allows 10 downloads a day and the limit has been reached. Please try again in about 2 minutes."),
             (new UpdateCheckResult(UpdateCheckOutcome.Offline),
-                "The update check couldn't be completed. Check the network connection, then choose Update dataset."),
+                "The update check couldn't be completed. Check the network connection, then choose Check for updates again."),
             (new UpdateCheckResult(UpdateCheckOutcome.ServiceError),
                 "The update couldn't be completed. Please try again or contact the Infra Team."),
         };
@@ -1067,7 +1072,10 @@ public sealed class MainViewModelTests
 
             Assert.Equal("Update failed", vm.DatasetStatusText);
             Assert.Equal(expected + " The existing dataset is still in use.", vm.DatasetDetailText);
-            Assert.Equal("Dataset up to date", vm.PillText);
+            // A failed update turns the pill yellow, whatever it said before
+            Assert.Equal("Update failed", vm.PillText);
+            Assert.True(vm.IsPillWarning);
+            Assert.False(vm.IsPillSuccess);
             Assert.Equal(DatasetState.UpdateFailed, vm.State);
 
             // No database yet: the same failure, without the suffix
@@ -1594,6 +1602,30 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task ExportWithLargeRangesStartsARangeTheSavedFeedIncludesTicked()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var vm = await StartAsync(service, ui);
+        service.SearchFunc = (_, _) => FoundResult(AsnQuery(), 2, 2);
+        vm.SearchText = "AS15169";
+        await vm.SearchCommand.ExecuteAsync(null);
+        service.ExportPlan = new ExportPlan(2, "Google LLC",
+        [
+            new LargeRange("10.0.0.0/8", false, 8, new BigInteger(16777216)),
+            new LargeRange("11.0.0.0/8", false, 8, new BigInteger(16777216), SavedIncluded: true),
+        ]);
+        service.ExportResult = new ExportResult(ExportFailure.None, ["a.txt"], 1, 1);
+        ui.LargeRangeAnswer = prompt => prompt.Choices.Where(choice => choice.IsIncluded).Select(choice => choice.Network).ToList();
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        LargeRangePrompt prompt = Assert.Single(ui.LargeRangePrompts);
+        Assert.Equal(new[] { false, true }, prompt.Choices.Select(choice => choice.IsIncluded).ToArray());
+        Assert.Equal(new[] { "11.0.0.0/8" }, service.LastIncluded!.ToArray());
+    }
+
+    [Fact]
     public async Task ACancelledLargeRangeDialogExportsNothing()
     {
         var service = WithDataset();
@@ -1809,22 +1841,25 @@ public sealed class MainViewModelTests
             (new ExportResult(ExportFailure.None, ["a", "b"], 4, 0, 0, 1), "Exported 4 networks to 2 files" + Dash + "1 network removed by exceptions"),
             (new ExportResult(ExportFailure.None, ["a", "b"], 4, 1, 1, 3),
              "Exported 4 networks to 2 files" + Dash + "1 large range left out" + Dash + "1 network cut and 3 removed by exceptions"),
-            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt"], 4, 0, 0, 2, ["/x/fortigate/AS15169_ipv6.txt"]),
-             "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash + "the old "
-             + Path.Combine("fortigate", "AS15169_ipv6.txt") + " was left as it was"),
-            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt"], 4, 0, 0, 2, ["/x/fortigate/AS15169_ipv4.txt", "/x/fortigate/AS15169_ipv6.txt"]),
-             "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash
-             + "the old " + Path.Combine("fortigate", "AS15169_ipv4.txt") + " and " + Path.Combine("fortigate", "AS15169_ipv6.txt")
-             + " were left as they were"),
+            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt", "/x/fortigate/AS15169_ipv4.txt", "/x/fortigate/AS15169_ipv6.txt"],
+                              4, 0, 0, 2, EmptiedFiles: ["/x/fortigate/AS15169_ipv6.txt"]),
+             "Exported 4 networks to 3 files" + Dash + "2 networks removed by exceptions" + Dash
+             + Path.Combine("fortigate", "AS15169_ipv6.txt") + " was emptied"),
+            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt", "/x/fortigate/AS15169_ipv4.txt", "/x/fortigate/AS15169_ipv6.txt"],
+                              4, 0, 0, 2, EmptiedFiles: ["/x/fortigate/AS15169_ipv4.txt", "/x/fortigate/AS15169_ipv6.txt"]),
+             "Exported 4 networks to 3 files" + Dash + "2 networks removed by exceptions" + Dash
+             + Path.Combine("fortigate", "AS15169_ipv4.txt") + " and " + Path.Combine("fortigate", "AS15169_ipv6.txt")
+             + " were emptied"),
             (new ExportResult(ExportFailure.None, ["a"], 4, 1) with { WholeRangesLeftOut = 1 },
              "Exported 4 networks to 1 file" + Dash + "1 large range left out" + Dash
              + "1 network covering every address left out of the feeds"),
             (new ExportResult(ExportFailure.None, ["a"], 4, 0, 0, 2) with { WholeRangesLeftOut = 2 },
              "Exported 4 networks to 1 file" + Dash + "2 networks covering every address left out of the feeds" + Dash
              + "2 networks removed by exceptions"),
-            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt"], 4, 0, 0, 2, ["/x/fortigate/AS15169_ipv6.txt"]) with { NoFeedType = true },
-             "Exported 4 networks to 1 file" + Dash + "2 networks removed by exceptions" + Dash + "the old "
-             + Path.Combine("fortigate", "AS15169_ipv6.txt") + " was left as it was" + Dash
+            (new ExportResult(ExportFailure.None, ["/x/AS15169.txt", "/x/fortigate/AS15169_ipv6.txt"], 4, 0, 0, 2,
+                              EmptiedFiles: ["/x/fortigate/AS15169_ipv6.txt"]) with { NoFeedType = true },
+             "Exported 4 networks to 2 files" + Dash + "2 networks removed by exceptions" + Dash
+             + Path.Combine("fortigate", "AS15169_ipv6.txt") + " was emptied" + Dash
              + "no feed was written, because no feed type is ticked in Settings"),
             (new ExportResult(ExportFailure.None, ["a"], 1, 0) with { NoFeedType = true },
              "Exported 1 network to 1 file" + Dash + "no feed was written, because no feed type is ticked in Settings"),
@@ -1907,6 +1942,34 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task AnExportIsPageWorkFromThePressToTheEnd()
+    {
+        var service = WithDataset();
+        var gate = new WorkGate();
+        var vm = new MainViewModel(service, new FakeUi(), null, null, gate: gate, abuseKeys: null, unsaved: null)
+        {
+            ProgressFactory = handler => new ImmediateProgress<UpdateProgress>(handler),
+        };
+        await vm.InitializeAsync();
+        if (vm.PendingCheck is { } check)
+            await check;
+        service.SearchFunc = (_, _) => FoundResult(AsnQuery(), 2, 2);
+        vm.SearchText = "AS15169";
+        await vm.SearchCommand.ExecuteAsync(null);
+        service.ExportResult = new ExportResult(ExportFailure.None, ["a"], 4, 0);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.ExportGate = release;
+
+        Task export = vm.ExportCommand.ExecuteAsync(null);
+        Assert.True(gate.IsPageWorking);
+        Assert.Equal(RefreshStartRefusal.PageWorking, new RefreshAllRunner(new FakeFeedRefresher(), gate, null).TryStart());
+        release.SetResult();
+        await export;
+
+        Assert.False(gate.IsPageWorking);
+    }
+
+    [Fact]
     public async Task NoFailedOrEmptyExportGetsTheUnsavedNote()
     {
         var service = WithDataset();
@@ -1930,6 +1993,94 @@ public sealed class MainViewModelTests
             await vm.ExportCommand.ExecuteAsync(null);
             Assert.Equal(expected, vm.ResultsActionText);
         }
+
+        Assert.Equal("Nothing was exported" + Dash + "every network is a large range that was left out", AppText.NothingExported);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnExportThatOnlyEmptiedFeedsNamesThemAndWhyAndCarriesTheUnsavedNote(bool unsaved)
+    {
+        var service = WithDataset();
+        var vm = await StartAsync(service, new FakeUi(), unsaved: new FakeUnsavedSettings(hasUnsavedChanges: unsaved));
+        service.SearchFunc = (_, _) => FoundResult(AsnQuery(), 2, 2);
+        vm.SearchText = "AS15169";
+        await vm.SearchCommand.ExecuteAsync(null);
+        string[] emptied = ["/x/fortigate/AS15169_ipv4.txt", "/x/fortigate/AS15169_ipv6.txt"];
+        service.ExportResult = new ExportResult(ExportFailure.None, emptied, 0, 3, EmptiedFiles: emptied);
+
+        await vm.ExportCommand.ExecuteAsync(null);
+
+        Assert.Equal("Emptied 2 files" + Dash + "every network is a large range that was left out"
+            + (unsaved ? AppText.UnsavedSettingsNote : ""), vm.ResultsActionText);
+
+        service.ExportResult = service.ExportResult with { Record = new FeedRecordResult(FeedSaveOutcome.StorageError, HistoryOutcome.Recorded) };
+        await vm.ExportCommand.ExecuteAsync(null);
+        Assert.StartsWith("The saved feed couldn't be updated. Emptied 2 files", vm.ResultsActionText);
+    }
+
+    public static TheoryData<FeedSaveOutcome, HistoryOutcome, string, string, bool> RecordNotes()
+    {
+        const string save = "The saved feed couldn't be updated. ";
+        const string history = "This change wasn't recorded in the history. ";
+        const string both = "The saved feed couldn't be updated and this change wasn't recorded in the history. ";
+        const string saveSentence = " The saved feed couldn't be updated.";
+        const string historySentence = " This change wasn't recorded in the history.";
+        var data = new TheoryData<FeedSaveOutcome, HistoryOutcome, string, string, bool>();
+        foreach (bool unsaved in new[] { false, true })
+        {
+            foreach (FeedSaveOutcome failed in new[] { FeedSaveOutcome.TooMany, FeedSaveOutcome.Unavailable, FeedSaveOutcome.StorageError })
+            {
+                data.Add(failed, HistoryOutcome.Recorded, save, saveSentence, unsaved);
+                data.Add(failed, HistoryOutcome.NothingToRecord, save, saveSentence, unsaved);
+                data.Add(failed, HistoryOutcome.Failed, both, saveSentence + historySentence, unsaved);
+            }
+            foreach (FeedSaveOutcome fine in new[] { FeedSaveOutcome.NotAsked, FeedSaveOutcome.Saved })
+            {
+                data.Add(fine, HistoryOutcome.Failed, history, historySentence, unsaved);
+                data.Add(fine, HistoryOutcome.Recorded, "", "", unsaved);
+                data.Add(fine, HistoryOutcome.NothingToRecord, "", "", unsaved);
+            }
+        }
+        return data;
+    }
+
+    // The record's note leads a success line, which can trim, and comes before the unsaved sentence on a failure
+    [Theory]
+    [MemberData(nameof(RecordNotes))]
+    public async Task AFailedSaveOrHistoryIsNotedOnTheExportLine(FeedSaveOutcome save, HistoryOutcome history,
+                                                                  string lead, string sentences, bool unsaved)
+    {
+        var service = WithDataset();
+        var vm = await StartAsync(service, new FakeUi(), unsaved: new FakeUnsavedSettings(hasUnsavedChanges: unsaved));
+        service.SearchFunc = (_, _) => FoundResult(AsnQuery(), 2, 2);
+        vm.SearchText = "AS15169";
+        await vm.SearchCommand.ExecuteAsync(null);
+        var record = new FeedRecordResult(save, history);
+
+        service.ExportResult = new ExportResult(ExportFailure.None, ["a"], 4, 0, Record: record);
+        await vm.ExportCommand.ExecuteAsync(null);
+        Assert.Equal(lead + "Exported 4 networks to 1 file" + (unsaved ? AppText.UnsavedSettingsNote : ""),
+            vm.ResultsActionText);
+
+        string report = Path.Combine(Path.GetTempPath(), "exports", "AS15169.txt");
+        string ipv6 = Path.Combine(Path.GetTempPath(), "exports", "fortigate", "AS15169_ipv6.txt");
+        service.ExportResult = new ExportResult(ExportFailure.WriteFailed, [report], 0, 0, FailedFile: ipv6, Record: record);
+        await vm.ExportCommand.ExecuteAsync(null);
+        Assert.Equal(Path.Combine("fortigate", "AS15169_ipv6.txt") + " couldn't be written. AS15169.txt was written "
+            + "before the failure." + sentences + (unsaved ? " Unsaved changes on the Settings page weren't used." : "")
+            + " Please try again or contact the Infra Team.", vm.ResultsActionText);
+    }
+
+    // A null record, as every export wrote before the history, leaves both lines as they were
+    [Fact]
+    public void NoRecordAddsNoNote()
+    {
+        Assert.Equal("", AppText.FeedRecordLead(null));
+        Assert.Equal("", AppText.FeedRecordLead(new FeedRecordResult(FeedSaveOutcome.NotAsked, HistoryOutcome.NothingToRecord)));
+        Assert.Equal(AppText.ExportFileFailed("/x/AS15169.txt", [], null, true),
+            AppText.ExportFileFailed("/x/AS15169.txt", [], null, true, null));
     }
 
     // A feed file is named with its type's folder, because the report and the combined feed share a name; the unsaved
@@ -2061,6 +2212,205 @@ public sealed class MainViewModelTests
         await vm.CopyResultsCommand.ExecuteAsync(null);
 
         Assert.Equal("The results couldn't be copied.", vm.ResultsActionText);
+    }
+
+    // ----- the results menu's copies -----
+
+    private static readonly NetworkRecord[] MenuRows =
+    [
+        new("8.8.8.0/24", "US", "United States", "NA", "AS15169", "Google LLC", "google.com"),
+        new("8.0.0.0/9", "US", "United States", "NA", "as03356", "Level 3", "lumen.com"),
+        new("8.8.0.0/16", "US", "United States", "NA", null, null, null),
+        new("8.0.0.0/8", "US", "United States", "NA", "AS4294967296", "Example", null),
+    ];
+
+    // A started view model whose last search was the address 8.8.8.8, found in the four menu rows
+    private static async Task<MainViewModel> MenuRowsSearchedAsync(FakeIpInfoService service, FakeUi ui, FakeAbuseIpDbService? abuse = null)
+    {
+        service.SearchFunc = (_, _) => new SearchResult(SearchOutcome.Found, AddressQuery, MenuRows, MenuRows.Length);
+        var vm = await StartAsync(service, ui, abuse: abuse);
+        vm.SearchText = "8.8.8.8";
+        await vm.SearchCommand.ExecuteAsync(null);
+        return vm;
+    }
+
+    [Fact]
+    public async Task TheMenuCopiesTheNetworkAndAsNumberOfTheRowItWasOpenedOnAndWritesNoLine()
+    {
+        var ui = new FakeUi();
+        var vm = await MenuRowsSearchedAsync(WithDataset(), ui);
+
+        string searchLine = vm.ResultsActionText;
+        vm.SetMenuRow(vm.Results[1]);
+        Assert.Same(vm.Results[1], vm.MenuRow);
+        Assert.True(vm.CopyNetworkCommand.CanExecute(null));
+        Assert.True(vm.CopyAsNumberCommand.CanExecute(null));
+
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        Assert.Equal("8.0.0.0/9", ui.ClipboardText);
+        await vm.CopyAsNumberCommand.ExecuteAsync(null);
+        Assert.Equal("AS3356", ui.ClipboardText);
+        Assert.Equal(searchLine, vm.ResultsActionText);
+    }
+
+    [Fact]
+    public async Task CopyAsNumberIsOffForARowWithNoAsnOrOneThatIsntAnAsNumber()
+    {
+        var ui = new FakeUi();
+        var vm = await MenuRowsSearchedAsync(WithDataset(), ui);
+
+        foreach (int index in new[] { 2, 3 })
+        {
+            vm.SetMenuRow(vm.Results[index]);
+            Assert.True(vm.CopyNetworkCommand.CanExecute(null));
+            Assert.False(vm.CopyAsNumberCommand.CanExecute(null));
+            await vm.CopyAsNumberCommand.ExecuteAsync(null);
+        }
+
+        Assert.Null(ui.ClipboardText);
+    }
+
+    [Fact]
+    public async Task TheMenuCopiesAreOffWithNoRow()
+    {
+        var ui = new FakeUi();
+        var vm = await MenuRowsSearchedAsync(WithDataset(), ui);
+
+        Assert.Null(vm.MenuRow);
+        Assert.False(vm.CopyNetworkCommand.CanExecute(null));
+        Assert.False(vm.CopyAsNumberCommand.CanExecute(null));
+
+        vm.SetMenuRow(vm.Results[0]);
+        vm.SetMenuRow(null);
+        Assert.False(vm.CopyNetworkCommand.CanExecute(null));
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        Assert.Null(ui.ClipboardText);
+    }
+
+    [Fact]
+    public async Task ASearchClearsTheMenuRowWhenItStartsAndWhenItsRowsReplaceTheResults()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var vm = await MenuRowsSearchedAsync(service, ui);
+        vm.SetMenuRow(vm.Results[0]);
+        var gate = new TaskCompletionSource();
+        service.SearchGate = gate;
+
+        Task search = vm.SearchCommand.ExecuteAsync(null);
+        Assert.Null(vm.MenuRow);
+
+        // A row of the earlier search, right-clicked while the new one is out
+        vm.SetMenuRow(vm.Results[1]);
+        Assert.False(vm.CopyNetworkCommand.CanExecute(null));
+        Assert.False(vm.CopyAsNumberCommand.CanExecute(null));
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        Assert.Null(ui.ClipboardText);
+
+        gate.SetResult();
+        await search;
+        Assert.Null(vm.MenuRow);
+        Assert.False(vm.CopyNetworkCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task AClipboardFailureGivesEachMenuCopyItsOwnLine()
+    {
+        var vm = await MenuRowsSearchedAsync(WithDataset(), new FakeUi { FailClipboard = true });
+        vm.SetMenuRow(vm.Results[0]);
+
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        Assert.Equal("The network couldn't be copied.", vm.ResultsActionText);
+        Assert.True(vm.HasResultsAction);
+
+        await vm.CopyAsNumberCommand.ExecuteAsync(null);
+        Assert.Equal("The AS number couldn't be copied.", vm.ResultsActionText);
+    }
+
+    [Fact]
+    public async Task AMenuCopyThatWorksClearsAnEarlierCopysFailureLine()
+    {
+        var ui = new FakeUi { FailClipboard = true };
+        var vm = await MenuRowsSearchedAsync(WithDataset(), ui);
+        vm.SetMenuRow(vm.Results[0]);
+        await vm.CopyAsNumberCommand.ExecuteAsync(null);
+        Assert.Equal("The AS number couldn't be copied.", vm.ResultsActionText);
+
+        ui.FailClipboard = false;
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+
+        Assert.Equal(vm.Results[0].NetworkText, ui.ClipboardText);
+        Assert.Equal("", vm.ResultsActionText);
+        Assert.False(vm.HasResultsAction);
+    }
+
+    [Fact]
+    public async Task TheMenuCopiesAreOffWhileTheWindowClosesAfterAStartStep()
+    {
+        var ui = new FakeUi();
+        var vm = await MenuRowsSearchedAsync(WithDataset(), ui);
+        vm.SetMenuRow(vm.Results[0]);
+        Assert.True(vm.CopyNetworkCommand.CanExecute(null));
+
+        await vm.CloseAfterStartStepAsync();
+
+        Assert.False(vm.CopyNetworkCommand.CanExecute(null));
+        Assert.False(vm.CopyAsNumberCommand.CanExecute(null));
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        Assert.Null(ui.ClipboardText);
+    }
+
+    [Fact]
+    public async Task AMenuCopyKeepsTheAbuseIpDbScoreLine()
+    {
+        var abuse = new FakeAbuseIpDbService { HasKey = true };
+        abuse.CheckResults.Enqueue(Checked());
+        var ui = new FakeUi();
+        var vm = await MenuRowsSearchedAsync(WithDataset(), ui, abuse);
+        await vm.CheckAbuseCommand.ExecuteAsync(null);
+        Assert.Equal(ReportedScoreText, vm.ResultsActionText);
+
+        vm.SetMenuRow(vm.Results[0]);
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        await vm.CopyAsNumberCommand.ExecuteAsync(null);
+
+        Assert.Equal("AS15169", ui.ClipboardText);
+        Assert.Equal(ReportedScoreText, vm.ResultsActionText);
+    }
+
+    [Fact]
+    public async Task AMenuCopyKeepsAnExportsOldFilesLine()
+    {
+        var service = WithDataset();
+        var ui = new FakeUi();
+        var vm = await StartAsync(service, ui);
+        service.SearchFunc = (_, _) => FoundResult(AsnQuery(), 2, 2);
+        vm.SearchText = "AS15169";
+        await vm.SearchCommand.ExecuteAsync(null);
+        string report = Path.Combine(Path.GetTempPath(), "exports", "AS15169.txt");
+        service.ExportResult = new ExportResult(ExportFailure.WriteFailed, [], 0, 0, OldFilesLeft: [report], FailedFile: report);
+        await vm.ExportCommand.ExecuteAsync(null);
+        string exportLine = vm.ResultsActionText;
+        Assert.Contains("was left as it was.", exportLine, StringComparison.Ordinal);
+
+        vm.SetMenuRow(vm.Results[1]);
+        await vm.CopyNetworkCommand.ExecuteAsync(null);
+        await vm.CopyAsNumberCommand.ExecuteAsync(null);
+
+        Assert.Equal("AS15169", ui.ClipboardText);
+        Assert.Equal(exportLine, vm.ResultsActionText);
+    }
+
+    [Fact]
+    public async Task TheMenuCopiesAreOffOnceTheViewModelIsDisposed()
+    {
+        var vm = await MenuRowsSearchedAsync(WithDataset(), new FakeUi());
+        vm.SetMenuRow(vm.Results[0]);
+
+        vm.Dispose();
+
+        Assert.False(vm.CopyNetworkCommand.CanExecute(null));
+        Assert.False(vm.CopyAsNumberCommand.CanExecute(null));
     }
 
     // ----- web pages -----

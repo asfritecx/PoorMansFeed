@@ -183,7 +183,7 @@ public sealed class GoogleCloudFeedOutputTests : IDisposable
         {
             Content = new StringContent(json ?? SourceJson, Encoding.UTF8, "application/json"),
         }));
-        var service = new GoogleCloudFeedService(ipinfo, http, new CoreOptions(), _time, _temp.ExportFolder);
+        var service = new GoogleCloudFeedService(ipinfo, http, new CoreOptions(), _time, null, _temp.ExportFolder);
         CatalogueResult catalogue = await service.LoadCatalogueAsync(CancellationToken.None);
         Assert.Equal(CatalogueFailure.None, catalogue.Failure);
         Assert.True(GoogleCloudScope.TryCreate(region, out GoogleCloudScope scope));

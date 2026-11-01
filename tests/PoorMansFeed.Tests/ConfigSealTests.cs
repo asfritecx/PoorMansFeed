@@ -249,6 +249,7 @@ public sealed class ConfigSealTests
         Assert.Equal("exceptions", ConfigSeal.SectionName(ConfigSection.Exceptions));
         Assert.Equal("accounting", ConfigSeal.SectionName(ConfigSection.Accounting));
         Assert.Equal("modsecurity_rule_ids", ConfigSeal.SectionName(ConfigSection.ModSecurityRuleIds));
+        Assert.Equal("saved_feeds", ConfigSeal.SectionName(ConfigSection.SavedFeeds));
         Assert.Throws<ArgumentOutOfRangeException>(() => ConfigSeal.SectionName((ConfigSection)99));
     }
 }
